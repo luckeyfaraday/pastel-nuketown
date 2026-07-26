@@ -1,6 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PASTEL NUKETOWN — Free-For-All</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🫧%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Nunito:wght@700;900&display=swap" rel="stylesheet">
@@ -14,6 +15,7 @@
   --ui:'Nunito', 'Trebuchet MS', system-ui, sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
 html,body{height:100%;overflow:hidden;background:#cfe8f5}
 body{font-family:var(--ui);color:var(--ink);-webkit-font-smoothing:antialiased;cursor:default}
 canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
@@ -103,7 +105,7 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 
 /* ---------- scoreboard ---------- */
 #board{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:20px 26px 22px;
-  min-width:430px;display:none}
+  min-width:min(430px,calc(100vw - 20px));max-width:calc(100vw - 20px);display:none}
 #board.on{display:block}
 /* while the match-over card is up the board is re-parented into it, so it
    has to sit in the flex flow instead of centring itself on the viewport */
@@ -121,8 +123,9 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 /* ---------- title / overlays ---------- */
 .screen{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;
   flex-direction:column;background:radial-gradient(ellipse at 50% 38%,rgba(255,248,240,.26),rgba(180,198,238,.5));
-  backdrop-filter:blur(2px);pointer-events:auto}
+  backdrop-filter:blur(2px);pointer-events:auto;overflow-y:auto;overflow-x:hidden}
 .screen.off{display:none}
+#title{z-index:34}          /* always above the death / match-over cards */
 #title h1{font-family:var(--disp);font-size:clamp(46px,10vw,116px);font-weight:800;line-height:.86;
   letter-spacing:.01em;text-align:center;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 7px 0 rgba(74,63,92,.35),0 16px 34px rgba(74,63,92,.3)}
@@ -131,17 +134,116 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   -webkit-text-fill-color:transparent;filter:drop-shadow(0 4px 0 var(--ink))}
 #title .sub{margin-top:14px;font-family:var(--disp);font-size:clamp(13px,2vw,18px);letter-spacing:.34em;
   text-transform:uppercase;color:var(--ink);opacity:.8}
-#play{margin-top:30px;pointer-events:auto;cursor:pointer;border:none;
+#menu{width:min(560px,calc(100vw - 28px));margin-top:22px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.identity{width:min(330px,100%);display:flex;align-items:center;gap:10px;padding:6px 8px 6px 14px;
+  border:2.5px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.76);box-shadow:0 3px 0 var(--ink)}
+.identity span{font-family:var(--disp);font-size:11px;letter-spacing:.13em;color:var(--ink-soft)}
+.identity input,#roomCode{min-width:0;border:0;outline:0;background:transparent;color:var(--ink);text-transform:uppercase;
+  font-family:var(--disp);font-size:17px;font-weight:800;letter-spacing:.05em}
+.identity input{flex:1;text-align:right}
+.menu-actions{display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap}
+.menu-btn{pointer-events:auto;cursor:pointer;border:none;
   font-family:var(--disp);font-size:26px;font-weight:800;letter-spacing:.08em;color:var(--ink);
   padding:15px 52px 17px;border:3px solid var(--ink);border-radius:22px;
   background:linear-gradient(180deg,#fff2c9,#ffe08a);box-shadow:0 6px 0 var(--ink),0 12px 26px rgba(74,63,92,.28);
   transition:transform .09s,box-shadow .09s}
-#play:hover{transform:translateY(-2px);box-shadow:0 8px 0 var(--ink),0 16px 30px rgba(74,63,92,.3)}
-#play:active{transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
-.keys{margin-top:26px;display:flex;gap:9px;flex-wrap:wrap;justify-content:center;max-width:640px}
+.menu-btn.alt{font-size:19px;padding:14px 25px 16px;background:linear-gradient(180deg,#e3f7ff,#a8dcf0)}
+.menu-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 0 var(--ink),0 16px 30px rgba(74,63,92,.3)}
+.menu-btn:active:not(:disabled){transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
+.menu-btn:disabled,.mini-btn:disabled,#again:disabled{cursor:not-allowed!important;opacity:.55;filter:saturate(.45)}
+.join-row{width:min(330px,100%);display:flex;gap:8px}
+#roomCode{flex:1;padding:9px 12px 10px;text-align:center;border:2.5px solid var(--ink);border-radius:13px;
+  background:rgba(255,255,255,.78);box-shadow:0 3px 0 var(--ink)}
+#roomCode::placeholder{color:var(--ink-soft);opacity:.72}
+.mini-btn{pointer-events:auto;cursor:pointer;padding:8px 14px 9px;border:2.5px solid var(--ink);border-radius:12px;
+  background:#fff8f0;color:var(--ink);box-shadow:0 3px 0 var(--ink);font-family:var(--disp);font-weight:800;
+  letter-spacing:.06em;white-space:nowrap}
+.mini-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 0 var(--ink)}
+.listed{display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--disp);font-size:11px;
+  font-weight:700;letter-spacing:.11em;color:var(--ink-soft)}
+.listed input{width:15px;height:15px;accent-color:#d4638f;cursor:pointer}
+/* ---------- room browser ---------- */
+.rooms{width:min(390px,100%);display:flex;flex-direction:column;gap:7px}
+.rooms-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
+.rooms-head .mini-btn{padding:4px 10px 5px;font-size:11px}
+#roomList{list-style:none;display:flex;flex-direction:column;gap:6px;max-height:min(210px,28vh);overflow-y:auto}
+#roomList li{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;
+  padding:7px 9px;border:2px solid rgba(74,63,92,.65);border-radius:11px;background:rgba(255,255,255,.6);
+  font-family:var(--disp);font-size:13px}
+#roomList li strong{font-size:15px;letter-spacing:.12em;color:#d4638f}
+#roomList li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+#roomList li b{font-size:11px;letter-spacing:.08em;color:var(--ink-soft)}
+#roomList li .mini-btn{padding:4px 11px 5px;font-size:11px}
+#roomList li.rooms-empty{display:block;text-align:center;border-style:dashed;color:var(--ink-soft);
+  font-size:12px;font-weight:600;letter-spacing:.04em;background:rgba(255,255,255,.42)}
+#menuNote,#netStatus{min-height:18px;text-align:center;font-family:var(--disp);font-size:12px;font-weight:600;
+  letter-spacing:.035em;color:var(--ink-soft)}
+#netStatus{margin-top:9px;color:#4f7389}
+#netStatus[data-kind="error"]{color:#b8406a}
+#menu.pause{margin-top:28px}
+#menu.pause .setup-only{display:none}
+#menu.pause #menuNote{font-size:14px}
+#lobby{width:min(440px,calc(100vw - 30px));margin-top:22px;padding:18px 20px 20px;pointer-events:auto}
+.lobby-head,.roster-title,.lobby-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.lobby-head>div{display:flex;align-items:baseline;gap:10px}
+.lobby-head small,.roster-title{font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
+#lobbyCode{font-family:var(--disp);font-size:29px;line-height:1;letter-spacing:.16em;color:#d4638f}
+.roster-title{margin:17px 3px 7px}
+#roster{list-style:none;display:flex;flex-direction:column;gap:6px}
+#roster li{display:grid;grid-template-columns:18px 1fr auto;gap:9px;align-items:center;padding:7px 9px;
+  border:2px solid rgba(74,63,92,.65);border-radius:10px;background:rgba(255,255,255,.54);
+  font-family:var(--disp);font-size:14px}
+#roster li i{width:17px;height:17px;border:2px solid var(--ink);border-radius:5px}
+#roster li b{font-size:10px;letter-spacing:.1em;color:var(--ink-soft)}
+.lobby-actions{justify-content:center;margin-top:16px}
+#netStart{font-size:20px;padding:11px 25px 13px}
+.keys{margin-top:20px;display:flex;gap:9px;flex-wrap:wrap;justify-content:center;max-width:640px}
 .keys span{font-family:var(--disp);font-size:13px;font-weight:600;padding:6px 13px 7px;border:2.5px solid var(--ink);
   border-radius:11px;background:rgba(255,255,255,.72);box-shadow:0 3px 0 var(--ink)}
 .keys span b{font-weight:800;color:#d4638f}
+@media(max-height:760px){
+  #title h1{font-size:clamp(42px,8vw,78px)}
+  #title .sub{margin-top:9px}
+  #menu,#lobby{margin-top:14px}
+  .keys{margin-top:14px}
+  .keys span{padding:4px 10px 5px;font-size:11px}
+}
+@media(max-width:360px){
+  #board{padding:14px 12px 16px}
+  #board h3{font-size:17px;margin-bottom:8px}
+  #board table{font-size:13px}
+  #lobby{width:calc(100vw - 16px);padding:14px 12px 16px}
+  .lobby-head{align-items:stretch;flex-wrap:wrap}
+  .lobby-head>div{width:100%;justify-content:center}
+  #lobbyCode{font-size:24px;letter-spacing:.11em}
+  #copyRoom{width:100%}
+  .lobby-actions{flex-wrap:wrap}
+  #netStart{flex:1 1 180px}
+  .menu-btn{font-size:22px;padding:12px 35px 14px}
+  .menu-btn.alt{font-size:17px;padding:12px 18px 14px}
+  .keys{gap:6px;padding:0 6px}
+  .keys span{padding:4px 8px 5px}
+}
+@media(max-height:680px){
+  #title,#over{justify-content:flex-start;padding:12px 8px 24px}
+  #title h1{font-size:clamp(38px,8vw,64px)}
+  #title .sub{margin-top:6px}
+  #menu,#lobby{margin-top:10px}
+  #menu{gap:8px}
+  .keys{margin-top:10px;gap:6px}
+  #over .big{margin-top:4px}
+}
+@media(max-height:430px){
+  #title{padding-top:8px}
+  #title h1{font-size:38px}
+  #title .sub{display:none}
+  .identity{padding-top:3px;padding-bottom:3px}
+  .menu-btn{padding-top:8px;padding-bottom:10px}
+  .menu-btn.alt{padding-top:8px;padding-bottom:10px}
+  #roomCode{padding-top:5px;padding-bottom:6px}
+  .keys span{font-size:10px;padding:2px 7px 3px}
+}
 
 #dead .big{font-family:var(--disp);font-size:clamp(40px,8vw,84px);font-weight:800;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 14px 28px rgba(74,63,92,.3)}

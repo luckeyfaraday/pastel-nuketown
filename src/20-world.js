@@ -208,10 +208,7 @@ function buildWorld() {
         for (let i = 0; i < n; i++) {
           const t0 = (i + 0.035) / n, t1 = (i + 0.965) / n;
           // recessed panel face, proud of the wall on both sides
-          const band = [
-            { y0: 0.42, y1: 2.35, c: Cx(PAL.perimeter, 1.045) },
-            { y0: 2.55, y1: 3.95, c: Cx(PAL.perimeter, 1.02) }
-          ];
+          const band = [{ y0: 0.42, y1: 3.95, c: Cx(PAL.perimeter, 1.04) }];
           for (const b of band) {
             if (alongX) B.box([lerp(x0, x1, t0), b.y0, z0 - inset], [lerp(x0, x1, t1), b.y1, z1 + inset], b.c, { noEdge: true });
             else        B.box([x0 - inset, b.y0, lerp(z0, z1, t0)], [x1 + inset, b.y1, lerp(z0, z1, t1)], b.c, { noEdge: true });
@@ -248,11 +245,11 @@ function buildWorld() {
           if (alongX) {
             const a = lerp(x0, x1, t0), b = lerp(x0, x1, t1);
             B.box([a, y0, z0], [b, h, z1], col);
-            domeY(B, (a + b) / 2, h, (z0 + z1) / 2, (b - a) * 0.5, (b - a) * 0.55, 6, 2, col);
+            domeY(B, (a + b) / 2, h, (z0 + z1) / 2, (b - a) * 0.5, (b - a) * 0.55, 5, 1, col);
           } else {
             const a = lerp(z0, z1, t0), b = lerp(z0, z1, t1);
             B.box([x0, y0, a], [x1, h, b], col);
-            domeY(B, (x0 + x1) / 2, h, (a + b) / 2, (b - a) * 0.5, (b - a) * 0.55, 6, 2, col);
+            domeY(B, (x0 + x1) / 2, h, (a + b) / 2, (b - a) * 0.5, (b - a) * 0.55, 5, 1, col);
           }
         }
         // two rails
@@ -513,16 +510,23 @@ function buildWorld() {
     box(-2.8, F1 + 1.5, -17.78, -1.0, F1 + 2.5, -17.72, C(A ? 0xffb7c5 : 0xa8dcf0)); // poster
   }
 
-  const mesh = B.mesh();
-  const lines = B.lines(0.42);
-  grp.add(mesh); if (lines) grp.add(lines);
+  /* Chunk along the street axis so looking one way culls the other end.
+     The ground slab lands in the middle chunk; its bounding sphere is huge,
+     so that chunk simply never culls — which is correct, you always see it. */
+  const CUTS = [-16, -5, 5, 16];
+  const meshes = B.meshChunks(CUTS);
+  const lineSets = B.lineChunks(CUTS, 0.42);
+  for (const m of meshes) grp.add(m);
+  for (const l of lineSets) grp.add(l);
   scene.add(grp);
   WORLD.group = grp;
-  WORLD.staticMesh = mesh;
+  WORLD.staticMesh = meshes[0];
+  WORLD.chunks = meshes;
 
   buildMannequins();
   WORLD.sky = buildSky();
   buildDustMotes();
+  buildMagic();
   return grp;
 }
 
@@ -558,6 +562,124 @@ function mannequinGeo() {
   const g = new THREE.Group(); g.add(m); if (l) g.add(l);
   return g;
 }
+/* =====================================================================
+   LOCALISED MAGIC
+   The global dust motes are pleasant but evenly spread, which makes them
+   read as weather rather than as authored magic — constant sparkle becomes
+   wallpaper. These emitters instead pool magic at specific landmarks, so
+   the effect identifies a PLACE: fireflies under the porch lamps, candy
+   floss off the chimneys, bubbles from the vehicle exhausts, petals
+   circling the two spawn ends.
+
+   All motion is analytic — position is a pure function of (site, phase,
+   time) — so there is no per-frame simulation state to update, just a
+   buffer write. Everything is additive and deliberately faint: fading a
+   vertex colour toward black is invisible under additive blending, but
+   would turn a normal-blended sprite into a dark square (see psUpdate).
+   ===================================================================== */
+const MAGIC = { groups: [], sites: [] };
+
+function magicPoints(n, tex, size, opacity) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  const m = new THREE.PointsMaterial({
+    size: size, map: tex, vertexColors: true, transparent: true, opacity: opacity,
+    depthWrite: false, sizeAttenuation: true, fog: true,
+    blending: THREE.AdditiveBlending
+  });
+  const p = new THREE.Points(g, m);
+  p.frustumCulled = false;
+  scene.add(p);
+  return { pts: p, n: n, items: [] };
+}
+
+function buildMagic() {
+  const soft = SOFTWARE_GPU;
+  const F = MAP.consts;
+  const tex = MOTE_TEX || null;
+
+  /* emitter sites, mirrored through the origin like the rest of the map */
+  const sites = [];
+  for (const s of [1, -1]) {
+    sites.push({ k: 'firefly', x: s * -4.5,  y: 2.62,        z: s * -6.0, c: 0xffe9a0 });
+    sites.push({ k: 'puff',    x: s * -9.1,  y: F.ROOF + 3.8, z: s * -14.9, c: s > 0 ? 0xffd6e6 : 0xd7e6ff });
+  }
+  sites.push({ k: 'bubble', x: -16.7, y: 0.55, z:  1.5, c: 0xd8f2ff });   // bus exhaust
+  sites.push({ k: 'bubble', x:  25.2, y: 0.60, z: -1.4, c: 0xffe0ee });   // truck exhaust
+  sites.push({ k: 'petal',  x: -27.5, y: 0.0,  z:  0.0, c: 0xffc9dc });   // west spawn end
+  sites.push({ k: 'petal',  x:  27.5, y: 0.0,  z:  0.0, c: 0xc9e8ff });   // east spawn end
+  for (const st of sites) st.lin = C(st.c);   // convert once, not per particle per frame
+  MAGIC.sites = sites;
+
+  const per = { firefly: soft ? 10 : 22, puff: soft ? 8 : 16,
+                bubble: soft ? 7 : 14,  petal: soft ? 8 : 18 };
+  const specs = [
+    { key: 'warm',   kinds: ['firefly', 'petal'], size: 0.055, opacity: 1.0 },
+    { key: 'bubble', kinds: ['bubble'],           size: 0.13, opacity: 0.85 },
+    { key: 'puff',   kinds: ['puff'],             size: 0.95, opacity: 0.50 }
+  ];
+  for (const sp of specs) {
+    const items = [];
+    for (const site of sites) {
+      if (sp.kinds.indexOf(site.k) < 0) continue;
+      for (let i = 0; i < per[site.k]; i++)
+        items.push({ site: site, ph: (i + 0.5) / per[site.k], j: rand(0, TAU) });
+    }
+    if (!items.length) continue;
+    const grp = magicPoints(items.length, tex, sp.size, sp.opacity);
+    grp.items = items;
+    MAGIC.groups.push(grp);
+  }
+}
+
+const _frac = v => v - Math.floor(v);
+function updateMagic(t) {
+  for (const grp of MAGIC.groups) {
+    const pos = grp.pts.geometry.attributes.position.array;
+    const col = grp.pts.geometry.attributes.color.array;
+    for (let i = 0; i < grp.items.length; i++) {
+      const it = grp.items[i], s = it.site, ph = it.ph;
+      let x, y, z, e;
+      if (s.k === 'firefly') {
+        // lazy spiral under the porch lamp, twinkling out of phase
+        const a = t * 0.55 + ph * TAU, r = 0.40 + 0.30 * Math.sin(t * 0.9 + it.j);
+        x = s.x + Math.cos(a) * r;
+        z = s.z + Math.sin(a) * r;
+        y = s.y - 0.55 + 0.40 * Math.sin(t * 1.3 + it.j * 2.1);
+        e = 0.30 + 0.70 * (0.5 + 0.5 * Math.sin(t * 3.1 + it.j * 3.7));
+      } else if (s.k === 'puff') {
+        // candy floss leaving the chimney, expanding and blowing downwind
+        const u = _frac(t * 0.13 + ph);
+        const spread = 0.16 + u * 0.85;
+        x = s.x + Math.cos(it.j) * spread + u * 1.5;
+        z = s.z + Math.sin(it.j) * spread + u * 0.5;
+        y = s.y + u * 3.2;
+        e = Math.sin(u * Math.PI) * 0.85;
+      } else if (s.k === 'bubble') {
+        // bubbles wobbling up out of an exhaust pipe
+        const u = _frac(t * 0.20 + ph);
+        x = s.x + Math.sin(t * 1.7 + it.j) * 0.20 + u * 0.35;
+        z = s.z + Math.cos(t * 1.3 + it.j) * 0.20;
+        y = s.y + u * 2.1;
+        e = (1 - u) * (0.55 + 0.45 * Math.sin(t * 2.2 + it.j));
+      } else {                                    // petal
+        const a = t * 0.30 + ph * TAU, r = 1.5 + 0.6 * Math.sin(it.j);
+        x = s.x + Math.cos(a) * r;
+        z = s.z + Math.sin(a) * r;
+        y = 0.35 + 0.85 * (0.5 + 0.5 * Math.sin(t * 0.8 + it.j));
+        e = 0.75;
+      }
+      e *= nearFade(x, y, z);
+      pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+      const c = s.lin;
+      col[i * 3] = c.r * e; col[i * 3 + 1] = c.g * e; col[i * 3 + 2] = c.b * e;
+    }
+    grp.pts.geometry.attributes.position.needsUpdate = true;
+    grp.pts.geometry.attributes.color.needsUpdate = true;
+  }
+}
+
 function buildMannequins() {
   const spots = [
     [-8.5, -5.9, 0.3], [1.2, -5.9, -0.6], [-14.5, -8.5, 1.2], [6.2, -9.4, 2.4],
@@ -580,9 +702,9 @@ function buildMannequins() {
 /* =====================================================================
    FLOATING DUST MOTES — the cheap trick that makes a scene feel magical
    ===================================================================== */
-let MOTES = null;
+let MOTES = null, MOTE_TEX = null;
 function buildDustMotes() {
-  const N = SOFTWARE_GPU ? 120 : 620;
+  const N = SOFTWARE_GPU ? 80 : 360;
   const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), ph = new Float32Array(N);
   const tints = [0xfff3c4, 0xffd9e6, 0xd8ecff, 0xe0d0ff, 0xffffff];
   for (let i = 0; i < N; i++) {
@@ -601,7 +723,8 @@ function buildDustMotes() {
   rg.addColorStop(0, 'rgba(255,255,255,1)'); rg.addColorStop(0.35, 'rgba(255,255,255,.7)');
   rg.addColorStop(1, 'rgba(255,255,255,0)');
   cx.fillStyle = rg; cx.fillRect(0, 0, 32, 32);
-  const tex = new THREE.CanvasTexture(cv);
+  MOTE_TEX = new THREE.CanvasTexture(cv);
+  const tex = MOTE_TEX;
 
   const mat = new THREE.PointsMaterial({
     size: 0.2, map: tex, vertexColors: true, transparent: true, opacity: 0.8,

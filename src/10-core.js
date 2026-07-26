@@ -215,6 +215,69 @@ GeoBuilder.prototype.mesh = function (matOpts) {
   m.castShadow = true; m.receiveShadow = true;
   return m;
 };
+/* Split the accumulated triangles into spatial chunks along X.
+   One merged mesh means one bounding sphere covering the whole town, so
+   frustum culling can never reject anything — every triangle is transformed
+   every frame no matter which way you face. That is invisible on a GPU and
+   expensive on a software rasteriser. Chunking costs a few extra draw calls
+   and lets half the map drop out when you look down the street.
+   Triangles spanning a boundary go to the chunk holding their centroid;
+   the chunk's real bounds are computed from its own vertices, so nothing
+   is ever wrongly culled. */
+GeoBuilder.prototype.meshChunks = function (cuts, matOpts) {
+  const n = cuts.length + 1;
+  const buckets = [];
+  for (let i = 0; i < n; i++) buckets.push({ pos: [], nrm: [], col: [] });
+  const P = this.pos, N = this.nrm, K = this.col;
+  for (let t = 0; t < P.length; t += 9) {
+    const cx = (P[t] + P[t + 3] + P[t + 6]) / 3;
+    let b = 0;
+    while (b < cuts.length && cx >= cuts[b]) b++;
+    const q = buckets[b];
+    for (let k = 0; k < 9; k++) { q.pos.push(P[t + k]); q.nrm.push(N[t + k]); q.col.push(K[t + k]); }
+  }
+  const out = [];
+  for (const q of buckets) {
+    if (!q.pos.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(q.pos, 3));
+    g.setAttribute('normal',   new THREE.Float32BufferAttribute(q.nrm, 3));
+    g.setAttribute('color',    new THREE.Float32BufferAttribute(q.col, 3));
+    g.computeBoundingSphere();
+    const m = new THREE.Mesh(g, toonMat(Object.assign({ vertexColors: true }, matOpts || {})));
+    m.castShadow = true; m.receiveShadow = true;
+    out.push(m);
+  }
+  return out;
+};
+/* Same partition for the ink lines. */
+GeoBuilder.prototype.lineChunks = function (cuts, opacity) {
+  if (!this.epos.length) return [];
+  const n = cuts.length + 1;
+  const buckets = [];
+  for (let i = 0; i < n; i++) buckets.push({ pos: [], col: [] });
+  const P = this.epos, K = this.ecol;
+  for (let t = 0; t < P.length; t += 6) {
+    const cx = (P[t] + P[t + 3]) / 2;
+    let b = 0;
+    while (b < cuts.length && cx >= cuts[b]) b++;
+    const q = buckets[b];
+    for (let k = 0; k < 6; k++) { q.pos.push(P[t + k]); q.col.push(K[t + k]); }
+  }
+  const out = [];
+  for (const q of buckets) {
+    if (!q.pos.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(q.pos, 3));
+    g.setAttribute('color',    new THREE.Float32BufferAttribute(q.col, 3));
+    g.computeBoundingSphere();
+    out.push(new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true,
+      opacity: opacity === undefined ? 0.5 : opacity, depthWrite: false
+    })));
+  }
+  return out;
+};
 GeoBuilder.prototype.lines = function (opacity) {
   if (!this.epos.length) return null;
   const g = new THREE.BufferGeometry();

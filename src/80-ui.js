@@ -197,6 +197,17 @@ function showOverScreen(winner) {
   const over = $('over');
   over.insertBefore(elBoard, $('again'));
   elBoard.classList.add('on');
+  const again = $('again');
+  if (netIsGuest()) {
+    again.textContent = 'WAITING FOR HOST';
+    again.disabled = true;
+  } else if (netIsHost()) {
+    again.textContent = 'START REMATCH';
+    again.disabled = false;
+  } else {
+    again.textContent = 'REMATCH';
+    again.disabled = false;
+  }
   over.classList.remove('off');
 }
 
@@ -204,6 +215,22 @@ function showOverScreen(winner) {
 function setPaused(p) {
   if (G.over) return;
   G.paused = p;
-  if (p && G.started) { $('title').classList.remove('off'); $('play').textContent = 'RESUME'; }
-  else if (G.started) $('title').classList.add('off');
+  const dead = $('dead');
+  if (p && G.started) {
+    netSetPauseMenu(true);
+    $('title').classList.remove('off');
+    $('play').textContent = 'RESUME';
+    /* Pausing while dead used to soft-lock: #dead and #title share a z-index
+       and #dead is later in the DOM, so the death card painted over the pause
+       menu and swallowed the RESUME click. And because the sim is halted while
+       paused, the respawn timer never ran either — stuck for good. Stash the
+       death card for the duration; it comes back on resume if still dead. */
+    if (!dead.classList.contains('off')) { dead.classList.add('off'); dead.dataset.wasUp = '1'; }
+    restoreBoard();
+  } else if (G.started) {
+    netSetPauseMenu(false);
+    $('title').classList.add('off');
+    if (dead.dataset.wasUp === '1' && G.player && !G.player.alive) dead.classList.remove('off');
+    delete dead.dataset.wasUp;
+  }
 }

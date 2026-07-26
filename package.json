@@ -1,0 +1,19 @@
+{
+  "name": "pastel-nuketown",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pastel Nuketown browser FPS with host-authoritative multiplayer rooms",
+  "scripts": {
+    "build": "bash build.sh",
+    "prestart": "npm run build",
+    "start": "node server.mjs",
+    "test": "node --test",
+    "check": "bash -n build.sh && node --check net-protocol.js && node --check server.mjs && node --check src/70-game.js && node --check src/75-network.js && node --check src/80-ui.js && node --check src/90-main.js && node --test && bash build.sh --check"
+  },
+  "engines": {
+    "node": ">=18.14"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
+  }
+}
