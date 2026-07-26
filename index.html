@@ -3,6 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PASTEL NUKETOWN — Free-For-All</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🫧%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Nunito:wght@700;900&display=swap" rel="stylesheet">
@@ -16,6 +17,7 @@
   --ui:'Nunito', 'Trebuchet MS', system-ui, sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
 html,body{height:100%;overflow:hidden;background:#cfe8f5}
 body{font-family:var(--ui);color:var(--ink);-webkit-font-smoothing:antialiased;cursor:default}
 canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
@@ -105,7 +107,7 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 
 /* ---------- scoreboard ---------- */
 #board{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:20px 26px 22px;
-  min-width:430px;display:none}
+  min-width:min(430px,calc(100vw - 20px));max-width:calc(100vw - 20px);display:none}
 #board.on{display:block}
 /* while the match-over card is up the board is re-parented into it, so it
    has to sit in the flex flow instead of centring itself on the viewport */
@@ -123,8 +125,9 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 /* ---------- title / overlays ---------- */
 .screen{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;
   flex-direction:column;background:radial-gradient(ellipse at 50% 38%,rgba(255,248,240,.26),rgba(180,198,238,.5));
-  backdrop-filter:blur(2px);pointer-events:auto}
+  backdrop-filter:blur(2px);pointer-events:auto;overflow-y:auto;overflow-x:hidden}
 .screen.off{display:none}
+#title{z-index:34}          /* always above the death / match-over cards */
 #title h1{font-family:var(--disp);font-size:clamp(46px,10vw,116px);font-weight:800;line-height:.86;
   letter-spacing:.01em;text-align:center;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 7px 0 rgba(74,63,92,.35),0 16px 34px rgba(74,63,92,.3)}
@@ -133,17 +136,116 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   -webkit-text-fill-color:transparent;filter:drop-shadow(0 4px 0 var(--ink))}
 #title .sub{margin-top:14px;font-family:var(--disp);font-size:clamp(13px,2vw,18px);letter-spacing:.34em;
   text-transform:uppercase;color:var(--ink);opacity:.8}
-#play{margin-top:30px;pointer-events:auto;cursor:pointer;border:none;
+#menu{width:min(560px,calc(100vw - 28px));margin-top:22px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.identity{width:min(330px,100%);display:flex;align-items:center;gap:10px;padding:6px 8px 6px 14px;
+  border:2.5px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.76);box-shadow:0 3px 0 var(--ink)}
+.identity span{font-family:var(--disp);font-size:11px;letter-spacing:.13em;color:var(--ink-soft)}
+.identity input,#roomCode{min-width:0;border:0;outline:0;background:transparent;color:var(--ink);text-transform:uppercase;
+  font-family:var(--disp);font-size:17px;font-weight:800;letter-spacing:.05em}
+.identity input{flex:1;text-align:right}
+.menu-actions{display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap}
+.menu-btn{pointer-events:auto;cursor:pointer;border:none;
   font-family:var(--disp);font-size:26px;font-weight:800;letter-spacing:.08em;color:var(--ink);
   padding:15px 52px 17px;border:3px solid var(--ink);border-radius:22px;
   background:linear-gradient(180deg,#fff2c9,#ffe08a);box-shadow:0 6px 0 var(--ink),0 12px 26px rgba(74,63,92,.28);
   transition:transform .09s,box-shadow .09s}
-#play:hover{transform:translateY(-2px);box-shadow:0 8px 0 var(--ink),0 16px 30px rgba(74,63,92,.3)}
-#play:active{transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
-.keys{margin-top:26px;display:flex;gap:9px;flex-wrap:wrap;justify-content:center;max-width:640px}
+.menu-btn.alt{font-size:19px;padding:14px 25px 16px;background:linear-gradient(180deg,#e3f7ff,#a8dcf0)}
+.menu-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 0 var(--ink),0 16px 30px rgba(74,63,92,.3)}
+.menu-btn:active:not(:disabled){transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
+.menu-btn:disabled,.mini-btn:disabled,#again:disabled{cursor:not-allowed!important;opacity:.55;filter:saturate(.45)}
+.join-row{width:min(330px,100%);display:flex;gap:8px}
+#roomCode{flex:1;padding:9px 12px 10px;text-align:center;border:2.5px solid var(--ink);border-radius:13px;
+  background:rgba(255,255,255,.78);box-shadow:0 3px 0 var(--ink)}
+#roomCode::placeholder{color:var(--ink-soft);opacity:.72}
+.mini-btn{pointer-events:auto;cursor:pointer;padding:8px 14px 9px;border:2.5px solid var(--ink);border-radius:12px;
+  background:#fff8f0;color:var(--ink);box-shadow:0 3px 0 var(--ink);font-family:var(--disp);font-weight:800;
+  letter-spacing:.06em;white-space:nowrap}
+.mini-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 0 var(--ink)}
+.listed{display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--disp);font-size:11px;
+  font-weight:700;letter-spacing:.11em;color:var(--ink-soft)}
+.listed input{width:15px;height:15px;accent-color:#d4638f;cursor:pointer}
+/* ---------- room browser ---------- */
+.rooms{width:min(390px,100%);display:flex;flex-direction:column;gap:7px}
+.rooms-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
+.rooms-head .mini-btn{padding:4px 10px 5px;font-size:11px}
+#roomList{list-style:none;display:flex;flex-direction:column;gap:6px;max-height:min(210px,28vh);overflow-y:auto}
+#roomList li{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;
+  padding:7px 9px;border:2px solid rgba(74,63,92,.65);border-radius:11px;background:rgba(255,255,255,.6);
+  font-family:var(--disp);font-size:13px}
+#roomList li strong{font-size:15px;letter-spacing:.12em;color:#d4638f}
+#roomList li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+#roomList li b{font-size:11px;letter-spacing:.08em;color:var(--ink-soft)}
+#roomList li .mini-btn{padding:4px 11px 5px;font-size:11px}
+#roomList li.rooms-empty{display:block;text-align:center;border-style:dashed;color:var(--ink-soft);
+  font-size:12px;font-weight:600;letter-spacing:.04em;background:rgba(255,255,255,.42)}
+#menuNote,#netStatus{min-height:18px;text-align:center;font-family:var(--disp);font-size:12px;font-weight:600;
+  letter-spacing:.035em;color:var(--ink-soft)}
+#netStatus{margin-top:9px;color:#4f7389}
+#netStatus[data-kind="error"]{color:#b8406a}
+#menu.pause{margin-top:28px}
+#menu.pause .setup-only{display:none}
+#menu.pause #menuNote{font-size:14px}
+#lobby{width:min(440px,calc(100vw - 30px));margin-top:22px;padding:18px 20px 20px;pointer-events:auto}
+.lobby-head,.roster-title,.lobby-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.lobby-head>div{display:flex;align-items:baseline;gap:10px}
+.lobby-head small,.roster-title{font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
+#lobbyCode{font-family:var(--disp);font-size:29px;line-height:1;letter-spacing:.16em;color:#d4638f}
+.roster-title{margin:17px 3px 7px}
+#roster{list-style:none;display:flex;flex-direction:column;gap:6px}
+#roster li{display:grid;grid-template-columns:18px 1fr auto;gap:9px;align-items:center;padding:7px 9px;
+  border:2px solid rgba(74,63,92,.65);border-radius:10px;background:rgba(255,255,255,.54);
+  font-family:var(--disp);font-size:14px}
+#roster li i{width:17px;height:17px;border:2px solid var(--ink);border-radius:5px}
+#roster li b{font-size:10px;letter-spacing:.1em;color:var(--ink-soft)}
+.lobby-actions{justify-content:center;margin-top:16px}
+#netStart{font-size:20px;padding:11px 25px 13px}
+.keys{margin-top:20px;display:flex;gap:9px;flex-wrap:wrap;justify-content:center;max-width:640px}
 .keys span{font-family:var(--disp);font-size:13px;font-weight:600;padding:6px 13px 7px;border:2.5px solid var(--ink);
   border-radius:11px;background:rgba(255,255,255,.72);box-shadow:0 3px 0 var(--ink)}
 .keys span b{font-weight:800;color:#d4638f}
+@media(max-height:760px){
+  #title h1{font-size:clamp(42px,8vw,78px)}
+  #title .sub{margin-top:9px}
+  #menu,#lobby{margin-top:14px}
+  .keys{margin-top:14px}
+  .keys span{padding:4px 10px 5px;font-size:11px}
+}
+@media(max-width:360px){
+  #board{padding:14px 12px 16px}
+  #board h3{font-size:17px;margin-bottom:8px}
+  #board table{font-size:13px}
+  #lobby{width:calc(100vw - 16px);padding:14px 12px 16px}
+  .lobby-head{align-items:stretch;flex-wrap:wrap}
+  .lobby-head>div{width:100%;justify-content:center}
+  #lobbyCode{font-size:24px;letter-spacing:.11em}
+  #copyRoom{width:100%}
+  .lobby-actions{flex-wrap:wrap}
+  #netStart{flex:1 1 180px}
+  .menu-btn{font-size:22px;padding:12px 35px 14px}
+  .menu-btn.alt{font-size:17px;padding:12px 18px 14px}
+  .keys{gap:6px;padding:0 6px}
+  .keys span{padding:4px 8px 5px}
+}
+@media(max-height:680px){
+  #title,#over{justify-content:flex-start;padding:12px 8px 24px}
+  #title h1{font-size:clamp(38px,8vw,64px)}
+  #title .sub{margin-top:6px}
+  #menu,#lobby{margin-top:10px}
+  #menu{gap:8px}
+  .keys{margin-top:10px;gap:6px}
+  #over .big{margin-top:4px}
+}
+@media(max-height:430px){
+  #title{padding-top:8px}
+  #title h1{font-size:38px}
+  #title .sub{display:none}
+  .identity{padding-top:3px;padding-bottom:3px}
+  .menu-btn{padding-top:8px;padding-bottom:10px}
+  .menu-btn.alt{padding-top:8px;padding-bottom:10px}
+  #roomCode{padding-top:5px;padding-bottom:6px}
+  .keys span{font-size:10px;padding:2px 7px 3px}
+}
 
 #dead .big{font-family:var(--disp);font-size:clamp(40px,8vw,84px);font-weight:800;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 14px 28px rgba(74,63,92,.3)}
@@ -209,7 +311,45 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 <div class="screen" id="title">
   <h1>PASTEL<em>NUKETOWN</em></h1>
   <div class="sub">Free&nbsp;For&nbsp;All</div>
-  <button id="play">PLAY</button>
+  <div id="menu">
+    <label class="identity setup-only" for="playerName">
+      <span>CALLSIGN</span>
+      <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
+    </label>
+    <div class="menu-actions">
+      <button class="menu-btn" id="play">SOLO</button>
+      <button class="menu-btn alt setup-only" id="hostGame">CREATE ROOM</button>
+    </div>
+    <label class="listed setup-only" for="roomPublic">
+      <input type="checkbox" id="roomPublic" checked>
+      <span>SHOW MY ROOM IN THE BROWSER</span>
+    </label>
+    <div class="join-row setup-only">
+      <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
+      <button class="mini-btn" id="joinGame">JOIN</button>
+    </div>
+    <div class="rooms setup-only">
+      <div class="rooms-head">
+        <span>OPEN ROOMS</span>
+        <button class="mini-btn" id="refreshRooms">REFRESH</button>
+      </div>
+      <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
+    </div>
+    <div id="menuNote">Join an open room below, create your own, or enter a six-character code.</div>
+  </div>
+  <div id="lobby" class="panel" hidden>
+    <div class="lobby-head">
+      <div><small>ROOM</small><strong id="lobbyCode">······</strong></div>
+      <button class="mini-btn" id="copyRoom">COPY INVITE</button>
+    </div>
+    <div class="roster-title"><span>PLAYERS</span><b id="rosterCount">1 / 4</b></div>
+    <ul id="roster"></ul>
+    <div class="lobby-actions">
+      <button class="menu-btn" id="netStart">START MATCH</button>
+      <button class="mini-btn" id="netLeave">LEAVE</button>
+    </div>
+  </div>
+  <div id="netStatus" role="status" aria-live="polite"></div>
   <div class="keys">
     <span><b>WASD</b> move</span><span><b>SHIFT</b> sprint</span><span><b>SPACE</b> jump</span>
     <span><b>MOUSE</b> aim</span><span><b>CLICK</b> shoot</span><span><b>R</b> reload</span>
@@ -1537,6 +1677,300 @@ if (typeof THREE === "undefined") {
   };
 });
 </script>
+<script>/* ===== net-protocol.js ===== */
+(function (root, factory) {
+  'use strict';
+
+  var protocol = factory();
+
+  if (typeof module === 'object' && module.exports) {
+    module.exports = protocol;
+  }
+  if (root) {
+    root.NUKETOWN_PROTOCOL = protocol;
+  }
+}(typeof globalThis !== 'undefined'
+  ? globalThis
+  : (typeof self !== 'undefined' ? self : this), function () {
+  'use strict';
+
+  var VERSION = 1;
+  var MAX_PLAYERS = 4;
+  var MAX_MESSAGE_BYTES = 64 * 1024;
+  var MAX_PLAYER_NAME_LENGTH = 20;
+  var ROOM_CODE_LENGTH = 6;
+  var ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  var MAX_ROOM_LIST = 50;
+  var ALLOWED_WEAPONS = Object.freeze(['smg', 'shotgun', 'rifle']);
+  var MAX_PITCH = 1.45;
+
+  function result(ok, value, error) {
+    return {
+      ok: ok,
+      value: value,
+      error: error
+    };
+  }
+
+  function isFiniteNumber(value) {
+    return typeof value === 'number' && Number.isFinite(value);
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function wrapAngle(value) {
+    if (!isFiniteNumber(value)) return 0;
+    var wrapped = (value + Math.PI) % (Math.PI * 2);
+    if (wrapped < 0) wrapped += Math.PI * 2;
+    return wrapped - Math.PI;
+  }
+
+  function lerpAngle(from, to, amount) {
+    if (!isFiniteNumber(from) || !isFiniteNumber(to)) return 0;
+    if (!isFiniteNumber(amount)) amount = 0;
+    return wrapAngle(from + wrapAngle(to - from) * clamp(amount, 0, 1));
+  }
+
+  function normalizeRoomCode(value) {
+    if (typeof value !== 'string') return '';
+    return value
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, ROOM_CODE_LENGTH);
+  }
+
+  function cleanPlayerName(value) {
+    if (typeof value !== 'string') return '';
+    var name = value;
+    if (typeof name.normalize === 'function') name = name.normalize('NFKC');
+
+    name = name
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+      .replace(/[<>]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
+  }
+
+  function createRoomCode(randomFn) {
+    var random = typeof randomFn === 'function' ? randomFn : Math.random;
+    var code = '';
+
+    for (var i = 0; i < ROOM_CODE_LENGTH; i++) {
+      var sample = random();
+      if (!isFiniteNumber(sample)) sample = 0;
+      sample = clamp(sample, 0, 1 - Number.EPSILON);
+      code += ROOM_CODE_ALPHABET.charAt(Math.floor(sample * ROOM_CODE_ALPHABET.length));
+    }
+
+    return code;
+  }
+
+  /* The room browser is fetched over plain HTTP, so the payload is as
+     untrusted as anything arriving on the socket. Drop entries that are
+     malformed, duplicated, or no longer joinable rather than the whole list —
+     one bad row should not blank the browser. */
+  function cleanRoomSummaries(value, limit) {
+    if (!Array.isArray(value)) return [];
+
+    var max = Number.isSafeInteger(limit) && limit > 0 ? limit : MAX_ROOM_LIST;
+    var seen = Object.create(null);
+    var out = [];
+
+    for (var i = 0; i < value.length && out.length < max; i++) {
+      var raw = value[i];
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+
+      var code = normalizeRoomCode(raw.code);
+      if (code.length !== ROOM_CODE_LENGTH || seen[code]) continue;
+
+      var host = cleanPlayerName(raw.host);
+      if (!host) continue;
+
+      var capacity = Number.isSafeInteger(raw.max) && raw.max > 0
+        ? Math.min(raw.max, MAX_PLAYERS)
+        : MAX_PLAYERS;
+      if (!Number.isSafeInteger(raw.players) || raw.players < 1 ||
+          raw.players >= capacity) continue;
+
+      seen[code] = true;
+      out.push({ code: code, host: host, players: raw.players, max: capacity });
+    }
+
+    return out;
+  }
+
+  function sanitizeInput(message, lastSeq) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return result(false, null, 'input must be an object');
+    }
+    if (message.t !== 'input') {
+      return result(false, null, 'unexpected message type');
+    }
+    if (message.v !== VERSION) {
+      return result(false, null, 'unsupported protocol version');
+    }
+    if (!Number.isSafeInteger(message.seq) || message.seq < 0) {
+      return result(false, null, 'seq must be a non-negative safe integer');
+    }
+    if (!Number.isSafeInteger(message.round) || message.round < 1) {
+      return result(false, null, 'round must be a positive safe integer');
+    }
+
+    var previous = Number.isSafeInteger(lastSeq) ? lastSeq : -1;
+    if (message.seq <= previous) {
+      return result(false, null, 'seq must increase');
+    }
+
+    if (!isFiniteNumber(message.fwd) || !isFiniteNumber(message.strafe)) {
+      return result(false, null, 'movement axes must be finite numbers');
+    }
+    if (!isFiniteNumber(message.yaw) || !isFiniteNumber(message.pitch)) {
+      return result(false, null, 'look angles must be finite numbers');
+    }
+    if (typeof message.jump !== 'boolean' ||
+        typeof message.sprint !== 'boolean' ||
+        typeof message.fire !== 'boolean') {
+      return result(false, null, 'input buttons must be booleans');
+    }
+    if (ALLOWED_WEAPONS.indexOf(message.weapon) === -1) {
+      return result(false, null, 'unknown weapon');
+    }
+    if (!Number.isSafeInteger(message.fireSeq) || message.fireSeq < 0 ||
+        !Number.isSafeInteger(message.reloadSeq) || message.reloadSeq < 0) {
+      return result(false, null, 'action counters must be non-negative safe integers');
+    }
+
+    return result(true, {
+      t: 'input',
+      v: VERSION,
+      round: message.round,
+      seq: message.seq,
+      fwd: clamp(message.fwd, -1, 1),
+      strafe: clamp(message.strafe, -1, 1),
+      jump: message.jump,
+      sprint: message.sprint,
+      fire: message.fire,
+      fireSeq: message.fireSeq,
+      yaw: wrapAngle(message.yaw),
+      pitch: clamp(message.pitch, -MAX_PITCH, MAX_PITCH),
+      weapon: message.weapon,
+      reloadSeq: message.reloadSeq
+    }, null);
+  }
+
+  function utf8Size(text) {
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(text).byteLength;
+    }
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.byteLength(text, 'utf8');
+    }
+
+    return unescape(encodeURIComponent(text)).length;
+  }
+
+  function decodeBytes(raw) {
+    var bytes;
+
+    if (typeof ArrayBuffer !== 'undefined' && raw instanceof ArrayBuffer) {
+      bytes = new Uint8Array(raw);
+    } else if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(raw)) {
+      bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+    } else {
+      return null;
+    }
+
+    if (typeof TextDecoder !== 'undefined') {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    }
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8');
+    }
+
+    var encoded = '';
+    for (var i = 0; i < bytes.length; i++) {
+      encoded += '%' + bytes[i].toString(16).padStart(2, '0');
+    }
+    return decodeURIComponent(encoded);
+  }
+
+  function parseWireMessage(raw, maxBytes) {
+    var limit = maxBytes === undefined ? MAX_MESSAGE_BYTES : maxBytes;
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+      return result(false, null, 'maxBytes must be a positive integer');
+    }
+
+    var text;
+    var size;
+
+    try {
+      if (typeof raw === 'string') {
+        text = raw;
+        size = utf8Size(text);
+      } else {
+        if (raw === null || raw === undefined ||
+            typeof raw.byteLength !== 'number') {
+          return result(false, null, 'wire message must be text or bytes');
+        }
+        size = raw.byteLength;
+        if (size > limit) {
+          return result(false, null, 'message is too large');
+        }
+        text = decodeBytes(raw);
+        if (text === null) {
+          return result(false, null, 'wire message must be text or bytes');
+        }
+      }
+    } catch (error) {
+      return result(false, null, 'message is not valid UTF-8');
+    }
+
+    if (size > limit) {
+      return result(false, null, 'message is too large');
+    }
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+
+    var value;
+    try {
+      value = JSON.parse(text);
+    } catch (error) {
+      return result(false, null, 'message is not valid JSON');
+    }
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return result(false, null, 'message must be a JSON object');
+    }
+
+    return result(true, value, null);
+  }
+
+  return Object.freeze({
+    VERSION: VERSION,
+    MAX_PLAYERS: MAX_PLAYERS,
+    MAX_MESSAGE_BYTES: MAX_MESSAGE_BYTES,
+    MAX_PLAYER_NAME_LENGTH: MAX_PLAYER_NAME_LENGTH,
+    ROOM_CODE_LENGTH: ROOM_CODE_LENGTH,
+    ROOM_CODE_ALPHABET: ROOM_CODE_ALPHABET,
+    MAX_ROOM_LIST: MAX_ROOM_LIST,
+    ALLOWED_WEAPONS: ALLOWED_WEAPONS,
+    MAX_PITCH: MAX_PITCH,
+    normalizeRoomCode: normalizeRoomCode,
+    cleanPlayerName: cleanPlayerName,
+    cleanRoomSummaries: cleanRoomSummaries,
+    createRoomCode: createRoomCode,
+    isFiniteNumber: isFiniteNumber,
+    clamp: clamp,
+    wrapAngle: wrapAngle,
+    lerpAngle: lerpAngle,
+    sanitizeInput: sanitizeInput,
+    parseWireMessage: parseWireMessage
+  });
+}));
+</script>
 <script>/* ===== src/10-core.js ===== */
 /* =====================================================================
    PASTEL NUKETOWN — core: palette, math, geometry builder, sky, lights
@@ -1754,6 +2188,69 @@ GeoBuilder.prototype.mesh = function (matOpts) {
   const m = new THREE.Mesh(g, toonMat(Object.assign({ vertexColors: true }, matOpts || {})));
   m.castShadow = true; m.receiveShadow = true;
   return m;
+};
+/* Split the accumulated triangles into spatial chunks along X.
+   One merged mesh means one bounding sphere covering the whole town, so
+   frustum culling can never reject anything — every triangle is transformed
+   every frame no matter which way you face. That is invisible on a GPU and
+   expensive on a software rasteriser. Chunking costs a few extra draw calls
+   and lets half the map drop out when you look down the street.
+   Triangles spanning a boundary go to the chunk holding their centroid;
+   the chunk's real bounds are computed from its own vertices, so nothing
+   is ever wrongly culled. */
+GeoBuilder.prototype.meshChunks = function (cuts, matOpts) {
+  const n = cuts.length + 1;
+  const buckets = [];
+  for (let i = 0; i < n; i++) buckets.push({ pos: [], nrm: [], col: [] });
+  const P = this.pos, N = this.nrm, K = this.col;
+  for (let t = 0; t < P.length; t += 9) {
+    const cx = (P[t] + P[t + 3] + P[t + 6]) / 3;
+    let b = 0;
+    while (b < cuts.length && cx >= cuts[b]) b++;
+    const q = buckets[b];
+    for (let k = 0; k < 9; k++) { q.pos.push(P[t + k]); q.nrm.push(N[t + k]); q.col.push(K[t + k]); }
+  }
+  const out = [];
+  for (const q of buckets) {
+    if (!q.pos.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(q.pos, 3));
+    g.setAttribute('normal',   new THREE.Float32BufferAttribute(q.nrm, 3));
+    g.setAttribute('color',    new THREE.Float32BufferAttribute(q.col, 3));
+    g.computeBoundingSphere();
+    const m = new THREE.Mesh(g, toonMat(Object.assign({ vertexColors: true }, matOpts || {})));
+    m.castShadow = true; m.receiveShadow = true;
+    out.push(m);
+  }
+  return out;
+};
+/* Same partition for the ink lines. */
+GeoBuilder.prototype.lineChunks = function (cuts, opacity) {
+  if (!this.epos.length) return [];
+  const n = cuts.length + 1;
+  const buckets = [];
+  for (let i = 0; i < n; i++) buckets.push({ pos: [], col: [] });
+  const P = this.epos, K = this.ecol;
+  for (let t = 0; t < P.length; t += 6) {
+    const cx = (P[t] + P[t + 3]) / 2;
+    let b = 0;
+    while (b < cuts.length && cx >= cuts[b]) b++;
+    const q = buckets[b];
+    for (let k = 0; k < 6; k++) { q.pos.push(P[t + k]); q.col.push(K[t + k]); }
+  }
+  const out = [];
+  for (const q of buckets) {
+    if (!q.pos.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(q.pos, 3));
+    g.setAttribute('color',    new THREE.Float32BufferAttribute(q.col, 3));
+    g.computeBoundingSphere();
+    out.push(new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true,
+      opacity: opacity === undefined ? 0.5 : opacity, depthWrite: false
+    })));
+  }
+  return out;
 };
 GeoBuilder.prototype.lines = function (opacity) {
   if (!this.epos.length) return null;
@@ -2153,10 +2650,7 @@ function buildWorld() {
         for (let i = 0; i < n; i++) {
           const t0 = (i + 0.035) / n, t1 = (i + 0.965) / n;
           // recessed panel face, proud of the wall on both sides
-          const band = [
-            { y0: 0.42, y1: 2.35, c: Cx(PAL.perimeter, 1.045) },
-            { y0: 2.55, y1: 3.95, c: Cx(PAL.perimeter, 1.02) }
-          ];
+          const band = [{ y0: 0.42, y1: 3.95, c: Cx(PAL.perimeter, 1.04) }];
           for (const b of band) {
             if (alongX) B.box([lerp(x0, x1, t0), b.y0, z0 - inset], [lerp(x0, x1, t1), b.y1, z1 + inset], b.c, { noEdge: true });
             else        B.box([x0 - inset, b.y0, lerp(z0, z1, t0)], [x1 + inset, b.y1, lerp(z0, z1, t1)], b.c, { noEdge: true });
@@ -2193,11 +2687,11 @@ function buildWorld() {
           if (alongX) {
             const a = lerp(x0, x1, t0), b = lerp(x0, x1, t1);
             B.box([a, y0, z0], [b, h, z1], col);
-            domeY(B, (a + b) / 2, h, (z0 + z1) / 2, (b - a) * 0.5, (b - a) * 0.55, 6, 2, col);
+            domeY(B, (a + b) / 2, h, (z0 + z1) / 2, (b - a) * 0.5, (b - a) * 0.55, 5, 1, col);
           } else {
             const a = lerp(z0, z1, t0), b = lerp(z0, z1, t1);
             B.box([x0, y0, a], [x1, h, b], col);
-            domeY(B, (x0 + x1) / 2, h, (a + b) / 2, (b - a) * 0.5, (b - a) * 0.55, 6, 2, col);
+            domeY(B, (x0 + x1) / 2, h, (a + b) / 2, (b - a) * 0.5, (b - a) * 0.55, 5, 1, col);
           }
         }
         // two rails
@@ -2458,16 +2952,23 @@ function buildWorld() {
     box(-2.8, F1 + 1.5, -17.78, -1.0, F1 + 2.5, -17.72, C(A ? 0xffb7c5 : 0xa8dcf0)); // poster
   }
 
-  const mesh = B.mesh();
-  const lines = B.lines(0.42);
-  grp.add(mesh); if (lines) grp.add(lines);
+  /* Chunk along the street axis so looking one way culls the other end.
+     The ground slab lands in the middle chunk; its bounding sphere is huge,
+     so that chunk simply never culls — which is correct, you always see it. */
+  const CUTS = [-16, -5, 5, 16];
+  const meshes = B.meshChunks(CUTS);
+  const lineSets = B.lineChunks(CUTS, 0.42);
+  for (const m of meshes) grp.add(m);
+  for (const l of lineSets) grp.add(l);
   scene.add(grp);
   WORLD.group = grp;
-  WORLD.staticMesh = mesh;
+  WORLD.staticMesh = meshes[0];
+  WORLD.chunks = meshes;
 
   buildMannequins();
   WORLD.sky = buildSky();
   buildDustMotes();
+  buildMagic();
   return grp;
 }
 
@@ -2503,6 +3004,124 @@ function mannequinGeo() {
   const g = new THREE.Group(); g.add(m); if (l) g.add(l);
   return g;
 }
+/* =====================================================================
+   LOCALISED MAGIC
+   The global dust motes are pleasant but evenly spread, which makes them
+   read as weather rather than as authored magic — constant sparkle becomes
+   wallpaper. These emitters instead pool magic at specific landmarks, so
+   the effect identifies a PLACE: fireflies under the porch lamps, candy
+   floss off the chimneys, bubbles from the vehicle exhausts, petals
+   circling the two spawn ends.
+
+   All motion is analytic — position is a pure function of (site, phase,
+   time) — so there is no per-frame simulation state to update, just a
+   buffer write. Everything is additive and deliberately faint: fading a
+   vertex colour toward black is invisible under additive blending, but
+   would turn a normal-blended sprite into a dark square (see psUpdate).
+   ===================================================================== */
+const MAGIC = { groups: [], sites: [] };
+
+function magicPoints(n, tex, size, opacity) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  const m = new THREE.PointsMaterial({
+    size: size, map: tex, vertexColors: true, transparent: true, opacity: opacity,
+    depthWrite: false, sizeAttenuation: true, fog: true,
+    blending: THREE.AdditiveBlending
+  });
+  const p = new THREE.Points(g, m);
+  p.frustumCulled = false;
+  scene.add(p);
+  return { pts: p, n: n, items: [] };
+}
+
+function buildMagic() {
+  const soft = SOFTWARE_GPU;
+  const F = MAP.consts;
+  const tex = MOTE_TEX || null;
+
+  /* emitter sites, mirrored through the origin like the rest of the map */
+  const sites = [];
+  for (const s of [1, -1]) {
+    sites.push({ k: 'firefly', x: s * -4.5,  y: 2.62,        z: s * -6.0, c: 0xffe9a0 });
+    sites.push({ k: 'puff',    x: s * -9.1,  y: F.ROOF + 3.8, z: s * -14.9, c: s > 0 ? 0xffd6e6 : 0xd7e6ff });
+  }
+  sites.push({ k: 'bubble', x: -16.7, y: 0.55, z:  1.5, c: 0xd8f2ff });   // bus exhaust
+  sites.push({ k: 'bubble', x:  25.2, y: 0.60, z: -1.4, c: 0xffe0ee });   // truck exhaust
+  sites.push({ k: 'petal',  x: -27.5, y: 0.0,  z:  0.0, c: 0xffc9dc });   // west spawn end
+  sites.push({ k: 'petal',  x:  27.5, y: 0.0,  z:  0.0, c: 0xc9e8ff });   // east spawn end
+  for (const st of sites) st.lin = C(st.c);   // convert once, not per particle per frame
+  MAGIC.sites = sites;
+
+  const per = { firefly: soft ? 10 : 22, puff: soft ? 8 : 16,
+                bubble: soft ? 7 : 14,  petal: soft ? 8 : 18 };
+  const specs = [
+    { key: 'warm',   kinds: ['firefly', 'petal'], size: 0.055, opacity: 1.0 },
+    { key: 'bubble', kinds: ['bubble'],           size: 0.13, opacity: 0.85 },
+    { key: 'puff',   kinds: ['puff'],             size: 0.95, opacity: 0.50 }
+  ];
+  for (const sp of specs) {
+    const items = [];
+    for (const site of sites) {
+      if (sp.kinds.indexOf(site.k) < 0) continue;
+      for (let i = 0; i < per[site.k]; i++)
+        items.push({ site: site, ph: (i + 0.5) / per[site.k], j: rand(0, TAU) });
+    }
+    if (!items.length) continue;
+    const grp = magicPoints(items.length, tex, sp.size, sp.opacity);
+    grp.items = items;
+    MAGIC.groups.push(grp);
+  }
+}
+
+const _frac = v => v - Math.floor(v);
+function updateMagic(t) {
+  for (const grp of MAGIC.groups) {
+    const pos = grp.pts.geometry.attributes.position.array;
+    const col = grp.pts.geometry.attributes.color.array;
+    for (let i = 0; i < grp.items.length; i++) {
+      const it = grp.items[i], s = it.site, ph = it.ph;
+      let x, y, z, e;
+      if (s.k === 'firefly') {
+        // lazy spiral under the porch lamp, twinkling out of phase
+        const a = t * 0.55 + ph * TAU, r = 0.40 + 0.30 * Math.sin(t * 0.9 + it.j);
+        x = s.x + Math.cos(a) * r;
+        z = s.z + Math.sin(a) * r;
+        y = s.y - 0.55 + 0.40 * Math.sin(t * 1.3 + it.j * 2.1);
+        e = 0.30 + 0.70 * (0.5 + 0.5 * Math.sin(t * 3.1 + it.j * 3.7));
+      } else if (s.k === 'puff') {
+        // candy floss leaving the chimney, expanding and blowing downwind
+        const u = _frac(t * 0.13 + ph);
+        const spread = 0.16 + u * 0.85;
+        x = s.x + Math.cos(it.j) * spread + u * 1.5;
+        z = s.z + Math.sin(it.j) * spread + u * 0.5;
+        y = s.y + u * 3.2;
+        e = Math.sin(u * Math.PI) * 0.85;
+      } else if (s.k === 'bubble') {
+        // bubbles wobbling up out of an exhaust pipe
+        const u = _frac(t * 0.20 + ph);
+        x = s.x + Math.sin(t * 1.7 + it.j) * 0.20 + u * 0.35;
+        z = s.z + Math.cos(t * 1.3 + it.j) * 0.20;
+        y = s.y + u * 2.1;
+        e = (1 - u) * (0.55 + 0.45 * Math.sin(t * 2.2 + it.j));
+      } else {                                    // petal
+        const a = t * 0.30 + ph * TAU, r = 1.5 + 0.6 * Math.sin(it.j);
+        x = s.x + Math.cos(a) * r;
+        z = s.z + Math.sin(a) * r;
+        y = 0.35 + 0.85 * (0.5 + 0.5 * Math.sin(t * 0.8 + it.j));
+        e = 0.75;
+      }
+      e *= nearFade(x, y, z);
+      pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+      const c = s.lin;
+      col[i * 3] = c.r * e; col[i * 3 + 1] = c.g * e; col[i * 3 + 2] = c.b * e;
+    }
+    grp.pts.geometry.attributes.position.needsUpdate = true;
+    grp.pts.geometry.attributes.color.needsUpdate = true;
+  }
+}
+
 function buildMannequins() {
   const spots = [
     [-8.5, -5.9, 0.3], [1.2, -5.9, -0.6], [-14.5, -8.5, 1.2], [6.2, -9.4, 2.4],
@@ -2525,9 +3144,9 @@ function buildMannequins() {
 /* =====================================================================
    FLOATING DUST MOTES — the cheap trick that makes a scene feel magical
    ===================================================================== */
-let MOTES = null;
+let MOTES = null, MOTE_TEX = null;
 function buildDustMotes() {
-  const N = SOFTWARE_GPU ? 120 : 620;
+  const N = SOFTWARE_GPU ? 80 : 360;
   const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), ph = new Float32Array(N);
   const tints = [0xfff3c4, 0xffd9e6, 0xd8ecff, 0xe0d0ff, 0xffffff];
   for (let i = 0; i < N; i++) {
@@ -2546,7 +3165,8 @@ function buildDustMotes() {
   rg.addColorStop(0, 'rgba(255,255,255,1)'); rg.addColorStop(0.35, 'rgba(255,255,255,.7)');
   rg.addColorStop(1, 'rgba(255,255,255,0)');
   cx.fillStyle = rg; cx.fillRect(0, 0, 32, 32);
-  const tex = new THREE.CanvasTexture(cv);
+  MOTE_TEX = new THREE.CanvasTexture(cv);
+  const tex = MOTE_TEX;
 
   const mat = new THREE.PointsMaterial({
     size: 0.2, map: tex, vertexColors: true, transparent: true, opacity: 0.8,
@@ -3094,7 +3714,10 @@ function updateViewmodel(dt, st) {
   ry += VM.sprint * 0.78; rx += VM.sprint * 0.34; rz -= VM.sprint * 0.30;
 
   // recoil + bob + sway + land dip
-  pz += VM.recoil * 0.9;
+  /* Recoil pulls the gun toward the lens. It sits at pz -0.52, so the old
+     0.9 multiplier could push it to +0.29 — behind the camera, i.e. the gun
+     vanished mid-burst on the harder-kicking weapons. Keep it well clear. */
+  pz = Math.min(-0.14, pz + VM.recoil * 0.16);
   py += VM.recoil * 0.30 + VM.bob.y - VM.landDip * 0.12;
   px += VM.bob.x + VM.sway.x;
   py += VM.sway.y;
@@ -3792,6 +4415,7 @@ const SFX = {
 
 const CFG = {
   bots: 8,
+  combatants: 9,
   killsToWin: 25,
   respawn: 3.0,
   spawnShield: 1.6,
@@ -3814,10 +4438,15 @@ const G = {
    ===================================================================== */
 let _nextId = 1;
 function makeActor(opts) {
+  const id = opts.id === undefined ? _nextId++ : opts.id;
+  if (id >= _nextId) _nextId = id + 1;
   const a = {
-    id: _nextId++,
+    id: id,
+    netId: opts.netId || null,
     name: opts.name,
     isPlayer: !!opts.isPlayer,
+    controller: opts.controller || (opts.isPlayer ? 'local' : 'bot'),
+    isHuman: !!opts.isHuman || !!opts.isPlayer || opts.controller === 'remote',
     colors: opts.colors,
     skill: opts.skill || 'normal',
     pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 },
@@ -3829,7 +4458,9 @@ function makeActor(opts) {
     kills: 0, deaths: 0, streak: 0, bestStreak: 0,
     onGround: false, stepPhase: 0,
     lastHitBy: null, lastHitT: -99, shield: 0,
-    brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle'
+    brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
+    netInput: null, netTarget: null, lastInputSeq: -1,
+    lastFireSeq: 0, lastReloadSeq: 0
   };
   const w = WBY[a.weapon];
   a.ammo = w.mag; a.reserve = w.reserve;
@@ -3845,6 +4476,41 @@ function attachCharacter(a) {
   a.plate.sprite.position.set(0, CH.headC + 0.55, 0);
   a.char.root.add(a.plate.sprite);
   drawPlate(a.plate, a.name, a.health, a.maxHealth, a.colors.body);
+}
+
+function disposeActorVisuals(a) {
+  if (!a) return;
+  if (a.char) {
+    scene.remove(a.char.root);
+    a.char.root.traverse(object => {
+      if ((object.isMesh || object.isLine) && object.geometry) object.geometry.dispose();
+      if ((object.isMesh || object.isLine) && object.material) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) material.dispose();
+      }
+    });
+  }
+  if (a.plate) {
+    if (a.plate.sprite && a.plate.sprite.material) a.plate.sprite.material.dispose();
+    if (a.plate.tex) a.plate.tex.dispose();
+  }
+  for (const object of [a.blob, a.bubble]) {
+    if (!object) continue;
+    scene.remove(object);
+    if (object.geometry) object.geometry.dispose();
+    if (object.material) object.material.dispose();
+  }
+  a.char = null;
+  a.plate = null;
+  a.blob = null;
+  a.bubble = null;
+}
+
+function detachActor(a) {
+  if (!a) return;
+  disposeActorVisuals(a);
+  const i = G.actors.indexOf(a);
+  if (i >= 0) G.actors.splice(i, 1);
 }
 
 function respawnActor(a, instant) {
@@ -3865,22 +4531,30 @@ function respawnActor(a, instant) {
   if (a.plate) drawPlate(a.plate, a.name, a.health, a.maxHealth, a.colors.body);
   fxSpawnPuff(a.pos.x, a.pos.y, a.pos.z, C(a.colors.body));
   if (a.isPlayer) { SFX.spawn(); setDamageDirsCleared(); }
+  if (typeof netOnAuthoritativeRespawn === 'function') netOnAuthoritativeRespawn(a);
 }
 
 /* =====================================================================
    SETUP
    ===================================================================== */
 function setupMatch() {
-  for (const a of G.actors) {
-    if (a.char) scene.remove(a.char.root);
-    if (a.blob) scene.remove(a.blob);
-    if (a.bubble) scene.remove(a.bubble);
-  }
+  for (const a of G.actors) disposeActorVisuals(a);
   G.actors.length = 0;
   _nextId = 1;
-  G.time = 0; G.over = false; G.winner = null;
+  G.time = 0; G.tick = 0; G.over = false; G.winner = null;
 
-  const player = makeActor({ name: 'YOU', isPlayer: true, colors: PLAYER_COLOR, weapon: 'smg' });
+  const localInfo = typeof netLocalPlayerInfo === 'function'
+    ? netLocalPlayerInfo()
+    : { id: null, name: 'YOU', colors: PLAYER_COLOR };
+  const player = makeActor({
+    name: localInfo.name || 'YOU',
+    isPlayer: true,
+    isHuman: true,
+    controller: 'local',
+    netId: localInfo.id || null,
+    colors: localInfo.colors || PLAYER_COLOR,
+    weapon: 'smg'
+  });
   player.blob = makeBlobShadow();     // only ever seen in the death cam
   player.bubble = makeBubble();       // ditto, plus it shows in the death cam
   G.player = player;
@@ -3888,9 +4562,32 @@ function setupMatch() {
 
   const skills = ['easy', 'normal', 'normal', 'hard', 'normal', 'hard', 'easy', 'normal'];
   const guns   = ['smg', 'shotgun', 'smg', 'rifle', 'smg', 'shotgun', 'rifle', 'smg'];
-  for (let i = 0; i < CFG.bots; i++) {
+  const remoteRoster = typeof netAuthorityRoster === 'function' ? netAuthorityRoster() : [];
+  for (let i = 0; i < remoteRoster.length; i++) {
+    const member = remoteRoster[i];
+    const h = makeActor({
+      name: member.name,
+      netId: member.id,
+      isHuman: true,
+      controller: 'remote',
+      colors: member.colors,
+      weapon: 'smg'
+    });
+    attachCharacter(h);
+    G.actors.push(h);
+  }
+
+  const botCount = typeof netBotCount === 'function' ? netBotCount(remoteRoster.length + 1) : CFG.bots;
+  for (let i = 0; i < botCount; i++) {
     const col = BOT_COLORS[i % BOT_COLORS.length];
-    const b = makeActor({ name: col.name.toUpperCase(), colors: col, weapon: guns[i % guns.length], skill: skills[i % skills.length] });
+    const b = makeActor({
+      name: col.name.toUpperCase(),
+      netId: 'bot-' + (i + 1),
+      controller: 'bot',
+      colors: col,
+      weapon: guns[i % guns.length],
+      skill: skills[i % skills.length]
+    });
     if (G.aiOK) {
       try { b.brain = AI.createBrain({ id: b.id, seed: 1000 + i * 77, skill: b.skill }); }
       catch (e) { b.brain = null; G.aiErr = String(e); }
@@ -3958,11 +4655,13 @@ function finishReload(a) {
   const need = w.mag - a.ammo;
   const give = Math.min(need, a.reserve);
   a.ammo += give; a.reserve -= give;
+  a.reloadT = 0;
   if (a.isPlayer) SFX.reloadDone(); else SFX.reloadDone(a.pos.x, a.pos.y + 1.2, a.pos.z);
 }
 
 function fireWeapon(a) {
   const w = WBY[a.weapon];
+  const visualOnly = a.isPlayer && typeof netIsGuest === 'function' && netIsGuest();
   if (a.fireCd > 0 || a.reloadT > 0 || !a.alive) return false;
   if (a.ammo <= 0) {
     if (a.isPlayer && a.fireCd <= 0) { SFX.empty(); a.fireCd = 0.25; }
@@ -3987,6 +4686,7 @@ function fireWeapon(a) {
     mx = p.x; my = p.y; mz = p.z;
   }
 
+  const shotLines = [];
   for (let p = 0; p < w.pellets; p++) {
     const yaw = a.aimYaw + rand(-spread, spread) * (p ? 1.6 : 0.35);
     const pit = a.aimPitch + rand(-spread, spread) * (p ? 1.6 : 0.35);
@@ -3996,6 +4696,7 @@ function fireWeapon(a) {
     const endX = hit ? hit.px : ex + dx * w.range;
     const endY = hit ? hit.py : ey + dy * w.range;
     const endZ = hit ? hit.pz : ez + dz * w.range;
+    shotLines.push([mx, my, mz, endX, endY, endZ]);
 
     if (p === 0 || w.pellets <= 3 || p % 3 === 0)
       fxTracer(mx, my, mz, endX, endY, endZ, C(a.isPlayer ? (w.tracer || 0xfff0c0) : a.colors.trim));
@@ -4003,7 +4704,7 @@ function fireWeapon(a) {
     if (!hit) continue;
     if (hit.kind === 'actor') {
       const dmg = w.dmg * (hit.head ? w.headMul : 1);
-      applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ);
+      if (!visualOnly) applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ);
       fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'actor');
     } else if (hit.kind === 'mannequin') {
       hit.obj.userData.spin += rand(3, 7) * (rng() < 0.5 ? -1 : 1);
@@ -4026,6 +4727,8 @@ function fireWeapon(a) {
   } else {
     SFX.shoot(w.id, a.pos.x, a.pos.y + 1.3, a.pos.z);
   }
+  if (!visualOnly && typeof netOnAuthoritativeShot === 'function')
+    netOnAuthoritativeShot(a, w, shotLines);
   return true;
 }
 
@@ -4037,6 +4740,8 @@ function applyDamage(target, dmg, from, head, hx, hy, hz) {
      so it can't be camped behind. */
   if (target.shield > 0) {
     if (from) fxShieldHit(target, hx, hy, hz);
+    if (typeof netOnAuthoritativeShieldHit === 'function')
+      netOnAuthoritativeShieldHit(target, from, hx, hy, hz);
     return;
   }
   target.health -= dmg;
@@ -4057,6 +4762,8 @@ function applyDamage(target, dmg, from, head, hx, hy, hz) {
     if (from) addDamageDir(from);
     fxShake(0.18);
   }
+  if (typeof netOnAuthoritativeDamage === 'function')
+    netOnAuthoritativeDamage(target, from, dmg, head, hx, hy, hz);
   if (target.health <= 0) killActor(target, from);
 }
 
@@ -4083,6 +4790,7 @@ function killActor(target, from) {
     }
   }
   addKillFeed(from, target);
+  if (typeof netOnAuthoritativeKill === 'function') netOnAuthoritativeKill(target, from);
   if (target.isPlayer) { SFX.die(); showDeadScreen(from); }
   refreshBoard();
 
@@ -4093,8 +4801,14 @@ function killActor(target, from) {
 function endMatch(winner) {
   G.over = true;
   G.winner = winner;
+  G.paused = false;
+  document.getElementById('title').classList.add('off');
+  const dead = document.getElementById('dead');
+  dead.classList.add('off');
+  delete dead.dataset.wasUp;
   showOverScreen(winner);
   if (winner.isPlayer) SFX.win();
+  if (typeof netOnAuthoritativeMatchOver === 'function') netOnAuthoritativeMatchOver(winner);
   exitPointerLock();
 }
 
@@ -4102,7 +4816,10 @@ function endMatch(winner) {
    PLAYER INPUT
    ===================================================================== */
 const KEY = {};
-const IN = { lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false };
+const IN = {
+  lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
+  fireSeq: 0, reloadSeq: 0
+};
 let mouseSens = 0.0021;
 
 function initInput() {
@@ -4110,7 +4827,7 @@ function initInput() {
     if (e.code === 'Tab') e.preventDefault();
     KEY[e.code] = true;
     if (!G.started) return;
-    if (e.code === 'KeyR') tryReload(G.player);
+    if (e.code === 'KeyR' && !e.repeat) { IN.reloadSeq++; tryReload(G.player); }
     if (e.code === 'Digit1') switchWeapon('smg');
     if (e.code === 'Digit2') switchWeapon('shotgun');
     if (e.code === 'Digit3') switchWeapon('rifle');
@@ -4121,7 +4838,12 @@ function initInput() {
     KEY[e.code] = false;
     if (e.code === 'Tab') setBoard(false);
   });
-  addEventListener('mousedown', e => { if (IN.locked && e.button === 0) IN.firing = true; });
+  addEventListener('mousedown', e => {
+    if (IN.locked && e.button === 0) {
+      if (!IN.firing) IN.fireSeq++;
+      IN.firing = true;
+    }
+  });
   addEventListener('mouseup', e => { if (e.button === 0) IN.firing = false; });
   addEventListener('wheel', e => {
     if (!IN.locked) return;
@@ -4183,17 +4905,20 @@ function syncPlayerAmmoStore() {
 function stepPlayer(a, dt) {
   a.aimYaw = a.yaw; a.aimPitch = a.pitch;
   if (!a.alive) {
+    if (typeof netIsGuest === 'function' && netIsGuest()) return;
     a.respawnT -= dt;
     if (a.respawnT <= 0) { respawnActor(a); hideDeadScreen(); }
     return;
   }
-  const fwd = (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0);
-  const str = (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0);
-  IN.sprinting = !!KEY.ShiftLeft || !!KEY.ShiftRight;
+  const acceptsInput = !G.paused;
+  const fwd = acceptsInput ? (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0) : 0;
+  const str = acceptsInput ? (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0) : 0;
+  const firing = acceptsInput && IN.firing;
+  IN.sprinting = acceptsInput && (!!KEY.ShiftLeft || !!KEY.ShiftRight);
 
   const w = WBY[a.weapon];
   let speed = CFG.playerSpeed * w.speed;
-  const sprinting = IN.sprinting && fwd > 0 && !IN.firing && a.reloadT <= 0;
+  const sprinting = IN.sprinting && fwd > 0 && !firing && a.reloadT <= 0;
   if (sprinting) speed *= CFG.sprintMul;
 
   /* forward = (sin y, cos y); right = cross(forward, up) = (-cos y, sin y).
@@ -4208,7 +4933,7 @@ function stepPlayer(a, dt) {
   const acc = a.onGround ? CFG.accelGround : CFG.accelAir;
   a.vel.x = damp(a.vel.x, mx, acc, dt);
   a.vel.z = damp(a.vel.z, mz, acc, dt);
-  if (KEY.Space && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
+  if (acceptsInput && KEY.Space && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
 
   const res = moveActor(a.pos, a.vel, dt, {});
   const wasGround = a.onGround;
@@ -4224,15 +4949,100 @@ function stepPlayer(a, dt) {
 
   if (a.reloadT > 0) { a.reloadT -= dt; if (a.reloadT <= 0) finishReload(a); }
   if (a.fireCd > 0) a.fireCd -= dt;
-  a.aiming = IN.firing || (!sprinting && spd < 4.5);
+  a.aiming = firing || (!sprinting && spd < 4.5);
 
-  if (IN.firing && !sprinting) {
+  if (firing && !sprinting) {
     const w2 = WBY[a.weapon];
     if (w2.auto) fireWeapon(a);
     else if (!IN._heldSemi) { if (fireWeapon(a)) IN._heldSemi = true; }
   }
-  if (!IN.firing) IN._heldSemi = false;
+  if (!firing) IN._heldSemi = false;
   syncPlayerAmmoStore();
+}
+
+function switchRemoteWeapon(a, id) {
+  if (!WBY[id] || a.weapon === id) return;
+  if (!a._ammoBy) a._ammoBy = {};
+  a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };
+  a.weapon = id;
+  const w = WBY[id];
+  const saved = a._ammoBy[id] || { ammo: w.mag, reserve: w.reserve };
+  a.ammo = clamp(saved.ammo, 0, w.mag);
+  a.reserve = Math.max(0, saved.reserve);
+  a.reloadT = 0;
+}
+
+/* The host simulates remote humans from their latest sequenced input.
+   This intentionally mirrors local movement, but omits camera/viewmodel UI. */
+function stepRemotePlayer(a, dt) {
+  if (!a.alive) {
+    a.respawnT -= dt;
+    if (a.respawnT <= 0) {
+      respawnActor(a);
+      if (a.plate) a.plate.sprite.visible = true;
+    }
+    return;
+  }
+
+  const fresh = a.netInput && G.time - (a.netInputAt || 0) <= 0.45;
+  const it = fresh ? a.netInput : {
+    fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
+    fireSeq: a.lastFireSeq, reloadSeq: a.lastReloadSeq,
+    yaw: a.yaw, pitch: a.pitch, weapon: a.weapon
+  };
+  a.yaw = Number.isFinite(it.yaw) ? it.yaw : a.yaw;
+  a.pitch = Number.isFinite(it.pitch) ? clamp(it.pitch, -1.45, 1.45) : a.pitch;
+  a.aimYaw = a.yaw; a.aimPitch = a.pitch;
+  switchRemoteWeapon(a, it.weapon);
+
+  if (it.reloadSeq > a.lastReloadSeq) {
+    a.lastReloadSeq = it.reloadSeq;
+    tryReload(a);
+  }
+
+  const fwd = clamp(it.fwd || 0, -1, 1);
+  const str = clamp(it.strafe || 0, -1, 1);
+  const w = WBY[a.weapon];
+  let speed = CFG.playerSpeed * w.speed;
+  const sprinting = !!it.sprint && fwd > 0 && !it.fire && a.reloadT <= 0;
+  if (sprinting) speed *= CFG.sprintMul;
+
+  const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
+  let mx = sy * fwd - cy * str;
+  let mz = cy * fwd + sy * str;
+  const ml = Math.hypot(mx, mz);
+  if (ml > 1e-4) { mx = mx / ml * speed; mz = mz / ml * speed; }
+  const acc = a.onGround ? CFG.accelGround : CFG.accelAir;
+  a.vel.x = damp(a.vel.x, mx, acc, dt);
+  a.vel.z = damp(a.vel.z, mz, acc, dt);
+  if (it.jump && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
+
+  const res = moveActor(a.pos, a.vel, dt, {});
+  a.onGround = res.onGround;
+  if (a.reloadT > 0) { a.reloadT -= dt; if (a.reloadT <= 0) finishReload(a); }
+  if (a.fireCd > 0) a.fireCd -= dt;
+
+  const spd = Math.hypot(a.vel.x, a.vel.z);
+  a.aiming = !!it.fire || (!sprinting && spd < 4.5);
+  /* A guest samples its input roughly every 33ms, so a click that starts and
+     ends inside one packet never appears as a held `fire`. The fireSeq edge is
+     what carries a fast tap across the wire — auto weapons need to honour it
+     too, or the SMG silently eats quick taps. */
+  const fireEdge = it.fireSeq > a.lastFireSeq;
+  if (!sprinting && (fireEdge || (w.auto && it.fire))) fireWeapon(a);
+  /* Acknowledge the tap even when sprinting swallowed it. Leaving it unacked
+     buffers the shot, which then goes off by itself the instant sprint ends. */
+  if (fireEdge) a.lastFireSeq = it.fireSeq;
+
+  if (!a._ammoBy) a._ammoBy = {};
+  a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };
+  if (a.onGround && spd > 1.2) {
+    a.stepPhase += dt * (spd * 0.62);
+    if (a.stepPhase > 1) {
+      a.stepPhase -= 1;
+      SFX.step(a.pos.x, a.pos.y, a.pos.z);
+    }
+  }
 }
 
 const _viewSelf = { id: 0, pos: null, vel: null, yaw: 0, pitch: 0, health: 0, maxHealth: 0,
@@ -4297,9 +5107,20 @@ function stepBot(a, dt) {
 
 function simulate(dt) {
   G.time += dt;
+  G.tick++;
   for (const a of G.actors) if (a.shield > 0) a.shield = Math.max(0, a.shield - dt);
   stepPlayer(G.player, dt);
-  for (const a of G.actors) if (!a.isPlayer) stepBot(a, dt);
+  const guest = typeof netIsGuest === 'function' && netIsGuest();
+  for (const a of G.actors) {
+    if (a.isPlayer) continue;
+    if (guest) {
+      if (typeof netStepReplica === 'function') netStepReplica(a, dt);
+    } else if (a.controller === 'remote') {
+      stepRemotePlayer(a, dt);
+    } else if (a.controller === 'bot') {
+      stepBot(a, dt);
+    }
+  }
 
   // mannequins settle back upright after being shot
   for (const m of WORLD.mannequins) {
@@ -4314,6 +5135,7 @@ function simulate(dt) {
       m.rotation.z = Math.sin(u.lean * 9) * u.lean * 0.28;
     }
   }
+  if (typeof netAfterSimulation === 'function') netAfterSimulation(dt);
 }
 
 /* =====================================================================
@@ -4323,13 +5145,1114 @@ function startMatch() {
   SFX.init(); SFX.resume();
   setupMatch();
   G.started = true; G.over = false;
+  G.paused = false; G.fixedAcc = 0;
   document.getElementById('title').classList.add('off');
+  const dead = document.getElementById('dead');
+  dead.classList.add('off');
+  delete dead.dataset.wasUp;
   document.getElementById('over').classList.add('off');
+  setDamageDirsCleared();
   restoreBoard();                       // put the scoreboard back on the HUD
   document.getElementById('hud').classList.remove('hide');
   vmSetWeapon('smg', true);
+  document.getElementById('play').textContent = 'SOLO';
+  const again = document.getElementById('again');
+  again.disabled = false;
+  again.textContent = 'REMATCH';
   showHint('FIRST TO ' + CFG.killsToWin + ' KILLS');
   requestLock();
+}
+</script>
+<script>/* ===== src/75-network.js ===== */
+/* =====================================================================
+   PASTEL NUKETOWN — host-authoritative browser multiplayer
+
+   The WebSocket server is deliberately only a room relay. The host browser
+   runs the existing simulation and publishes snapshots; guests predict their
+   own movement, send input, and interpolate everybody else.
+   ===================================================================== */
+
+const NETP = globalThis.NUKETOWN_PROTOCOL;
+const NET = {
+  mode: 'solo',                 // solo | connecting | host | guest
+  phase: 'idle',                // idle | connecting | lobby | playing
+  socket: null,
+  room: '',
+  id: '',
+  members: [],
+  round: 0,
+  wanted: null,
+  manualClose: false,
+  starting: false,
+  inputSeq: 0,
+  snapshotAcc: 0,
+  lastSnapshotTick: -1,
+  lastInputSentAt: 0,
+  eventSeq: 0,
+  eventQueue: [],
+  lastEventSeq: 0,
+  actorManifest: null,
+  lastKillerId: null,
+  scoreSignature: '',
+  connectTimer: 0,
+  roomsBusy: false,
+  roomsTimer: 0
+};
+
+function netIsHost() { return NET.mode === 'host'; }
+function netIsGuest() { return NET.mode === 'guest'; }
+function netIsMultiplayer() { return netIsHost() || netIsGuest(); }
+function netHasTransport() { return NET.mode !== 'solo'; }
+function netSocketOpen() { return NET.socket && NET.socket.readyState === WebSocket.OPEN; }
+
+function netColorForIndex(i) {
+  const c = BOT_COLORS[(i + 7) % BOT_COLORS.length];
+  return { body: c.body, trim: c.trim, name: c.name };
+}
+
+function netMemberWithColor(member, i) {
+  return {
+    id: member.id,
+    name: member.name,
+    role: member.role,
+    colors: netColorForIndex(i)
+  };
+}
+
+function netLocalPlayerInfo() {
+  if (!netIsMultiplayer()) return { id: null, name: 'YOU', colors: PLAYER_COLOR };
+  const i = Math.max(0, NET.members.findIndex(m => m.id === NET.id));
+  const m = NET.members[i] || { id: NET.id, name: 'PLAYER' };
+  return { id: NET.id, name: m.name, colors: netColorForIndex(i) };
+}
+
+function netAuthorityRoster() {
+  if (!netIsHost()) return [];
+  const out = [];
+  for (let i = 0; i < NET.members.length; i++) {
+    const m = NET.members[i];
+    if (m.id !== NET.id) out.push(netMemberWithColor(m, i));
+  }
+  return out;
+}
+
+function netBotCount(humanCount) {
+  if (netIsGuest()) return 0;
+  if (netIsHost()) return Math.max(0, CFG.combatants - humanCount);
+  return CFG.bots;
+}
+
+function netWsURL() {
+  let configured = QS.get('server');
+  if (configured) {
+    configured = configured.trim();
+    if (/^https?:\/\//i.test(configured))
+      configured = configured.replace(/^http/i, 'ws');
+    if (!/^wss?:\/\//i.test(configured))
+      configured = (location.protocol === 'https:' ? 'wss://' : 'ws://') + configured;
+    try {
+      const u = new URL(configured);
+      if ((u.protocol !== 'ws:' && u.protocol !== 'wss:') ||
+          u.username || u.password || u.hash) return null;
+      if (!u.pathname || u.pathname === '/') u.pathname = '/ws';
+      return u.toString();
+    } catch (e) {}
+    return null;
+  }
+  if (location.protocol === 'file:') return 'ws://localhost:8080/ws';
+  return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+}
+
+/* Same server, plain HTTP. The room list is a poll rather than a socket
+   message on purpose: browsing happens before you have joined anything, and
+   the relay drops sockets that sit around without entering a room. */
+function netRoomsURL() {
+  const socketURL = netWsURL();
+  if (!socketURL) return null;
+  try {
+    const u = new URL(socketURL);
+    u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+    u.pathname = '/rooms';
+    u.search = '';
+    return u.toString();
+  } catch (e) {
+    return null;
+  }
+}
+
+function netRoomsPanelOpen() {
+  const title = document.getElementById('title');
+  const menu = document.getElementById('menu');
+  return !!title && !title.classList.contains('off') &&
+         !!menu && !menu.hidden && !menu.classList.contains('pause');
+}
+
+function netRenderRooms(rooms, message) {
+  const list = document.getElementById('roomList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  if (!rooms || !rooms.length) {
+    const empty = document.createElement('li');
+    empty.className = 'rooms-empty';
+    empty.textContent = message || 'No open rooms — create one.';
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const room of rooms) {
+    const li = document.createElement('li');
+
+    const code = document.createElement('strong');
+    code.textContent = room.code;
+    li.appendChild(code);
+
+    const host = document.createElement('span');
+    host.textContent = room.host;
+    li.appendChild(host);
+
+    const seats = document.createElement('b');
+    seats.textContent = room.players + '/' + room.max;
+    li.appendChild(seats);
+
+    const join = document.createElement('button');
+    join.className = 'mini-btn';
+    join.type = 'button';
+    join.textContent = 'JOIN';
+    join.addEventListener('click', () => {
+      const input = document.getElementById('roomCode');
+      if (input) input.value = room.code;
+      netConnect('join', room.code);
+    });
+    li.appendChild(join);
+
+    list.appendChild(li);
+  }
+}
+
+function netRefreshRooms(manual) {
+  if (NET.roomsBusy || typeof fetch !== 'function') return;
+  if (!manual && !netRoomsPanelOpen()) return;
+
+  const url = netRoomsURL();
+  if (!url) {
+    netRenderRooms(null, 'The multiplayer server address is invalid.');
+    return;
+  }
+
+  NET.roomsBusy = true;
+  const control = typeof AbortController === 'function' ? new AbortController() : null;
+  const bail = control ? setTimeout(() => control.abort(), 4000) : 0;
+
+  fetch(url, { cache: 'no-store', signal: control ? control.signal : undefined })
+    .then(response => (response.ok ? response.json() : Promise.reject(response.status)))
+    .then(body => {
+      const rooms = NETP.cleanRoomSummaries(body && body.rooms, NETP.MAX_ROOM_LIST);
+      /* A refresh that lands after the player has already left the menu must
+         not repaint a list they can no longer act on. */
+      if (netRoomsPanelOpen()) netRenderRooms(rooms);
+    })
+    .catch(() => {
+      if (netRoomsPanelOpen())
+        netRenderRooms(null, 'No room server reachable.');
+    })
+    .then(() => {
+      if (bail) clearTimeout(bail);
+      NET.roomsBusy = false;
+    });
+}
+
+function netSend(msg, lossy) {
+  if (!netSocketOpen()) return false;
+  if (NET.socket.bufferedAmount > 1024 * 1024) {
+    netStatus('Connection is too far behind; disconnecting.', 'error');
+    try { NET.socket.close(1013, 'client backpressure'); } catch (e) {}
+    return false;
+  }
+  if (lossy && NET.socket.bufferedAmount > 128 * 1024) return false;
+  try {
+    const encoded = JSON.stringify(msg);
+    if (!encoded || (NETP && encoded.length > NETP.MAX_MESSAGE_BYTES)) return false;
+    NET.socket.send(encoded);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function netCleanMembers(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > NETP.MAX_PLAYERS) return null;
+  const ids = new Set();
+  const members = [];
+  let hosts = 0;
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
+        typeof raw.id !== 'string' || !raw.id || raw.id.length > 80 ||
+        typeof raw.name !== 'string' || (raw.role !== 'host' && raw.role !== 'guest') ||
+        ids.has(raw.id)) return null;
+    const name = NETP.cleanPlayerName(raw.name);
+    if (!name) return null;
+    ids.add(raw.id);
+    if (raw.role === 'host') hosts++;
+    members.push({ id: raw.id, name: name, role: raw.role });
+  }
+  return hosts === 1 ? members : null;
+}
+
+function netStatus(text, kind) {
+  const el = document.getElementById('netStatus');
+  if (!el) return;
+  el.textContent = text || '';
+  el.dataset.kind = kind || '';
+}
+
+function netShowLobby() {
+  const menu = document.getElementById('menu');
+  const lobby = document.getElementById('lobby');
+  if (menu) menu.hidden = true;
+  if (lobby) lobby.hidden = false;
+  const code = document.getElementById('lobbyCode');
+  if (code) code.textContent = NET.room || '······';
+  const start = document.getElementById('netStart');
+  const play = document.getElementById('play');
+  if (play) play.disabled = false;
+  if (start) {
+    start.hidden = !netIsHost();
+    start.disabled = NET.phase !== 'lobby';
+  }
+  netRenderMembers();
+}
+
+function netShowMainMenu(message) {
+  const menu = document.getElementById('menu');
+  const lobby = document.getElementById('lobby');
+  if (menu) { menu.hidden = false; menu.classList.remove('pause'); }
+  if (lobby) lobby.hidden = true;
+  const play = document.getElementById('play');
+  if (play) { play.textContent = 'SOLO'; play.disabled = false; }
+  const host = document.getElementById('hostGame');
+  const join = document.getElementById('joinGame');
+  if (host) host.disabled = false;
+  if (join) join.disabled = false;
+  const note = document.getElementById('menuNote');
+  if (note) note.textContent = message ||
+    'Join an open room below, create your own, or enter a six-character code.';
+  netRefreshRooms(true);
+}
+
+function netSetPauseMenu(paused) {
+  const menu = document.getElementById('menu');
+  const lobby = document.getElementById('lobby');
+  if (menu) {
+    menu.hidden = false;
+    menu.classList.toggle('pause', !!paused);
+  }
+  if (lobby) lobby.hidden = true;
+  const note = document.getElementById('menuNote');
+  if (note && paused)
+    note.textContent = netIsMultiplayer() ? 'The room keeps running while this menu is open.' : 'Game paused.';
+}
+
+function netRenderMembers() {
+  const list = document.getElementById('roster');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const member of NET.members) {
+    const li = document.createElement('li');
+    const sw = document.createElement('i');
+    const i = NET.members.indexOf(member);
+    sw.style.background = '#' + netColorForIndex(i).body.toString(16).padStart(6, '0');
+    li.appendChild(sw);
+    const name = document.createElement('span');
+    name.textContent = member.name + (member.id === NET.id ? ' (YOU)' : '');
+    li.appendChild(name);
+    const role = document.createElement('b');
+    role.textContent = member.role === 'host' ? 'HOST' : 'READY';
+    li.appendChild(role);
+    list.appendChild(li);
+  }
+  const count = document.getElementById('rosterCount');
+  if (count) count.textContent = NET.members.length + ' / ' + (NETP ? NETP.MAX_PLAYERS : 4);
+}
+
+function netResetTransport() {
+  if (NET.connectTimer) clearTimeout(NET.connectTimer);
+  NET.connectTimer = 0;
+  if (NET.socket) {
+    NET.manualClose = true;
+    try { NET.socket.close(1000, 'leaving'); } catch (e) {}
+  }
+  NET.socket = null;
+  NET.mode = 'solo';
+  NET.phase = 'idle';
+  NET.room = '';
+  NET.id = '';
+  NET.members = [];
+  NET.round = 0;
+  NET.wanted = null;
+  NET.starting = false;
+  NET.inputSeq = 0;
+  NET.snapshotAcc = 0;
+  NET.lastSnapshotTick = -1;
+  NET.lastInputSentAt = 0;
+  NET.eventSeq = 0;
+  NET.eventQueue = [];
+  NET.lastEventSeq = 0;
+  NET.actorManifest = null;
+  NET.lastKillerId = null;
+  NET.scoreSignature = '';
+  NET.manualClose = false;
+}
+
+function netConnect(kind, requestedRoom) {
+  if (!NETP || typeof WebSocket !== 'function') {
+    netStatus('Multiplayer is not supported in this browser.', 'error');
+    return;
+  }
+  const nameEl = document.getElementById('playerName');
+  const name = NETP.cleanPlayerName(nameEl && nameEl.value);
+  if (nameEl) nameEl.value = name;
+  try { localStorage.setItem('pastel-nuketown-name', name); } catch (e) {}
+  const room = NETP.normalizeRoomCode(requestedRoom || '');
+  if (kind === 'join' && room.length !== 6) {
+    netStatus('Enter the six-character room code.', 'error');
+    return;
+  }
+
+  const listedEl = document.getElementById('roomPublic');
+  const listed = !listedEl || !!listedEl.checked;
+
+  netResetTransport();
+  NET.mode = 'connecting';
+  NET.phase = 'connecting';
+  NET.wanted = { kind, name, room, listed };
+  netStatus(kind === 'create' ? 'Creating room…' : 'Finding room ' + room + '…');
+  const hostBtn = document.getElementById('hostGame');
+  const joinBtn = document.getElementById('joinGame');
+  const playBtn = document.getElementById('play');
+  if (hostBtn) hostBtn.disabled = true;
+  if (joinBtn) joinBtn.disabled = true;
+  if (playBtn) playBtn.disabled = true;
+
+  const socketURL = netWsURL();
+  if (!socketURL) {
+    netResetTransport();
+    netShowMainMenu();
+    netStatus('The multiplayer server address is invalid.', 'error');
+    return;
+  }
+
+  let ws;
+  try { ws = new WebSocket(socketURL); }
+  catch (e) {
+    netResetTransport();
+    netShowMainMenu();
+    netStatus('Could not open the multiplayer server.', 'error');
+    return;
+  }
+  NET.socket = ws;
+  ws.addEventListener('open', () => {
+    if (NET.socket !== ws || !NET.wanted) return;
+    const w = NET.wanted;
+    netSend({ t: w.kind, v: NETP.VERSION, room: w.room, name: w.name, listed: w.listed });
+  });
+  ws.addEventListener('message', e => netHandleWire(e.data));
+  ws.addEventListener('error', () => {
+    if (NET.socket === ws && NET.phase === 'connecting') {
+      netStatus('Could not reach the multiplayer server.', 'error');
+      try { ws.close(); } catch (e) {}
+    }
+  });
+  ws.addEventListener('close', () => {
+    if (NET.socket !== ws) return;
+    const wasPlaying = NET.phase === 'playing';
+    const manual = NET.manualClose;
+    NET.socket = null;
+    if (!manual) {
+      if (wasPlaying) {
+        netEndSession('Connection lost — return to the menu to reconnect.');
+      } else {
+        NET.mode = 'solo'; NET.phase = 'idle';
+        netShowMainMenu('Connection closed. Is the game server running?');
+        netStatus('Connection closed.', 'error');
+      }
+    }
+    if (hostBtn) hostBtn.disabled = false;
+    if (joinBtn) joinBtn.disabled = false;
+    if (playBtn) playBtn.disabled = false;
+  });
+  NET.connectTimer = setTimeout(() => {
+    if (NET.phase !== 'connecting') return;
+    netStatus('The multiplayer server did not answer.', 'error');
+    try { ws.close(); } catch (e) {}
+  }, 9000);
+}
+
+function netHandleWire(raw) {
+  let msg;
+  try { msg = JSON.parse(raw); } catch (e) { return; }
+  if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+
+  if (msg.t === 'room') {
+    const members = netCleanMembers(msg.members);
+    const room = NETP.normalizeRoomCode(msg.room);
+    if (NET.phase !== 'connecting' || typeof msg.id !== 'string' || !msg.id ||
+        msg.id.length > 80 || room.length !== 6 ||
+        (msg.role !== 'host' && msg.role !== 'guest') || !members ||
+        !members.some(member => member.id === msg.id && member.role === msg.role)) {
+      if (NET.socket) try { NET.socket.close(1008, 'invalid room handshake'); } catch (e) {}
+      return;
+    }
+    if (NET.connectTimer) clearTimeout(NET.connectTimer);
+    NET.connectTimer = 0;
+    NET.id = msg.id;
+    NET.room = room;
+    NET.mode = msg.role === 'host' ? 'host' : 'guest';
+    NET.phase = 'lobby';
+    NET.members = members;
+    /* Adopt the room's round at the handshake. Joining a room that has
+       already played a round leaves NET.round behind otherwise, and every
+       subsequent `start` looks like it skipped ahead and gets ignored. */
+    NET.round = Number.isSafeInteger(msg.round) && msg.round >= 0 ? msg.round : 0;
+    netShowLobby();
+    netStatus(netIsHost() ? 'Room ready — share the code, then start.' : 'Connected — waiting for the host.');
+    return;
+  }
+  if (msg.t === 'members') {
+    const members = netCleanMembers(msg.members);
+    if (!netIsMultiplayer() || !members || !members.some(member => member.id === NET.id)) return;
+    NET.members = members;
+    netRenderMembers();
+    if (netIsHost() && NET.phase === 'playing') netPruneDepartedPlayers();
+    return;
+  }
+  if (msg.t === 'start') {
+    const members = netCleanMembers(msg.members);
+    /* Rounds only ever move forward. Requiring exactly +1 breaks any client
+       whose baseline came from the handshake rather than from round 1. */
+    if (!netIsMultiplayer() || !Number.isSafeInteger(msg.round) ||
+        msg.round <= NET.round || !members ||
+        !members.some(member => member.id === NET.id)) return;
+    NET.round = msg.round;
+    NET.members = members;
+    NET.starting = false;
+    netBeginMatch();
+    return;
+  }
+  if (msg.t === 'lobby' && netIsGuest() && NET.phase === 'playing' &&
+      msg.round === NET.round) {
+    netShowRemoteMatchOver(typeof msg.winner === 'string' ? msg.winner : null);
+    return;
+  }
+  if (msg.t === 'input' && netIsHost() && NET.phase === 'playing' &&
+      msg.round === NET.round && typeof msg.from === 'string') {
+    const a = G.actors.find(x => x.controller === 'remote' && x.netId === msg.from);
+    if (!a) return;
+    const checked = NETP.sanitizeInput(msg, a.lastInputSeq);
+    if (!checked.ok) return;
+    a.netInput = checked.value;
+    a.lastInputSeq = checked.value.seq;
+    a.netInputAt = G.time;
+    return;
+  }
+  if (msg.t === 'snapshot' && netIsGuest() && NET.phase === 'playing' &&
+      msg.round === NET.round) {
+    netApplySnapshot(msg);
+    return;
+  }
+  if (msg.t === 'event' && netIsGuest() && NET.phase === 'playing' &&
+      msg.round === NET.round && Array.isArray(msg.events) && msg.events.length <= 256) {
+    for (const event of msg.events) netApplyEvent(event);
+    return;
+  }
+  if (msg.t === 'room-closed') {
+    netEndSession('The host closed the room.');
+    return;
+  }
+  if (msg.t === 'error') {
+    const errorText = typeof msg.message === 'string' && msg.message
+      ? msg.message.slice(0, 200)
+      : 'Multiplayer error.';
+    NET.starting = false;
+    if (NET.phase === 'connecting') {
+      netResetTransport();
+      netShowMainMenu();
+      netStatus(errorText, 'error');
+    } else {
+      const start = document.getElementById('netStart');
+      const again = document.getElementById('again');
+      if (start) start.disabled = NET.phase !== 'lobby';
+      if (again && G.over && netIsHost()) {
+        again.disabled = false;
+        again.textContent = 'START REMATCH';
+      }
+      netStatus(errorText, 'error');
+    }
+  }
+}
+
+function netHostStart() {
+  if (!netIsHost() || NET.starting ||
+      (NET.phase !== 'lobby' && NET.phase !== 'playing')) return;
+  NET.starting = true;
+  const start = document.getElementById('netStart');
+  const again = document.getElementById('again');
+  if (start) start.disabled = true;
+  if (again && G.over) {
+    again.disabled = true;
+    again.textContent = 'STARTING…';
+  }
+  netStatus('Starting the match…');
+  if (!netSend({ t: 'start', v: NETP.VERSION })) {
+    NET.starting = false;
+    if (start) start.disabled = false;
+    if (again && G.over) {
+      again.disabled = false;
+      again.textContent = 'START REMATCH';
+    }
+    netStatus('Could not start the match.', 'error');
+  }
+}
+
+function netBeginMatch() {
+  NET.phase = 'playing';
+  NET.starting = false;
+  NET.inputSeq = 0;
+  NET.snapshotAcc = 0;
+  NET.lastSnapshotTick = -1;
+  NET.lastInputSentAt = 0;
+  NET.eventSeq = 0;
+  NET.eventQueue = [];
+  NET.lastEventSeq = 0;
+  NET.actorManifest = null;
+  NET.lastKillerId = null;
+  NET.scoreSignature = '';
+  IN.firing = false;
+  IN._heldSemi = false;
+  IN.fireSeq = 0;
+  IN.reloadSeq = 0;
+  startMatch();
+  if (netIsHost()) {
+    /* Establish the actor manifest before the first combat event can race
+       ahead of it on a guest connection. */
+    NET.snapshotAcc = 0.05;
+    netAfterSimulation(0);
+  }
+  if (netIsMultiplayer()) {
+    /* A message from the host is not a browser user gesture, so Pointer Lock
+       cannot reliably start here. Leave a one-click deploy card. The host
+       keeps simulating with neutral input while its card is open. */
+    setPaused(true);
+    document.getElementById('play').textContent = 'ENTER MATCH';
+    const note = document.getElementById('menuNote');
+    if (note) note.textContent = 'The match is live. Click to deploy.';
+  }
+  netStatus('');
+  showHint(netIsHost() ? 'YOU ARE THE HOST' : 'CONNECTED TO ' + NET.room);
+}
+
+function netLeaveLobby() {
+  netResetTransport();
+  netShowMainMenu();
+  netStatus('');
+}
+
+function netEndSession(message) {
+  if (G.started) {
+    G.paused = true;
+    exitPointerLock();
+    document.getElementById('hud').classList.add('hide');
+    document.getElementById('dead').classList.add('off');
+    document.getElementById('over').classList.add('off');
+    restoreBoard();
+    document.getElementById('title').classList.remove('off');
+    G.started = false; G.over = false;
+  }
+  netResetTransport();
+  netShowMainMenu(message);
+}
+
+function netPruneDepartedPlayers() {
+  const live = new Set(NET.members.map(m => m.id));
+  for (const a of G.actors.slice()) {
+    if (a.controller === 'remote' && !live.has(a.netId)) detachActor(a);
+  }
+  refreshBoard();
+}
+
+function netActorId(a) {
+  return a && (a.netId || ('actor-' + a.id));
+}
+
+function netRound(v) { return Math.round(v * 1000) / 1000; }
+function netPackActor(a) {
+  return {
+    id: a.id,
+    netId: netActorId(a),
+    name: a.name,
+    human: !!a.isHuman,
+    colors: { body: a.colors.body, trim: a.colors.trim, name: a.colors.name || '' },
+    pos: [netRound(a.pos.x), netRound(a.pos.y), netRound(a.pos.z)],
+    vel: [netRound(a.vel.x), netRound(a.vel.y), netRound(a.vel.z)],
+    yaw: netRound(a.yaw),
+    pitch: netRound(a.pitch),
+    aimYaw: netRound(a.aimYaw),
+    aimPitch: netRound(a.aimPitch),
+    bodyYaw: netRound(a.bodyYaw),
+    onGround: !!a.onGround,
+    aiming: !!a.aiming,
+    health: netRound(a.health),
+    maxHealth: a.maxHealth,
+    alive: !!a.alive,
+    deathT: netRound(a.deathT),
+    respawnT: netRound(a.respawnT),
+    shield: netRound(a.shield),
+    weapon: a.weapon,
+    ammo: a.ammo,
+    reserve: a.reserve,
+    reloadT: netRound(a.reloadT),
+    kills: a.kills,
+    deaths: a.deaths,
+    streak: a.streak,
+    bestStreak: a.bestStreak,
+    lastHitBy: a.lastHitBy
+  };
+}
+
+function netFlushEvents() {
+  if (!NET.eventQueue.length) return;
+  const events = NET.eventQueue.splice(0, NET.eventQueue.length);
+  netSend({
+    t: 'event',
+    v: NETP.VERSION,
+    round: NET.round,
+    events: events
+  });
+}
+
+function netAfterSimulation(dt, force) {
+  if (!netIsHost() || NET.phase !== 'playing' || !netSocketOpen()) return;
+  NET.snapshotAcc += dt;
+  if (!force && NET.snapshotAcc < 0.05) return;
+  NET.snapshotAcc = force ? 0 : NET.snapshotAcc % 0.05;
+  netSend({
+    t: 'snapshot',
+    v: NETP.VERSION,
+    round: NET.round,
+    tick: G.tick,
+    time: netRound(G.time),
+    actors: G.actors.map(netPackActor),
+    over: !!G.over,
+    winner: G.winner ? netActorId(G.winner) : null
+  }, !force);
+  netFlushEvents();
+}
+
+function netFrame(now) {
+  if (!netIsGuest() || NET.phase !== 'playing' || !G.player || !netSocketOpen()) return;
+  if (now - NET.lastInputSentAt < 33) return;
+  NET.lastInputSentAt = now;
+  const active = G.started && !G.paused && !G.over && G.player.alive;
+  const p = G.player;
+  netSend({
+    t: 'input',
+    v: NETP.VERSION,
+    round: NET.round,
+    seq: ++NET.inputSeq,
+    fwd: active ? (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0) : 0,
+    strafe: active ? (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0) : 0,
+    jump: active && !!KEY.Space,
+    sprint: active && (!!KEY.ShiftLeft || !!KEY.ShiftRight),
+    fire: active && !!IN.firing,
+    fireSeq: IN.fireSeq,
+    reloadSeq: IN.reloadSeq,
+    yaw: p.yaw,
+    pitch: p.pitch,
+    weapon: p.weapon
+  });
+}
+
+function netFiniteIn(value, min, max) {
+  return Number.isFinite(value) && value >= min && value <= max;
+}
+
+function netSafeCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
+}
+
+function netValidActorState(s) {
+  const b = MAP.bounds;
+  return !!(s && typeof s === 'object' && !Array.isArray(s) &&
+    Number.isSafeInteger(s.id) && s.id > 0 && s.id <= 100_000 &&
+    typeof s.netId === 'string' && s.netId.length > 0 && s.netId.length <= 80 &&
+    typeof s.name === 'string' && !!NETP.cleanPlayerName(s.name) &&
+    typeof s.human === 'boolean' &&
+    s.colors && typeof s.colors === 'object' && !Array.isArray(s.colors) &&
+    Number.isSafeInteger(s.colors.body) && s.colors.body >= 0 && s.colors.body <= 0xffffff &&
+    Number.isSafeInteger(s.colors.trim) && s.colors.trim >= 0 && s.colors.trim <= 0xffffff &&
+    typeof s.colors.name === 'string' && s.colors.name.length <= 40 &&
+    Array.isArray(s.pos) && s.pos.length === 3 &&
+    netFiniteIn(s.pos[0], b.minX - 3, b.maxX + 3) &&
+    netFiniteIn(s.pos[1], -2, 20) &&
+    netFiniteIn(s.pos[2], b.minZ - 3, b.maxZ + 3) &&
+    Array.isArray(s.vel) && s.vel.length === 3 &&
+    s.vel.every(value => netFiniteIn(value, -80, 80)) &&
+    netFiniteIn(s.yaw, -100, 100) && netFiniteIn(s.pitch, -2, 2) &&
+    netFiniteIn(s.aimYaw, -100, 100) && netFiniteIn(s.aimPitch, -2, 2) &&
+    netFiniteIn(s.bodyYaw, -100, 100) &&
+    typeof s.onGround === 'boolean' && typeof s.aiming === 'boolean' &&
+    netFiniteIn(s.health, 0, 500) && netFiniteIn(s.maxHealth, 1, 500) &&
+    typeof s.alive === 'boolean' &&
+    netFiniteIn(s.deathT, 0, 60) && netFiniteIn(s.respawnT, 0, 60) &&
+    netFiniteIn(s.shield, 0, 60) && !!WBY[s.weapon] &&
+    netSafeCount(s.ammo) && netSafeCount(s.reserve) &&
+    netFiniteIn(s.reloadT, 0, 60) &&
+    netSafeCount(s.kills) && netSafeCount(s.deaths) &&
+    netSafeCount(s.streak) && netSafeCount(s.bestStreak));
+}
+
+function netCreateReplica(s) {
+  const colors = { body: s.colors.body, trim: s.colors.trim, name: s.colors.name };
+  const a = makeActor({
+    id: Number.isInteger(s.id) ? s.id : undefined,
+    netId: s.netId,
+    name: NETP.cleanPlayerName(s.name),
+    controller: 'replica',
+    isHuman: !!s.human,
+    colors: colors,
+    weapon: s.weapon
+  });
+  a.pos.x = s.pos[0]; a.pos.y = s.pos[1]; a.pos.z = s.pos[2];
+  a.vel.x = s.vel[0]; a.vel.y = s.vel[1]; a.vel.z = s.vel[2];
+  a.yaw = s.yaw; a.aimYaw = s.aimYaw; a.aimPitch = s.aimPitch; a.bodyYaw = s.bodyYaw;
+  attachCharacter(a);
+  G.actors.push(a);
+  return a;
+}
+
+function netApplyActorState(a, s, local) {
+  const wasAlive = a.alive;
+  const oldHp = a.health;
+  const oldWeapon = a.weapon;
+  a.name = NETP.cleanPlayerName(s.name);
+  a.maxHealth = clamp(s.maxHealth, 1, 500);
+  a.health = clamp(s.health, 0, a.maxHealth);
+  a.alive = !!s.alive;
+  a.respawnT = Math.max(0, s.respawnT || 0);
+  a.shield = Math.max(0, s.shield || 0);
+  a.onGround = !!s.onGround;
+  a.aiming = !!s.aiming;
+  a.weapon = WBY[s.weapon] ? s.weapon : a.weapon;
+  a.ammo = Math.max(0, Math.floor(s.ammo || 0));
+  a.reserve = Math.max(0, Math.floor(s.reserve || 0));
+  a.reloadT = Math.max(0, s.reloadT || 0);
+  a.kills = Math.max(0, Math.floor(s.kills || 0));
+  a.deaths = Math.max(0, Math.floor(s.deaths || 0));
+  a.streak = Math.max(0, Math.floor(s.streak || 0));
+  a.bestStreak = Math.max(0, Math.floor(s.bestStreak || 0));
+
+  if (local) {
+    if (Number.isInteger(s.id)) a.id = s.id;
+    const dx = s.pos[0] - a.pos.x, dy = s.pos[1] - a.pos.y, dz = s.pos[2] - a.pos.z;
+    const err = Math.hypot(dx, dy, dz);
+    const correction = err > 3 ? 1 : 0.16;
+    a.pos.x += dx * correction; a.pos.y += dy * correction; a.pos.z += dz * correction;
+    a.vel.x = lerp(a.vel.x, s.vel[0], 0.3);
+    a.vel.y = lerp(a.vel.y, s.vel[1], 0.3);
+    a.vel.z = lerp(a.vel.z, s.vel[2], 0.3);
+    if (oldWeapon !== a.weapon) vmSetWeapon(a.weapon);
+    if (wasAlive && !a.alive) {
+      const killer = G.actors.find(x => x.netId === NET.lastKillerId);
+      showDeadScreen(killer || null);
+    } else if (!wasAlive && a.alive) {
+      hideDeadScreen();
+      SFX.spawn();
+      setDamageDirsCleared();
+    }
+  } else {
+    a.netTarget = {
+      pos: s.pos.slice(), vel: s.vel.slice(),
+      yaw: s.yaw, pitch: s.pitch, aimYaw: s.aimYaw,
+      aimPitch: s.aimPitch, bodyYaw: s.bodyYaw
+    };
+    if (wasAlive && !a.alive) {
+      a.deathT = 0; a.deathDir = rng() < 0.5 ? -1 : 1;
+      if (a.plate) a.plate.sprite.visible = false;
+    } else if (!wasAlive && a.alive) {
+      a.deathT = 0; a.spawnT = 0.45;
+      if (a.plate) a.plate.sprite.visible = true;
+      if (a.char) { a.char.root.visible = true; a.char.root.scale.setScalar(0.001); }
+    }
+  }
+  if (a.plate && (oldHp !== a.health || wasAlive !== a.alive))
+    drawPlate(a.plate, a.name, a.health, a.maxHealth, a.colors.body);
+}
+
+function netApplySnapshot(msg) {
+  if (!Number.isSafeInteger(msg.tick) || msg.tick < 0 || msg.tick <= NET.lastSnapshotTick ||
+      !netFiniteIn(msg.time, 0, 100_000_000) || typeof msg.over !== 'boolean' ||
+      !Array.isArray(msg.actors) || msg.actors.length < 1 || msg.actors.length > 16) return;
+
+  const seen = new Set();
+  for (const state of msg.actors) {
+    if (!netValidActorState(state) || seen.has(state.netId)) return;
+    seen.add(state.netId);
+  }
+  if (!seen.has(NET.id)) return;
+  if (NET.actorManifest) {
+    for (const id of seen) if (!NET.actorManifest.has(id)) return;
+  } else {
+    NET.actorManifest = new Set(seen);
+  }
+  if (msg.over &&
+      (typeof msg.winner !== 'string' || !NET.actorManifest.has(msg.winner))) return;
+
+  NET.lastSnapshotTick = msg.tick;
+  G.time = lerp(G.time, msg.time, 0.16);
+
+  for (const s of msg.actors) {
+    let a;
+    if (s.netId === NET.id) {
+      a = G.player;
+      a.netId = NET.id;
+    } else {
+      a = G.actors.find(x => x.netId === s.netId);
+      if (!a) a = netCreateReplica(s);
+    }
+    netApplyActorState(a, s, a === G.player);
+  }
+  for (const a of G.actors.slice()) {
+    if (!a.isPlayer && !seen.has(a.netId)) detachActor(a);
+  }
+
+  const sig = G.actors.map(a => a.netId + ':' + a.kills + ':' + a.deaths + ':' + a.bestStreak).join('|');
+  if (sig !== NET.scoreSignature) {
+    NET.scoreSignature = sig;
+    refreshBoard();
+  }
+  if (msg.over) netShowRemoteMatchOver(msg.winner);
+}
+
+function netStepReplica(a, dt) {
+  const t = a.netTarget;
+  if (!t) return;
+  const dx = t.pos[0] - a.pos.x, dy = t.pos[1] - a.pos.y, dz = t.pos[2] - a.pos.z;
+  if (Math.hypot(dx, dy, dz) > 6) {
+    a.pos.x = t.pos[0]; a.pos.y = t.pos[1]; a.pos.z = t.pos[2];
+  } else {
+    a.pos.x = damp(a.pos.x, t.pos[0], 15, dt);
+    a.pos.y = damp(a.pos.y, t.pos[1], 15, dt);
+    a.pos.z = damp(a.pos.z, t.pos[2], 15, dt);
+  }
+  a.vel.x = damp(a.vel.x, t.vel[0], 12, dt);
+  a.vel.y = damp(a.vel.y, t.vel[1], 12, dt);
+  a.vel.z = damp(a.vel.z, t.vel[2], 12, dt);
+  a.yaw = approachAngle(a.yaw, t.yaw, dt * 14);
+  a.pitch = damp(a.pitch, t.pitch, 14, dt);
+  a.aimYaw = approachAngle(a.aimYaw, t.aimYaw, dt * 18);
+  a.aimPitch = damp(a.aimPitch, t.aimPitch, 18, dt);
+}
+
+function netSendEvent(kind, data) {
+  if (!netIsHost() || NET.phase !== 'playing') return;
+  if (NET.eventQueue.length >= 128) {
+    const expendable = NET.eventQueue.findIndex(event =>
+      event.kind === 'shot' || event.kind === 'shield');
+    NET.eventQueue.splice(expendable >= 0 ? expendable : 0, 1);
+  }
+  NET.eventQueue.push(Object.assign({ id: ++NET.eventSeq, kind: kind }, data || {}));
+}
+
+function netOnAuthoritativeShot(a, w, lines) {
+  netSendEvent('shot', { from: netActorId(a), weapon: w.id, lines: lines });
+}
+function netOnAuthoritativeShieldHit(target, from, x, y, z) {
+  netSendEvent('shield', {
+    target: netActorId(target), from: from ? netActorId(from) : null,
+    at: [x, y, z]
+  });
+}
+function netOnAuthoritativeDamage(target, from, damage, head, x, y, z) {
+  netSendEvent('damage', {
+    target: netActorId(target), from: from ? netActorId(from) : null,
+    damage: netRound(damage), head: !!head, at: [x, y, z]
+  });
+}
+function netOnAuthoritativeKill(target, from) {
+  netSendEvent('kill', {
+    target: netActorId(target), from: from ? netActorId(from) : null,
+    streak: from ? from.streak : 0
+  });
+}
+function netOnAuthoritativeRespawn(a) {
+  netSendEvent('respawn', {
+    actor: netActorId(a), at: [a.pos.x, a.pos.y, a.pos.z],
+    color: a.colors.body
+  });
+}
+function netOnAuthoritativeMatchOver(winner) {
+  if (!netIsHost() || NET.phase !== 'playing') return;
+  netSendEvent('match-over', { winner: netActorId(winner) });
+  /* The winning simulation tick may be the last tick of the round. Send its
+     state and queued events immediately, before telling the relay the room is
+     back between rounds. WebSocket ordering makes this terminal update exact. */
+  netAfterSimulation(0, true);
+  netSend({
+    t: 'lobby',
+    v: NETP.VERSION,
+    round: NET.round,
+    winner: netActorId(winner)
+  });
+}
+
+function netKnownActor(value) {
+  return typeof value === 'string' && NET.actorManifest && NET.actorManifest.has(value);
+}
+
+function netEventPoint(value) {
+  return Array.isArray(value) && value.length === 3 &&
+    value.every(component => netFiniteIn(component, -200, 200));
+}
+
+function netValidEvent(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e) ||
+      !Number.isSafeInteger(e.id) || e.id < 1 ||
+      typeof e.kind !== 'string') return false;
+  if (e.kind === 'shot') {
+    return netKnownActor(e.from) && !!WBY[e.weapon] &&
+      Array.isArray(e.lines) && e.lines.length <= 16 &&
+      e.lines.every(line => Array.isArray(line) && line.length === 6 &&
+        line.every(component => netFiniteIn(component, -200, 200)));
+  }
+  if (e.kind === 'shield') {
+    return netKnownActor(e.target) &&
+      (e.from === null || netKnownActor(e.from)) && netEventPoint(e.at);
+  }
+  if (e.kind === 'damage') {
+    return netKnownActor(e.target) &&
+      (e.from === null || netKnownActor(e.from)) &&
+      netFiniteIn(e.damage, 0, 500) && typeof e.head === 'boolean' &&
+      netEventPoint(e.at);
+  }
+  if (e.kind === 'kill') {
+    return netKnownActor(e.target) &&
+      (e.from === null || netKnownActor(e.from)) && netSafeCount(e.streak);
+  }
+  if (e.kind === 'respawn') {
+    return netKnownActor(e.actor) && netEventPoint(e.at) &&
+      Number.isSafeInteger(e.color) && e.color >= 0 && e.color <= 0xffffff;
+  }
+  return e.kind === 'match-over' && netKnownActor(e.winner);
+}
+
+function netShowRemoteMatchOver(winnerId) {
+  if (!G.started) return;
+  const winner = G.actors.find(actor => actor.netId === winnerId);
+  if (!winner) return;
+  const first = !G.over;
+  G.over = true;
+  G.winner = winner;
+  G.paused = false;
+  document.getElementById('title').classList.add('off');
+  const dead = document.getElementById('dead');
+  dead.classList.add('off');
+  delete dead.dataset.wasUp;
+  showOverScreen(winner);
+  if (first && winner === G.player) SFX.win();
+  exitPointerLock();
+}
+
+function netApplyEvent(e) {
+  if (!netValidEvent(e) || e.id <= NET.lastEventSeq) return;
+  NET.lastEventSeq = e.id;
+  const from = e.from ? G.actors.find(a => a.netId === e.from) : null;
+  const target = e.target ? G.actors.find(a => a.netId === e.target) : null;
+
+  if (e.kind === 'shot') {
+    if (e.from === NET.id) return;
+    if (from) { from.recoil = 1; from.aiming = true; }
+    const w = WBY[e.weapon] || WBY.smg;
+    if (Array.isArray(e.lines)) {
+      for (let i = 0; i < e.lines.length; i++) {
+        const l = e.lines[i];
+        if (!Array.isArray(l) || l.length !== 6 || !l.every(Number.isFinite)) continue;
+        if (i === 0 || e.lines.length <= 3 || i % 3 === 0)
+          fxTracer(l[0], l[1], l[2], l[3], l[4], l[5], C(from ? from.colors.trim : w.tracer));
+      }
+    }
+    if (from) SFX.shoot(w.id, from.pos.x, from.pos.y + 1.3, from.pos.z);
+  } else if (e.kind === 'shield') {
+    if (target && Array.isArray(e.at)) fxShieldHit(target, e.at[0], e.at[1], e.at[2]);
+  } else if (e.kind === 'damage') {
+    if (e.from === NET.id && Array.isArray(e.at)) {
+      SFX.hit(!!e.head);
+      showHitmarker(!!e.head);
+      addFloater(e.head ? Math.round(e.damage) + '!' : String(Math.round(e.damage)),
+        e.at[0], e.at[1], e.at[2], e.head ? '#fff0a8' : '#ffffff', !!e.head);
+    }
+    if (e.target === NET.id) {
+      SFX.hurt(); flashDamage(); fxShake(0.18);
+      if (from) addDamageDir(from);
+    }
+  } else if (e.kind === 'kill') {
+    if (target) addKillFeed(from, target);
+    if (e.from === NET.id && target) {
+      SFX.kill();
+      addFloater('+1', target.pos.x, target.pos.y + 1.6, target.pos.z, '#b8f2d8', true);
+      if (e.streak >= 3) showHint(e.streak + ' IN A ROW!');
+    }
+    if (e.target === NET.id) NET.lastKillerId = e.from;
+  } else if (e.kind === 'respawn') {
+    if (e.actor === NET.id) return;
+    fxSpawnPuff(e.at[0], e.at[1], e.at[2], C(e.color));
+  } else if (e.kind === 'match-over') {
+    netShowRemoteMatchOver(e.winner);
+  }
+}
+
+function initNetworkUI() {
+  const name = document.getElementById('playerName');
+  if (name) {
+    let saved = '';
+    try { saved = localStorage.getItem('pastel-nuketown-name') || ''; } catch (e) {}
+    name.value = NETP.cleanPlayerName(saved || ('PLAYER ' + randi(10, 99)));
+    name.addEventListener('change', () => { name.value = NETP.cleanPlayerName(name.value); });
+  }
+  const roomInput = document.getElementById('roomCode');
+  const invited = NETP.normalizeRoomCode(QS.get('room') || '');
+  if (roomInput && invited) roomInput.value = invited;
+  const note = document.getElementById('menuNote');
+  if (note && invited) note.textContent = 'Invite detected — enter a name and join ' + invited + '.';
+
+  document.getElementById('hostGame').addEventListener('click', () => netConnect('create'));
+  document.getElementById('joinGame').addEventListener('click', () => netConnect('join', roomInput.value));
+
+  const refresh = document.getElementById('refreshRooms');
+  if (refresh) refresh.addEventListener('click', () => netRefreshRooms(true));
+  netRefreshRooms(true);
+  /* Poll only while the setup menu is actually on screen — netRefreshRooms
+     bails out on its own once the match starts or the pause card is up. */
+  NET.roomsTimer = setInterval(() => netRefreshRooms(false), 5000);
+
+  roomInput.addEventListener('input', () => {
+    roomInput.value = NETP.normalizeRoomCode(roomInput.value);
+  });
+  roomInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') netConnect('join', roomInput.value);
+  });
+  document.getElementById('netStart').addEventListener('click', netHostStart);
+  document.getElementById('netLeave').addEventListener('click', netLeaveLobby);
+  document.getElementById('copyRoom').addEventListener('click', async () => {
+    const u = new URL(location.href);
+    u.searchParams.set('room', NET.room);
+    u.searchParams.delete('autostart');
+    try {
+      await navigator.clipboard.writeText(u.toString());
+      netStatus('Invite link copied!');
+    } catch (e) {
+      netStatus('Room code: ' + NET.room);
+    }
+  });
 }
 </script>
 <script>/* ===== src/80-ui.js ===== */
@@ -4532,6 +6455,17 @@ function showOverScreen(winner) {
   const over = $('over');
   over.insertBefore(elBoard, $('again'));
   elBoard.classList.add('on');
+  const again = $('again');
+  if (netIsGuest()) {
+    again.textContent = 'WAITING FOR HOST';
+    again.disabled = true;
+  } else if (netIsHost()) {
+    again.textContent = 'START REMATCH';
+    again.disabled = false;
+  } else {
+    again.textContent = 'REMATCH';
+    again.disabled = false;
+  }
   over.classList.remove('off');
 }
 
@@ -4539,8 +6473,24 @@ function showOverScreen(winner) {
 function setPaused(p) {
   if (G.over) return;
   G.paused = p;
-  if (p && G.started) { $('title').classList.remove('off'); $('play').textContent = 'RESUME'; }
-  else if (G.started) $('title').classList.add('off');
+  const dead = $('dead');
+  if (p && G.started) {
+    netSetPauseMenu(true);
+    $('title').classList.remove('off');
+    $('play').textContent = 'RESUME';
+    /* Pausing while dead used to soft-lock: #dead and #title share a z-index
+       and #dead is later in the DOM, so the death card painted over the pause
+       menu and swallowed the RESUME click. And because the sim is halted while
+       paused, the respawn timer never ran either — stuck for good. Stash the
+       death card for the duration; it comes back on resume if still dead. */
+    if (!dead.classList.contains('off')) { dead.classList.add('off'); dead.dataset.wasUp = '1'; }
+    restoreBoard();
+  } else if (G.started) {
+    netSetPauseMenu(false);
+    $('title').classList.add('off');
+    if (dead.dataset.wasUp === '1' && G.player && !G.player.alive) dead.classList.remove('off');
+    delete dead.dataset.wasUp;
+  }
 }
 </script>
 <script>/* ===== src/90-main.js ===== */
@@ -4614,6 +6564,7 @@ function animateAll(dt) {
     else if (a.alive) a.char.root.visible = true;
   }
   updateMotes(G.time);
+  updateMagic(G.time);
   updateFX(dt);
   updateFloaters(dt);
 }
@@ -4680,9 +6631,12 @@ function frame(now) {
   lastT = now;
   if (dt > 0.25) dt = 0.25;
   updateAdaptiveRes(dt);
+  netFrame(now);
 
   if (!G.frozen) {
-    if (G.started && !G.paused && !G.over) {
+    /* A host owns the room simulation. Opening its local pause card must
+       neutralise host input, but it must not freeze every connected guest. */
+    if (G.started && !G.over && (!G.paused || netIsHost())) {
       G.fixedAcc += dt;
       let guard = 0;
       while (G.fixedAcc >= FIXED && guard++ < 6) { simulate(FIXED); G.fixedAcc -= FIXED; }
@@ -4695,7 +6649,7 @@ function frame(now) {
       vel: G.player ? G.player.vel : { x: 0, y: 0, z: 0 },
       onGround: G.player ? G.player.onGround : true,
       lookDX: IN.lookDX, lookDY: IN.lookDY,
-      sprinting: IN.sprinting, firing: IN.firing
+      sprinting: !G.paused && IN.sprinting, firing: !G.paused && IN.firing
     });
     animateAll(dt);
     updateCrosshair(dt);
@@ -4724,6 +6678,7 @@ function boot() {
   initFX();        set(82);
   initInput();     set(88);
   initAI();        set(96);
+  initNetworkUI();
 
   setupMatch();
   camera.position.set(40, 20, 30); camera.lookAt(0, 3, 0);
@@ -4734,13 +6689,21 @@ function boot() {
   document.getElementById('play').addEventListener('click', () => {
     SFX.init(); SFX.resume(); SFX.ui();
     if (G.started && G.paused) { setPaused(false); requestLock(); }
-    else startMatch();
+    else {
+      if (netHasTransport()) netLeaveLobby();
+      startMatch();
+    }
   });
   document.getElementById('again').addEventListener('click', () => {
     SFX.ui();
-    G.over = false;
-    document.getElementById('over').classList.add('off');
-    restoreBoard();
+    if (netIsGuest()) {
+      netStatus('Waiting for the host to start the rematch.');
+      return;
+    }
+    if (netIsHost()) {
+      netHostStart();
+      return;
+    }
     startMatch();
   });
 
@@ -4759,7 +6722,7 @@ const POSES = {
   street:    { pos: [12, 1.75, 0.6],  look: [-26, 2.6, -0.4] },
   streetEast:{ pos: [-11, 1.75, 1.2], look: [24, 2.2, 0.2] },
   yard:      { pos: [-6.0, 1.7, 1.0], look: [-5.0, 2.4, -9.0] },
-  porch:     { pos: [-4.6, 1.7, -4.6],look: [-4.6, 2.2, -12.0] },
+  porch:     { pos: [-4.5, 1.7, -0.9], look: [-4.6, 2.45, -6.6] },
   house:     { pos: [-5.0, 1.7, -11.8], look: [-10.4, 1.45, -16.0] },
   upstairs:  { pos: [-5.2, 4.92, -16.4], look: [-10.4, 4.35, -14.2] },
   balcony:   { pos: [3.6, 5.0, 5.2],  look: [-4.0, 3.4, -8.0] },

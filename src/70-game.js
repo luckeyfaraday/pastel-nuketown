@@ -4,6 +4,7 @@
 
 const CFG = {
   bots: 8,
+  combatants: 9,
   killsToWin: 25,
   respawn: 3.0,
   spawnShield: 1.6,
@@ -26,10 +27,15 @@ const G = {
    ===================================================================== */
 let _nextId = 1;
 function makeActor(opts) {
+  const id = opts.id === undefined ? _nextId++ : opts.id;
+  if (id >= _nextId) _nextId = id + 1;
   const a = {
-    id: _nextId++,
+    id: id,
+    netId: opts.netId || null,
     name: opts.name,
     isPlayer: !!opts.isPlayer,
+    controller: opts.controller || (opts.isPlayer ? 'local' : 'bot'),
+    isHuman: !!opts.isHuman || !!opts.isPlayer || opts.controller === 'remote',
     colors: opts.colors,
     skill: opts.skill || 'normal',
     pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 },
@@ -41,7 +47,9 @@ function makeActor(opts) {
     kills: 0, deaths: 0, streak: 0, bestStreak: 0,
     onGround: false, stepPhase: 0,
     lastHitBy: null, lastHitT: -99, shield: 0,
-    brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle'
+    brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
+    netInput: null, netTarget: null, lastInputSeq: -1,
+    lastFireSeq: 0, lastReloadSeq: 0
   };
   const w = WBY[a.weapon];
   a.ammo = w.mag; a.reserve = w.reserve;
@@ -57,6 +65,41 @@ function attachCharacter(a) {
   a.plate.sprite.position.set(0, CH.headC + 0.55, 0);
   a.char.root.add(a.plate.sprite);
   drawPlate(a.plate, a.name, a.health, a.maxHealth, a.colors.body);
+}
+
+function disposeActorVisuals(a) {
+  if (!a) return;
+  if (a.char) {
+    scene.remove(a.char.root);
+    a.char.root.traverse(object => {
+      if ((object.isMesh || object.isLine) && object.geometry) object.geometry.dispose();
+      if ((object.isMesh || object.isLine) && object.material) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) material.dispose();
+      }
+    });
+  }
+  if (a.plate) {
+    if (a.plate.sprite && a.plate.sprite.material) a.plate.sprite.material.dispose();
+    if (a.plate.tex) a.plate.tex.dispose();
+  }
+  for (const object of [a.blob, a.bubble]) {
+    if (!object) continue;
+    scene.remove(object);
+    if (object.geometry) object.geometry.dispose();
+    if (object.material) object.material.dispose();
+  }
+  a.char = null;
+  a.plate = null;
+  a.blob = null;
+  a.bubble = null;
+}
+
+function detachActor(a) {
+  if (!a) return;
+  disposeActorVisuals(a);
+  const i = G.actors.indexOf(a);
+  if (i >= 0) G.actors.splice(i, 1);
 }
 
 function respawnActor(a, instant) {
@@ -77,22 +120,30 @@ function respawnActor(a, instant) {
   if (a.plate) drawPlate(a.plate, a.name, a.health, a.maxHealth, a.colors.body);
   fxSpawnPuff(a.pos.x, a.pos.y, a.pos.z, C(a.colors.body));
   if (a.isPlayer) { SFX.spawn(); setDamageDirsCleared(); }
+  if (typeof netOnAuthoritativeRespawn === 'function') netOnAuthoritativeRespawn(a);
 }
 
 /* =====================================================================
    SETUP
    ===================================================================== */
 function setupMatch() {
-  for (const a of G.actors) {
-    if (a.char) scene.remove(a.char.root);
-    if (a.blob) scene.remove(a.blob);
-    if (a.bubble) scene.remove(a.bubble);
-  }
+  for (const a of G.actors) disposeActorVisuals(a);
   G.actors.length = 0;
   _nextId = 1;
-  G.time = 0; G.over = false; G.winner = null;
+  G.time = 0; G.tick = 0; G.over = false; G.winner = null;
 
-  const player = makeActor({ name: 'YOU', isPlayer: true, colors: PLAYER_COLOR, weapon: 'smg' });
+  const localInfo = typeof netLocalPlayerInfo === 'function'
+    ? netLocalPlayerInfo()
+    : { id: null, name: 'YOU', colors: PLAYER_COLOR };
+  const player = makeActor({
+    name: localInfo.name || 'YOU',
+    isPlayer: true,
+    isHuman: true,
+    controller: 'local',
+    netId: localInfo.id || null,
+    colors: localInfo.colors || PLAYER_COLOR,
+    weapon: 'smg'
+  });
   player.blob = makeBlobShadow();     // only ever seen in the death cam
   player.bubble = makeBubble();       // ditto, plus it shows in the death cam
   G.player = player;
@@ -100,9 +151,32 @@ function setupMatch() {
 
   const skills = ['easy', 'normal', 'normal', 'hard', 'normal', 'hard', 'easy', 'normal'];
   const guns   = ['smg', 'shotgun', 'smg', 'rifle', 'smg', 'shotgun', 'rifle', 'smg'];
-  for (let i = 0; i < CFG.bots; i++) {
+  const remoteRoster = typeof netAuthorityRoster === 'function' ? netAuthorityRoster() : [];
+  for (let i = 0; i < remoteRoster.length; i++) {
+    const member = remoteRoster[i];
+    const h = makeActor({
+      name: member.name,
+      netId: member.id,
+      isHuman: true,
+      controller: 'remote',
+      colors: member.colors,
+      weapon: 'smg'
+    });
+    attachCharacter(h);
+    G.actors.push(h);
+  }
+
+  const botCount = typeof netBotCount === 'function' ? netBotCount(remoteRoster.length + 1) : CFG.bots;
+  for (let i = 0; i < botCount; i++) {
     const col = BOT_COLORS[i % BOT_COLORS.length];
-    const b = makeActor({ name: col.name.toUpperCase(), colors: col, weapon: guns[i % guns.length], skill: skills[i % skills.length] });
+    const b = makeActor({
+      name: col.name.toUpperCase(),
+      netId: 'bot-' + (i + 1),
+      controller: 'bot',
+      colors: col,
+      weapon: guns[i % guns.length],
+      skill: skills[i % skills.length]
+    });
     if (G.aiOK) {
       try { b.brain = AI.createBrain({ id: b.id, seed: 1000 + i * 77, skill: b.skill }); }
       catch (e) { b.brain = null; G.aiErr = String(e); }
@@ -170,11 +244,13 @@ function finishReload(a) {
   const need = w.mag - a.ammo;
   const give = Math.min(need, a.reserve);
   a.ammo += give; a.reserve -= give;
+  a.reloadT = 0;
   if (a.isPlayer) SFX.reloadDone(); else SFX.reloadDone(a.pos.x, a.pos.y + 1.2, a.pos.z);
 }
 
 function fireWeapon(a) {
   const w = WBY[a.weapon];
+  const visualOnly = a.isPlayer && typeof netIsGuest === 'function' && netIsGuest();
   if (a.fireCd > 0 || a.reloadT > 0 || !a.alive) return false;
   if (a.ammo <= 0) {
     if (a.isPlayer && a.fireCd <= 0) { SFX.empty(); a.fireCd = 0.25; }
@@ -199,6 +275,7 @@ function fireWeapon(a) {
     mx = p.x; my = p.y; mz = p.z;
   }
 
+  const shotLines = [];
   for (let p = 0; p < w.pellets; p++) {
     const yaw = a.aimYaw + rand(-spread, spread) * (p ? 1.6 : 0.35);
     const pit = a.aimPitch + rand(-spread, spread) * (p ? 1.6 : 0.35);
@@ -208,6 +285,7 @@ function fireWeapon(a) {
     const endX = hit ? hit.px : ex + dx * w.range;
     const endY = hit ? hit.py : ey + dy * w.range;
     const endZ = hit ? hit.pz : ez + dz * w.range;
+    shotLines.push([mx, my, mz, endX, endY, endZ]);
 
     if (p === 0 || w.pellets <= 3 || p % 3 === 0)
       fxTracer(mx, my, mz, endX, endY, endZ, C(a.isPlayer ? (w.tracer || 0xfff0c0) : a.colors.trim));
@@ -215,7 +293,7 @@ function fireWeapon(a) {
     if (!hit) continue;
     if (hit.kind === 'actor') {
       const dmg = w.dmg * (hit.head ? w.headMul : 1);
-      applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ);
+      if (!visualOnly) applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ);
       fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'actor');
     } else if (hit.kind === 'mannequin') {
       hit.obj.userData.spin += rand(3, 7) * (rng() < 0.5 ? -1 : 1);
@@ -238,6 +316,8 @@ function fireWeapon(a) {
   } else {
     SFX.shoot(w.id, a.pos.x, a.pos.y + 1.3, a.pos.z);
   }
+  if (!visualOnly && typeof netOnAuthoritativeShot === 'function')
+    netOnAuthoritativeShot(a, w, shotLines);
   return true;
 }
 
@@ -249,6 +329,8 @@ function applyDamage(target, dmg, from, head, hx, hy, hz) {
      so it can't be camped behind. */
   if (target.shield > 0) {
     if (from) fxShieldHit(target, hx, hy, hz);
+    if (typeof netOnAuthoritativeShieldHit === 'function')
+      netOnAuthoritativeShieldHit(target, from, hx, hy, hz);
     return;
   }
   target.health -= dmg;
@@ -269,6 +351,8 @@ function applyDamage(target, dmg, from, head, hx, hy, hz) {
     if (from) addDamageDir(from);
     fxShake(0.18);
   }
+  if (typeof netOnAuthoritativeDamage === 'function')
+    netOnAuthoritativeDamage(target, from, dmg, head, hx, hy, hz);
   if (target.health <= 0) killActor(target, from);
 }
 
@@ -295,6 +379,7 @@ function killActor(target, from) {
     }
   }
   addKillFeed(from, target);
+  if (typeof netOnAuthoritativeKill === 'function') netOnAuthoritativeKill(target, from);
   if (target.isPlayer) { SFX.die(); showDeadScreen(from); }
   refreshBoard();
 
@@ -305,8 +390,14 @@ function killActor(target, from) {
 function endMatch(winner) {
   G.over = true;
   G.winner = winner;
+  G.paused = false;
+  document.getElementById('title').classList.add('off');
+  const dead = document.getElementById('dead');
+  dead.classList.add('off');
+  delete dead.dataset.wasUp;
   showOverScreen(winner);
   if (winner.isPlayer) SFX.win();
+  if (typeof netOnAuthoritativeMatchOver === 'function') netOnAuthoritativeMatchOver(winner);
   exitPointerLock();
 }
 
@@ -314,7 +405,10 @@ function endMatch(winner) {
    PLAYER INPUT
    ===================================================================== */
 const KEY = {};
-const IN = { lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false };
+const IN = {
+  lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
+  fireSeq: 0, reloadSeq: 0
+};
 let mouseSens = 0.0021;
 
 function initInput() {
@@ -322,7 +416,7 @@ function initInput() {
     if (e.code === 'Tab') e.preventDefault();
     KEY[e.code] = true;
     if (!G.started) return;
-    if (e.code === 'KeyR') tryReload(G.player);
+    if (e.code === 'KeyR' && !e.repeat) { IN.reloadSeq++; tryReload(G.player); }
     if (e.code === 'Digit1') switchWeapon('smg');
     if (e.code === 'Digit2') switchWeapon('shotgun');
     if (e.code === 'Digit3') switchWeapon('rifle');
@@ -333,7 +427,12 @@ function initInput() {
     KEY[e.code] = false;
     if (e.code === 'Tab') setBoard(false);
   });
-  addEventListener('mousedown', e => { if (IN.locked && e.button === 0) IN.firing = true; });
+  addEventListener('mousedown', e => {
+    if (IN.locked && e.button === 0) {
+      if (!IN.firing) IN.fireSeq++;
+      IN.firing = true;
+    }
+  });
   addEventListener('mouseup', e => { if (e.button === 0) IN.firing = false; });
   addEventListener('wheel', e => {
     if (!IN.locked) return;
@@ -395,17 +494,20 @@ function syncPlayerAmmoStore() {
 function stepPlayer(a, dt) {
   a.aimYaw = a.yaw; a.aimPitch = a.pitch;
   if (!a.alive) {
+    if (typeof netIsGuest === 'function' && netIsGuest()) return;
     a.respawnT -= dt;
     if (a.respawnT <= 0) { respawnActor(a); hideDeadScreen(); }
     return;
   }
-  const fwd = (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0);
-  const str = (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0);
-  IN.sprinting = !!KEY.ShiftLeft || !!KEY.ShiftRight;
+  const acceptsInput = !G.paused;
+  const fwd = acceptsInput ? (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0) : 0;
+  const str = acceptsInput ? (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0) : 0;
+  const firing = acceptsInput && IN.firing;
+  IN.sprinting = acceptsInput && (!!KEY.ShiftLeft || !!KEY.ShiftRight);
 
   const w = WBY[a.weapon];
   let speed = CFG.playerSpeed * w.speed;
-  const sprinting = IN.sprinting && fwd > 0 && !IN.firing && a.reloadT <= 0;
+  const sprinting = IN.sprinting && fwd > 0 && !firing && a.reloadT <= 0;
   if (sprinting) speed *= CFG.sprintMul;
 
   /* forward = (sin y, cos y); right = cross(forward, up) = (-cos y, sin y).
@@ -420,7 +522,7 @@ function stepPlayer(a, dt) {
   const acc = a.onGround ? CFG.accelGround : CFG.accelAir;
   a.vel.x = damp(a.vel.x, mx, acc, dt);
   a.vel.z = damp(a.vel.z, mz, acc, dt);
-  if (KEY.Space && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
+  if (acceptsInput && KEY.Space && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
 
   const res = moveActor(a.pos, a.vel, dt, {});
   const wasGround = a.onGround;
@@ -436,15 +538,100 @@ function stepPlayer(a, dt) {
 
   if (a.reloadT > 0) { a.reloadT -= dt; if (a.reloadT <= 0) finishReload(a); }
   if (a.fireCd > 0) a.fireCd -= dt;
-  a.aiming = IN.firing || (!sprinting && spd < 4.5);
+  a.aiming = firing || (!sprinting && spd < 4.5);
 
-  if (IN.firing && !sprinting) {
+  if (firing && !sprinting) {
     const w2 = WBY[a.weapon];
     if (w2.auto) fireWeapon(a);
     else if (!IN._heldSemi) { if (fireWeapon(a)) IN._heldSemi = true; }
   }
-  if (!IN.firing) IN._heldSemi = false;
+  if (!firing) IN._heldSemi = false;
   syncPlayerAmmoStore();
+}
+
+function switchRemoteWeapon(a, id) {
+  if (!WBY[id] || a.weapon === id) return;
+  if (!a._ammoBy) a._ammoBy = {};
+  a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };
+  a.weapon = id;
+  const w = WBY[id];
+  const saved = a._ammoBy[id] || { ammo: w.mag, reserve: w.reserve };
+  a.ammo = clamp(saved.ammo, 0, w.mag);
+  a.reserve = Math.max(0, saved.reserve);
+  a.reloadT = 0;
+}
+
+/* The host simulates remote humans from their latest sequenced input.
+   This intentionally mirrors local movement, but omits camera/viewmodel UI. */
+function stepRemotePlayer(a, dt) {
+  if (!a.alive) {
+    a.respawnT -= dt;
+    if (a.respawnT <= 0) {
+      respawnActor(a);
+      if (a.plate) a.plate.sprite.visible = true;
+    }
+    return;
+  }
+
+  const fresh = a.netInput && G.time - (a.netInputAt || 0) <= 0.45;
+  const it = fresh ? a.netInput : {
+    fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
+    fireSeq: a.lastFireSeq, reloadSeq: a.lastReloadSeq,
+    yaw: a.yaw, pitch: a.pitch, weapon: a.weapon
+  };
+  a.yaw = Number.isFinite(it.yaw) ? it.yaw : a.yaw;
+  a.pitch = Number.isFinite(it.pitch) ? clamp(it.pitch, -1.45, 1.45) : a.pitch;
+  a.aimYaw = a.yaw; a.aimPitch = a.pitch;
+  switchRemoteWeapon(a, it.weapon);
+
+  if (it.reloadSeq > a.lastReloadSeq) {
+    a.lastReloadSeq = it.reloadSeq;
+    tryReload(a);
+  }
+
+  const fwd = clamp(it.fwd || 0, -1, 1);
+  const str = clamp(it.strafe || 0, -1, 1);
+  const w = WBY[a.weapon];
+  let speed = CFG.playerSpeed * w.speed;
+  const sprinting = !!it.sprint && fwd > 0 && !it.fire && a.reloadT <= 0;
+  if (sprinting) speed *= CFG.sprintMul;
+
+  const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
+  let mx = sy * fwd - cy * str;
+  let mz = cy * fwd + sy * str;
+  const ml = Math.hypot(mx, mz);
+  if (ml > 1e-4) { mx = mx / ml * speed; mz = mz / ml * speed; }
+  const acc = a.onGround ? CFG.accelGround : CFG.accelAir;
+  a.vel.x = damp(a.vel.x, mx, acc, dt);
+  a.vel.z = damp(a.vel.z, mz, acc, dt);
+  if (it.jump && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
+
+  const res = moveActor(a.pos, a.vel, dt, {});
+  a.onGround = res.onGround;
+  if (a.reloadT > 0) { a.reloadT -= dt; if (a.reloadT <= 0) finishReload(a); }
+  if (a.fireCd > 0) a.fireCd -= dt;
+
+  const spd = Math.hypot(a.vel.x, a.vel.z);
+  a.aiming = !!it.fire || (!sprinting && spd < 4.5);
+  /* A guest samples its input roughly every 33ms, so a click that starts and
+     ends inside one packet never appears as a held `fire`. The fireSeq edge is
+     what carries a fast tap across the wire — auto weapons need to honour it
+     too, or the SMG silently eats quick taps. */
+  const fireEdge = it.fireSeq > a.lastFireSeq;
+  if (!sprinting && (fireEdge || (w.auto && it.fire))) fireWeapon(a);
+  /* Acknowledge the tap even when sprinting swallowed it. Leaving it unacked
+     buffers the shot, which then goes off by itself the instant sprint ends. */
+  if (fireEdge) a.lastFireSeq = it.fireSeq;
+
+  if (!a._ammoBy) a._ammoBy = {};
+  a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };
+  if (a.onGround && spd > 1.2) {
+    a.stepPhase += dt * (spd * 0.62);
+    if (a.stepPhase > 1) {
+      a.stepPhase -= 1;
+      SFX.step(a.pos.x, a.pos.y, a.pos.z);
+    }
+  }
 }
 
 const _viewSelf = { id: 0, pos: null, vel: null, yaw: 0, pitch: 0, health: 0, maxHealth: 0,
@@ -509,9 +696,20 @@ function stepBot(a, dt) {
 
 function simulate(dt) {
   G.time += dt;
+  G.tick++;
   for (const a of G.actors) if (a.shield > 0) a.shield = Math.max(0, a.shield - dt);
   stepPlayer(G.player, dt);
-  for (const a of G.actors) if (!a.isPlayer) stepBot(a, dt);
+  const guest = typeof netIsGuest === 'function' && netIsGuest();
+  for (const a of G.actors) {
+    if (a.isPlayer) continue;
+    if (guest) {
+      if (typeof netStepReplica === 'function') netStepReplica(a, dt);
+    } else if (a.controller === 'remote') {
+      stepRemotePlayer(a, dt);
+    } else if (a.controller === 'bot') {
+      stepBot(a, dt);
+    }
+  }
 
   // mannequins settle back upright after being shot
   for (const m of WORLD.mannequins) {
@@ -526,6 +724,7 @@ function simulate(dt) {
       m.rotation.z = Math.sin(u.lean * 9) * u.lean * 0.28;
     }
   }
+  if (typeof netAfterSimulation === 'function') netAfterSimulation(dt);
 }
 
 /* =====================================================================
@@ -535,11 +734,20 @@ function startMatch() {
   SFX.init(); SFX.resume();
   setupMatch();
   G.started = true; G.over = false;
+  G.paused = false; G.fixedAcc = 0;
   document.getElementById('title').classList.add('off');
+  const dead = document.getElementById('dead');
+  dead.classList.add('off');
+  delete dead.dataset.wasUp;
   document.getElementById('over').classList.add('off');
+  setDamageDirsCleared();
   restoreBoard();                       // put the scoreboard back on the HUD
   document.getElementById('hud').classList.remove('hide');
   vmSetWeapon('smg', true);
+  document.getElementById('play').textContent = 'SOLO';
+  const again = document.getElementById('again');
+  again.disabled = false;
+  again.textContent = 'REMATCH';
   showHint('FIRST TO ' + CFG.killsToWin + ' KILLS');
   requestLock();
 }

@@ -266,7 +266,10 @@ function updateViewmodel(dt, st) {
   ry += VM.sprint * 0.78; rx += VM.sprint * 0.34; rz -= VM.sprint * 0.30;
 
   // recoil + bob + sway + land dip
-  pz += VM.recoil * 0.9;
+  /* Recoil pulls the gun toward the lens. It sits at pz -0.52, so the old
+     0.9 multiplier could push it to +0.29 — behind the camera, i.e. the gun
+     vanished mid-burst on the harder-kicking weapons. Keep it well clear. */
+  pz = Math.min(-0.14, pz + VM.recoil * 0.16);
   py += VM.recoil * 0.30 + VM.bob.y - VM.landDip * 0.12;
   px += VM.bob.x + VM.sway.x;
   py += VM.sway.y;

@@ -68,6 +68,7 @@ function animateAll(dt) {
     else if (a.alive) a.char.root.visible = true;
   }
   updateMotes(G.time);
+  updateMagic(G.time);
   updateFX(dt);
   updateFloaters(dt);
 }
@@ -134,9 +135,12 @@ function frame(now) {
   lastT = now;
   if (dt > 0.25) dt = 0.25;
   updateAdaptiveRes(dt);
+  netFrame(now);
 
   if (!G.frozen) {
-    if (G.started && !G.paused && !G.over) {
+    /* A host owns the room simulation. Opening its local pause card must
+       neutralise host input, but it must not freeze every connected guest. */
+    if (G.started && !G.over && (!G.paused || netIsHost())) {
       G.fixedAcc += dt;
       let guard = 0;
       while (G.fixedAcc >= FIXED && guard++ < 6) { simulate(FIXED); G.fixedAcc -= FIXED; }
@@ -149,7 +153,7 @@ function frame(now) {
       vel: G.player ? G.player.vel : { x: 0, y: 0, z: 0 },
       onGround: G.player ? G.player.onGround : true,
       lookDX: IN.lookDX, lookDY: IN.lookDY,
-      sprinting: IN.sprinting, firing: IN.firing
+      sprinting: !G.paused && IN.sprinting, firing: !G.paused && IN.firing
     });
     animateAll(dt);
     updateCrosshair(dt);
@@ -178,6 +182,7 @@ function boot() {
   initFX();        set(82);
   initInput();     set(88);
   initAI();        set(96);
+  initNetworkUI();
 
   setupMatch();
   camera.position.set(40, 20, 30); camera.lookAt(0, 3, 0);
@@ -188,13 +193,21 @@ function boot() {
   document.getElementById('play').addEventListener('click', () => {
     SFX.init(); SFX.resume(); SFX.ui();
     if (G.started && G.paused) { setPaused(false); requestLock(); }
-    else startMatch();
+    else {
+      if (netHasTransport()) netLeaveLobby();
+      startMatch();
+    }
   });
   document.getElementById('again').addEventListener('click', () => {
     SFX.ui();
-    G.over = false;
-    document.getElementById('over').classList.add('off');
-    restoreBoard();
+    if (netIsGuest()) {
+      netStatus('Waiting for the host to start the rematch.');
+      return;
+    }
+    if (netIsHost()) {
+      netHostStart();
+      return;
+    }
     startMatch();
   });
 
@@ -213,7 +226,7 @@ const POSES = {
   street:    { pos: [12, 1.75, 0.6],  look: [-26, 2.6, -0.4] },
   streetEast:{ pos: [-11, 1.75, 1.2], look: [24, 2.2, 0.2] },
   yard:      { pos: [-6.0, 1.7, 1.0], look: [-5.0, 2.4, -9.0] },
-  porch:     { pos: [-4.6, 1.7, -4.6],look: [-4.6, 2.2, -12.0] },
+  porch:     { pos: [-4.5, 1.7, -0.9], look: [-4.6, 2.45, -6.6] },
   house:     { pos: [-5.0, 1.7, -11.8], look: [-10.4, 1.45, -16.0] },
   upstairs:  { pos: [-5.2, 4.92, -16.4], look: [-10.4, 4.35, -14.2] },
   balcony:   { pos: [3.6, 5.0, 5.2],  look: [-4.0, 3.4, -8.0] },
