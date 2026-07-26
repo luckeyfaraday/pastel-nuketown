@@ -1,0 +1,61 @@
+<div id="vig"></div><div id="dmg"></div><div id="heal"></div>
+
+<div id="hud" class="hide">
+  <div id="top">
+    <div class="box panel"><div class="k">Score</div><div class="v" id="tScore">0</div></div>
+    <div class="box panel"><div class="k">Leader</div><div class="v lead" id="tLead">—</div></div>
+    <div class="box panel"><div class="k">Target</div><div class="v" id="tGoal">25</div></div>
+  </div>
+
+  <div id="feed"></div>
+  <div id="floaters"></div>
+
+  <div id="vitals" class="panel">
+    <div class="lbl">Vitality</div>
+    <div id="hpwrap"><div id="hpbar"></div><div id="hpnum">100</div></div>
+  </div>
+
+  <div id="ammo" class="panel">
+    <div id="wname">BUBBLEGUN</div>
+    <div id="acount">30<small>/90</small></div>
+    <div id="reloading"></div>
+    <div id="wslots"><div class="on">1</div><div>2</div><div>3</div></div>
+  </div>
+
+  <div id="hint"></div>
+
+  <div id="board" class="panel">
+    <h3>FREE FOR ALL</h3>
+    <table><thead><tr><th>Player</th><th>Kills</th><th>Deaths</th><th>Streak</th></tr></thead>
+    <tbody id="boardBody"></tbody></table>
+  </div>
+</div>
+
+<div id="cross"><i class="dot"></i><i class="t" id="cU"></i><i class="t" id="cD"></i><i class="h" id="cL"></i><i class="h" id="cR"></i></div>
+<div id="hitmark"><span style="transform:rotate(45deg)"></span><span style="transform:rotate(-45deg)"></span></div>
+
+<div class="screen" id="title">
+  <h1>PASTEL<em>NUKETOWN</em></h1>
+  <div class="sub">Free&nbsp;For&nbsp;All</div>
+  <button id="play">PLAY</button>
+  <div class="keys">
+    <span><b>WASD</b> move</span><span><b>SHIFT</b> sprint</span><span><b>SPACE</b> jump</span>
+    <span><b>MOUSE</b> aim</span><span><b>CLICK</b> shoot</span><span><b>R</b> reload</span>
+    <span><b>1 2 3</b> weapons</span><span><b>TAB</b> scores</span><span><b>ESC</b> pause</span>
+  </div>
+</div>
+
+<div class="screen off" id="dead">
+  <div class="big">DOWN!</div>
+  <div class="by" id="deadBy"></div>
+  <div class="cd" id="deadCd">3</div>
+</div>
+
+<div class="screen off" id="over">
+  <div class="big" id="overBig">MATCH OVER</div>
+  <div class="rank" id="overRank"></div>
+  <button id="again" style="margin-top:28px;pointer-events:auto;cursor:pointer;font-family:var(--disp);font-size:22px;font-weight:800;letter-spacing:.08em;color:var(--ink);padding:13px 42px 15px;border:3px solid var(--ink);border-radius:20px;background:linear-gradient(180deg,#d9f7e6,#b8f2d8);box-shadow:0 6px 0 var(--ink)">REMATCH</button>
+</div>
+
+<div id="loading"><div class="lt">WARMING UP THE PASTELS</div><div class="bar"><i id="lbar"></i></div></div>
+<div id="fatal" class="panel"></div>

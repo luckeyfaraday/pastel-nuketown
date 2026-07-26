@@ -1,0 +1,15 @@
+{
+  "refreshed_at": "2026-07-25T23:38:22.480962Z",
+  "source": "context-workspace-refresh-script",
+  "schema_version": 2,
+  "handoff_id": "handoff-20260725t233822z-f5640356",
+  "confidence": "low",
+  "source_count": 0,
+  "source_titles": [],
+  "source_workspaces": [
+    "/home/alan/home_ai/projects/luckey-bench-runs/opus-5/pastel-nuketown"
+  ],
+  "source_sessions": [],
+  "bytes": 1501,
+  "task_hint": "Workspace selected"
+}
