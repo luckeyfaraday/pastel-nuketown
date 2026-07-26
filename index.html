@@ -5173,6 +5173,18 @@ function startMatch() {
    ===================================================================== */
 
 const NETP = globalThis.NUKETOWN_PROTOCOL;
+
+/* Where the relay lives.
+
+   The page is served from a CDN but the WebSocket relay runs on its own
+   host, so the client cannot assume the two share an origin. Netlify (and
+   any static host) cannot proxy a WebSocket upgrade, which is why this is
+   a separate machine rather than a path on the same one.
+
+   Leave it empty to talk to whatever origin served the page — that is the
+   right answer when the relay is also serving the game. A ?server= in the
+   URL overrides it either way. */
+const NET_SERVER = 'relay.luckeysystems.com';
 const NET = {
   mode: 'solo',                 // solo | connecting | host | guest
   phase: 'idle',                // idle | connecting | lobby | playing
@@ -5242,25 +5254,49 @@ function netBotCount(humanCount) {
   return CFG.bots;
 }
 
-function netWsURL() {
-  let configured = QS.get('server');
-  if (configured) {
-    configured = configured.trim();
-    if (/^https?:\/\//i.test(configured))
-      configured = configured.replace(/^http/i, 'ws');
-    if (!/^wss?:\/\//i.test(configured))
-      configured = (location.protocol === 'https:' ? 'wss://' : 'ws://') + configured;
-    try {
-      const u = new URL(configured);
-      if ((u.protocol !== 'ws:' && u.protocol !== 'wss:') ||
-          u.username || u.password || u.hash) return null;
-      if (!u.pathname || u.pathname === '/') u.pathname = '/ws';
-      return u.toString();
-    } catch (e) {}
-    return null;
-  }
-  if (location.protocol === 'file:') return 'ws://localhost:8080/ws';
+/* Accepts a bare host, a ws(s):// URL, or an http(s):// URL, and hands back a
+   relay URL — or null if it is anything we should refuse to dial. */
+function netNormalizeServer(value) {
+  if (typeof value !== 'string') return null;
+  let configured = value.trim();
+  if (!configured) return null;
+
+  if (/^https?:\/\//i.test(configured))
+    configured = configured.replace(/^http/i, 'ws');
+  if (!/^wss?:\/\//i.test(configured))
+    configured = (location.protocol === 'https:' ? 'wss://' : 'ws://') + configured;
+
+  try {
+    const u = new URL(configured);
+    if ((u.protocol !== 'ws:' && u.protocol !== 'wss:') ||
+        u.username || u.password || u.hash) return null;
+    if (!u.pathname || u.pathname === '/') u.pathname = '/ws';
+    return u.toString();
+  } catch (e) {}
+  return null;
+}
+
+function netSameOriginURL() {
   return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+}
+
+function netIsDevOrigin() {
+  const h = location.hostname;
+  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+}
+
+function netWsURL() {
+  /* An explicit ?server= is the last word, including when it is malformed —
+     silently falling back to somewhere else would hide the mistake. */
+  const requested = QS.get('server');
+  if (requested) return netNormalizeServer(requested);
+
+  if (location.protocol === 'file:') return 'ws://localhost:8080/ws';
+  /* Serving from localhost means you are running the relay yourself; stay
+     on this machine instead of dialling the public one. */
+  if (netIsDevOrigin()) return netSameOriginURL();
+
+  return netNormalizeServer(NET_SERVER) || netSameOriginURL();
 }
 
 /* Same server, plain HTTP. The room list is a poll rather than a socket
