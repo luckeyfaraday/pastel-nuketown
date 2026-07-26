@@ -52,6 +52,22 @@ export function createRelayServer(options = {}) {
   const maxConnections = positiveInteger(options.maxConnections, 512);
   const maxRooms = positiveInteger(options.maxRooms, 128);
   const maxListedRooms = positiveInteger(options.maxListedRooms, Protocol.MAX_ROOM_LIST);
+  /* WebSockets are exempt from the same-origin policy, so without this any
+     page in the world can open a socket here and sit in the rooms. An empty
+     allowlist keeps that wide-open behaviour, which is what local play,
+     file:// pages and the tests rely on — set it in production. */
+  const allowedOrigins = new Set(
+    (Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [])
+      .map((origin) => String(origin).trim().replace(/\/+$/, '').toLowerCase())
+      .filter(Boolean)
+  );
+
+  function originAllowed(request) {
+    if (allowedOrigins.size === 0) return true;
+    const origin = request.headers.origin;
+    if (typeof origin !== 'string' || !origin) return false;
+    return allowedOrigins.has(origin.trim().replace(/\/+$/, '').toLowerCase());
+  }
   const joinTimeoutMs = positiveInteger(options.joinTimeoutMs, 15_000);
   const makeId = typeof options.idFactory === 'function'
     ? options.idFactory
@@ -142,8 +158,14 @@ export function createRelayServer(options = {}) {
        cross-origin. Allow it explicitly and never cache it. */
     if (pathname === '/rooms') {
       const body = Buffer.from(JSON.stringify({ rooms: listedRooms() }), 'utf8');
+      /* Mirror the socket's policy: wide open when unconfigured, otherwise
+         only the origins that are allowed to play here. */
+      const origin = request.headers.origin;
+      const shareWith = allowedOrigins.size === 0
+        ? '*'
+        : (originAllowed(request) ? origin : null);
       response.writeHead(200, {
-        'access-control-allow-origin': '*',
+        ...(shareWith ? { 'access-control-allow-origin': shareWith, vary: 'Origin' } : {}),
         'cache-control': 'no-store',
         'content-length': body.byteLength,
         'content-type': 'application/json; charset=utf-8',
@@ -586,6 +608,10 @@ export function createRelayServer(options = {}) {
       socket.destroy();
       return;
     }
+    if (!originAllowed(request)) {
+      socket.destroy();
+      return;
+    }
     if (peers.size >= maxConnections) {
       socket.destroy();
       return;
@@ -644,7 +670,9 @@ const isMain = process.argv[1] &&
 if (isMain) {
   const port = Number.parseInt(process.env.PORT || '8080', 10);
   const host = process.env.HOST || '0.0.0.0';
-  const relay = createRelayServer();
+  const relay = createRelayServer({
+    allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(',')
+  });
 
   relay.listen(port, host, () => {
     const address = relay.address();

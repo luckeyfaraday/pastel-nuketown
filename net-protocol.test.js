@@ -717,3 +717,48 @@ test('room summaries from an untrusted server are cleaned entry by entry', () =>
     5
   );
 });
+
+test('an origin allowlist gates the socket and the room browser when configured', async (t) => {
+  const { port } = await startRelay(t, {
+    allowedOrigins: ['https://nuketown.luckeysystems.com/', ' HTTPS://Relay.LuckeySystems.com ', '']
+  });
+
+  const dial = (origin) => new Promise((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, origin ? { origin } : {});
+    ws.on('open', () => { ws.terminate(); resolve('open'); });
+    ws.on('error', () => resolve('refused'));
+  });
+
+  assert.equal(await dial('https://nuketown.luckeysystems.com'), 'open');
+  assert.equal(await dial('https://relay.luckeysystems.com'), 'open',
+    'matching is case-insensitive and ignores a trailing slash');
+  assert.equal(await dial('https://evil.example.com'), 'refused');
+  assert.equal(await dial(null), 'refused', 'a socket with no Origin is refused too');
+
+  const allowed = await fetch(`http://127.0.0.1:${port}/rooms`, {
+    headers: { origin: 'https://nuketown.luckeysystems.com' }
+  });
+  assert.equal(allowed.headers.get('access-control-allow-origin'),
+    'https://nuketown.luckeysystems.com');
+  assert.equal(allowed.headers.get('vary'), 'Origin');
+
+  const blocked = await fetch(`http://127.0.0.1:${port}/rooms`, {
+    headers: { origin: 'https://evil.example.com' }
+  });
+  assert.equal(blocked.status, 200);
+  assert.equal(blocked.headers.get('access-control-allow-origin'), null,
+    'the body is public but the browser will not hand it to a foreign page');
+});
+
+test('an unconfigured allowlist stays wide open so local play keeps working', async (t) => {
+  const { port } = await startRelay(t);
+
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: 'https://anywhere.example' });
+  await once(ws, 'open');
+  ws.terminate();
+
+  const response = await fetch(`http://127.0.0.1:${port}/rooms`, {
+    headers: { origin: 'https://anywhere.example' }
+  });
+  assert.equal(response.headers.get('access-control-allow-origin'), '*');
+});
