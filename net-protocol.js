@@ -173,7 +173,13 @@
     };
   }
 
-  function shotSpreadSeed(shooter, fireSeq) {
+  /* fireSeq alone is not enough to key a shot. It advances on a fresh trigger
+     press, so every shot in a held automatic burst would reseed identically and
+     the spread cone would collapse to one fixed offset. `shotNo` separates the
+     shots inside a burst: pass the firing actor's remaining ammo, which counts
+     down once per shot and is both locally predicted and host-authoritative, so
+     the two sides still derive the same seed. */
+  function shotSpreadSeed(shooter, fireSeq, shotNo) {
     if ((typeof shooter !== 'string' && typeof shooter !== 'number') ||
         !Number.isSafeInteger(fireSeq) || fireSeq < 0) return 0;
 
@@ -186,6 +192,10 @@
     hash ^= fireSeq >>> 0;
     hash = Math.imul(hash, 16777619);
     hash ^= Math.floor(fireSeq / 4294967296) >>> 0;
+    if (Number.isSafeInteger(shotNo) && shotNo >= 0) {
+      hash = Math.imul(hash, 16777619);
+      hash ^= shotNo >>> 0;
+    }
     return hash >>> 0;
   }
 

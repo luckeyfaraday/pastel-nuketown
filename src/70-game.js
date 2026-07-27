@@ -269,7 +269,7 @@ function fireWeapon(a, fireSeq, renderTime) {
   const moving = Math.hypot(a.vel.x, a.vel.z) > 1.6;
   const spread = moving ? w.spreadMove : w.spread;
   const spreadRng = Number.isSafeInteger(fireSeq) && fireSeq >= 0
-    ? mulberry32(NETP.shotSpreadSeed(a.netId || a.id, fireSeq))
+    ? mulberry32(NETP.shotSpreadSeed(a.netId || a.id, fireSeq, a.ammo))
     : rng;
   const spreadRand = (lo, hi) => lo + (hi - lo) * spreadRng();
 

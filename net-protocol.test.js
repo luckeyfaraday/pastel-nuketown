@@ -278,14 +278,26 @@ test('selects interpolation brackets and bounds starved-buffer extrapolation', (
 });
 
 test('derives repeatable, shooter-specific spread sequences from fireSeq', () => {
-  const spread = (shooter, fireSeq) => {
-    const random = mulberry32(Protocol.shotSpreadSeed(shooter, fireSeq));
+  const spread = (shooter, fireSeq, shotNo) => {
+    const random = mulberry32(Protocol.shotSpreadSeed(shooter, fireSeq, shotNo));
     return Array.from({ length: 6 }, () => random());
   };
 
   assert.deepEqual(spread('guest-2', 9), spread('guest-2', 9));
   assert.notDeepEqual(spread('guest-2', 9), spread('guest-2', 10));
   assert.notDeepEqual(spread('guest-2', 9), spread('guest-3', 9));
+
+  /* Both sides must derive the same seed for the same shot... */
+  assert.deepEqual(spread('guest-2', 9, 24), spread('guest-2', 9, 24));
+
+  /* ...but a held burst keeps one fireSeq throughout, so without a per-shot
+     component every bullet in it would land on the same offset and the cone
+     would collapse. Remaining ammo is what separates them. */
+  const burst = [27, 26, 25, 24].map(ammo => spread('guest-2', 9, ammo));
+  for (let i = 1; i < burst.length; i++) {
+    assert.notDeepEqual(burst[i], burst[i - 1]);
+  }
+  assert.notDeepEqual(spread('guest-2', 9, 24), spread('guest-3', 9, 24));
 });
 
 test('sanitizes valid input into a bounded, canonical payload', () => {
