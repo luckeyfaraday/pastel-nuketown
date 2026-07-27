@@ -5287,10 +5287,14 @@ function initInput() {
   });
 
   document.addEventListener('pointerlockchange', () => {
-    /* A phone never holds the lock, so on touch this would fire once on
-       the way in and pause the match permanently with no way back. */
-    if (TOUCH.on) return;
     IN.locked = document.pointerLockElement === canvas;
+    /* Losing the lock is the desktop pause gesture, because on desktop it
+       means the cursor is loose and the player has stopped playing. Once
+       the on-screen controls are up that inference is wrong — a phone
+       never holds the lock in the first place, so honouring it there
+       would pause the match on the way in and never let it resume. The
+       touch layer has its own pause button. */
+    if (TOUCH.on) return;
     if (!IN.locked && G.started && !G.over) setPaused(true);
     else if (IN.locked) setPaused(false);
   });
@@ -5299,7 +5303,12 @@ function initInput() {
    That's not fatal — the match still runs, you just aren't mouse-looking. */
 function requestLock() {
   try {
-    if (TOUCH.on) return;                        // touch play never locks
+    /* Not merely pointless on touch — actively harmful. Mobile Chrome
+       grants the lock, and a locked pointer routes every pointermove to
+       the canvas with frozen clientX/clientY. That is precisely the
+       stream the stick and look zones read, so the controls go dead
+       while looking like they were pressed. */
+    if (TOUCH.on) return;
     if (!canvas.requestPointerLock) return;
     const r = canvas.requestPointerLock();       // newer Chrome returns a Promise
     if (r && typeof r.catch === 'function') r.catch(() => {});
