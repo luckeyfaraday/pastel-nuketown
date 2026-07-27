@@ -5991,6 +5991,7 @@ const NET = {
   lastKillerId: null,
   scoreSignature: '',
   connectTimer: 0,
+  endReason: '',
   roomsBusy: false,
   roomsTimer: 0,
   quick: null,                  // in-flight quick-play plan, or null
@@ -6559,6 +6560,7 @@ function netResetTransport() {
   NET.lastKillerId = null;
   NET.scoreSignature = '';
   NET.quick = null;
+  NET.endReason = '';
   NET.autoStartHeld = false;
   netCancelAutoStart();
   NET.manualClose = false;
@@ -6631,7 +6633,11 @@ function netConnect(kind, requestedRoom, quickPlan) {
     NET.socket = null;
     if (!manual) {
       if (wasPlaying) {
-        netEndSession('Connection lost — return to the menu to reconnect.');
+        /* The relay explains itself before it hangs up — being told you sat
+           out the match is a different thing from losing your connection, and
+           the difference is the only thing that tells you to press PLAY. */
+        netEndSession(NET.endReason ||
+          'Connection lost — return to the menu to reconnect.');
       } else {
         NET.mode = 'solo'; NET.phase = 'idle';
         netShowMainMenu('Connection closed. Is the game server running?');
@@ -6812,6 +6818,9 @@ function netHandleWire(raw) {
       ? msg.message.slice(0, 200)
       : 'Multiplayer error.';
     NET.starting = false;
+    /* Held for the close that follows: an error the relay hangs up on is the
+       reason, and by the time the socket shuts the message is gone. */
+    if (msg.code === 'idle') NET.endReason = errorText;
     if (NET.phase === 'connecting') {
       const plan = NET.quick;
       /* Only a join can be retried elsewhere. A create that fails failed for a

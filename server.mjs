@@ -44,6 +44,16 @@ export function createRelayServer(options = {}) {
   const heartbeatMs = options.heartbeatMs === 0
     ? 0
     : positiveInteger(options.heartbeatMs, 30_000);
+  /* How long a guest may hold a seat in a running match without playing.
+     Four seats and drop-in together make an idle body expensive: it is not
+     just a body doing nothing, it is a body somebody else could be. Zero
+     disables the sweep entirely. */
+  const idleKickMs = options.idleKickMs === 0
+    ? 0
+    : positiveInteger(options.idleKickMs, 60_000);
+  /* Fine enough that "a minute" means roughly a minute rather than up to two,
+     cheap enough to be irrelevant: it walks a map of at most a few hundred. */
+  const idleSweepMs = Math.max(50, Math.min(5_000, Math.floor(idleKickMs / 4) || 5_000));
   const backpressureBytes = positiveInteger(
     options.backpressureBytes,
     512 * 1024
@@ -388,6 +398,9 @@ export function createRelayServer(options = {}) {
     peer.role = role;
     peer.room = room;
     peer.lastSeq = -1;
+    /* Arriving is activity. A drop-in gets the full grace period to find the
+       deploy card, and nobody is judged on time spent before they were here. */
+    peer.activeAt = Date.now();
     room.members.set(peer.id, peer);
     if (role === 'host') room.host = peer;
   }
@@ -488,6 +501,32 @@ export function createRelayServer(options = {}) {
     broadcastMembers(room);
   }
 
+  /* Shortest turn between two angles, so a yaw that wrapped past PI reads as
+     the small movement it was rather than a full lap. */
+  function angleGap(a, b) {
+    let gap = (a - b) % (Math.PI * 2);
+    if (gap > Math.PI) gap -= Math.PI * 2;
+    if (gap < -Math.PI) gap += Math.PI * 2;
+    return Math.abs(gap);
+  }
+
+  /* Away-from-keyboard is a question about the player, not the socket: an idle
+     client still sends input sixty times a second, it is just the same input
+     every time. So the test is what the input says, not that it arrived.
+
+     Looking around counts. Someone turning to watch a firefight is present,
+     and the epsilon is only there to ignore the last hair of the client's own
+     aim damping settling to a stop. */
+  const AIM_EPSILON = 0.005;
+  function inputShowsAPlayer(peer, input) {
+    if (input.fwd !== 0 || input.strafe !== 0 || input.jump || input.fire) return true;
+    if (input.fireSeq !== peer.lastFireSeq ||
+        input.weaponSeq !== peer.lastWeaponSeq ||
+        input.reloadSeq !== peer.lastReloadSeq) return true;
+    return angleGap(input.yaw, peer.lastYaw) > AIM_EPSILON ||
+      Math.abs(input.pitch - peer.lastPitch) > AIM_EPSILON;
+  }
+
   function handleGuestInput(peer, message) {
     if (!peer.room.started || peer.room.migrating ||
         message.round !== peer.room.round ||
@@ -497,6 +536,14 @@ export function createRelayServer(options = {}) {
       sendError(peer, 'invalid-input', sanitized.error);
       return;
     }
+
+    if (idleKickMs > 0 && inputShowsAPlayer(peer, sanitized.value))
+      peer.activeAt = Date.now();
+    peer.lastFireSeq = sanitized.value.fireSeq;
+    peer.lastWeaponSeq = sanitized.value.weaponSeq;
+    peer.lastReloadSeq = sanitized.value.reloadSeq;
+    peer.lastYaw = sanitized.value.yaw;
+    peer.lastPitch = sanitized.value.pitch;
 
     peer.lastSeq = sanitized.value.seq;
     send(peer.room.host, {
@@ -575,7 +622,12 @@ export function createRelayServer(options = {}) {
       clearSnapshotStall(peer.room);
       peer.room.snapshotAt = 0;
       peer.room.snapshotIntervalMs = 0;
-      for (const member of peer.room.members.values()) member.lastSeq = -1;
+      /* A round starting is a fresh slate for everyone: time spent waiting in
+         the lobby is not time spent away from a match. */
+      for (const member of peer.room.members.values()) {
+        member.lastSeq = -1;
+        member.activeAt = Date.now();
+      }
       const start = {
         t: 'start',
         v: Protocol.VERSION,
@@ -776,7 +828,10 @@ export function createRelayServer(options = {}) {
     room.authorityEpoch++;
     room.latestSnapshot = null;
     room.latestCheckpoint = null;
-    for (const member of room.members.values()) member.lastSeq = -1;
+    for (const member of room.members.values()) {
+      member.lastSeq = -1;
+      member.activeAt = Date.now();
+    }
     broadcastRoom(room, {
       t: 'host-changed',
       v: Protocol.VERSION,
@@ -857,7 +912,10 @@ export function createRelayServer(options = {}) {
     if (!room.migrating) return;
     if (room.migrating.timer) clearTimeout(room.migrating.timer);
     room.migrating = null;
-    for (const member of room.members.values()) member.lastSeq = -1;
+    for (const member of room.members.values()) {
+      member.lastSeq = -1;
+      member.activeAt = Date.now();
+    }
     broadcastRoom(room, {
       t: 'authority-ready',
       v: Protocol.VERSION,
@@ -914,7 +972,13 @@ export function createRelayServer(options = {}) {
       cleanedUp: false,
       rateTokens: rateBurst,
       rateUpdatedAt: Date.now(),
-      joinTimer: null
+      joinTimer: null,
+      activeAt: Date.now(),
+      lastFireSeq: -1,
+      lastWeaponSeq: -1,
+      lastReloadSeq: -1,
+      lastYaw: 0,
+      lastPitch: 0
     };
     peers.set(ws, peer);
     peer.joinTimer = setTimeout(() => {
@@ -969,6 +1033,23 @@ export function createRelayServer(options = {}) {
     });
   });
 
+  /* Only guests, and only in a running match. The host is the simulation —
+     dropping it costs everybody a migration to reclaim one seat — and a lobby
+     is a place where sitting still is the entire activity. */
+  function sweepIdlePeers() {
+    const now = Date.now();
+    for (const peer of peers.values()) {
+      if (peer.role !== 'guest' || !peer.room || !peer.room.started) continue;
+      if (peer.room.migrating) continue;
+      if (now - peer.activeAt < idleKickMs) continue;
+      sendError(peer, 'idle', 'Removed for sitting out the match.');
+      try { peer.ws.close(1008, 'idle'); } catch (error) { peer.ws.terminate(); }
+    }
+  }
+
+  const idleSweep = idleKickMs > 0 ? setInterval(sweepIdlePeers, idleSweepMs) : null;
+  if (idleSweep && typeof idleSweep.unref === 'function') idleSweep.unref();
+
   const heartbeat = heartbeatMs > 0
     ? setInterval(() => {
       for (const peer of peers.values()) {
@@ -990,6 +1071,7 @@ export function createRelayServer(options = {}) {
 
   async function close() {
     if (heartbeat) clearInterval(heartbeat);
+    if (idleSweep) clearInterval(idleSweep);
     for (const room of rooms.values()) {
       clearSnapshotStall(room);
       if (room.migrating && room.migrating.timer) clearTimeout(room.migrating.timer);

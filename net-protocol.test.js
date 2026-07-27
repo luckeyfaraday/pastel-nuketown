@@ -1349,3 +1349,85 @@ test('an unconfigured allowlist stays wide open so local play keeps working', as
   });
   assert.equal(response.headers.get('access-control-allow-origin'), '*');
 });
+
+test('a guest that sits out the match loses its seat, one that plays keeps it', async (t) => {
+  /* 300ms stands in for the shipped minute. What is under test is the
+     decision — same input every tick is a body, not a player — not the
+     duration, and a real minute would put a minute in the suite. */
+  const { port } = await startRelay(t, { idleKickMs: 300, roomRandom: () => 0 });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const idle = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const busy = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([idle.opened, busy.opened]);
+  idle.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Statue' });
+  await idle.next('room');
+  await host.next('members');
+  busy.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Player' });
+  await busy.next('room');
+  /* Drain the join broadcasts: the client helper answers from its queue
+     first, so a roster read later would otherwise be a roster from before. */
+  await host.next('members');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), idle.next('start'), busy.next('start')]);
+
+  /* Both send at the same rate. The only difference is that one of them is
+     holding a key down and turning, and the other is standing perfectly
+     still — which is exactly the difference the relay has to notice. */
+  let seq = 0;
+  const pump = setInterval(() => {
+    seq++;
+    idle.send(validInput({ seq, round: 1, fwd: 0, strafe: 0, sprint: false, yaw: 0.75, pitch: -0.2 }));
+    busy.send(validInput({ seq, round: 1, fwd: 1, strafe: 0, sprint: false, yaw: 0.75 + seq * 0.05, pitch: -0.2 }));
+  }, 20);
+  t.after(() => clearInterval(pump));
+
+  const kicked = await idle.next('error', 3000);
+  assert.equal(kicked.code, 'idle');
+  assert.match(kicked.message, /sitting out/i);
+
+  const closed = await new Promise((resolve) => idle.ws.on('close', () => resolve(true)));
+  assert.equal(closed, true, 'the seat is only free once the socket is gone');
+
+  /* The one that was playing is still in the room, and the room noticed the
+     other one leave. */
+  const roster = await host.next('members', 3000);
+  assert.deepEqual(roster.members.map((member) => member.name), ['Host', 'Player']);
+
+  clearInterval(pump);
+  host.ws.terminate();
+  busy.ws.terminate();
+});
+
+test('an idle lobby is not an idle match', async (t) => {
+  /* Sitting still in a lobby is the whole activity, and the host is the
+     simulation — neither is a seat anybody can reclaim by force. */
+  const { port } = await startRelay(t, { idleKickMs: 200, roomRandom: () => 0 });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const waiting = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await waiting.opened;
+  waiting.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Waiting' });
+  await waiting.next('room');
+
+  await new Promise((resolve) => setTimeout(resolve, 700));
+
+  const rooms = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(rooms.rooms[0].players, 2,
+    'nobody is dropped for waiting in a lobby, however long they wait');
+  assert.equal(rooms.online, 2);
+
+  host.ws.terminate();
+  waiting.ws.terminate();
+});
