@@ -230,6 +230,18 @@ function netRenderOnline(count) {
     : '';
 }
 
+/* Matches, not players: the relay counts a seat being taken, and one person
+   playing all evening is a lot of those. Hidden below 10 only so a relay that
+   has genuinely never been played does not announce it — past that the number
+   is allowed to be small and honest. */
+function netRenderMatches(count) {
+  const el = document.getElementById('matchesCount');
+  if (!el) return;
+  el.textContent = typeof count === 'number' && count >= 10
+    ? count.toLocaleString() + ' matches played'
+    : '';
+}
+
 function netRenderRooms(rooms, message) {
   const list = document.getElementById('roomList');
   if (!list) return;
@@ -296,7 +308,8 @@ function netFetchRooms() {
       done();
       return {
         rooms: NETP.cleanRoomSummaries(body && body.rooms, NETP.MAX_ROOM_LIST),
-        online: body && body.online
+        online: body && body.online,
+        matches: body && body.matches
       };
     }, error => {
       done();
@@ -321,11 +334,13 @@ function netRefreshRooms(manual) {
          not repaint a list they can no longer act on. */
       if (netRoomsPanelOpen()) netRenderRooms(result.rooms);
       netRenderOnline(result.online);
+      netRenderMatches(result.matches);
     })
     .catch(() => {
       if (netRoomsPanelOpen())
         netRenderRooms(null, 'No room server reachable.');
       netRenderOnline(null);
+      netRenderMatches(null);
     })
     .then(() => { NET.roomsBusy = false; });
 }
@@ -346,6 +361,7 @@ function netQuickPlay() {
       if (NET.phase === 'connecting') return;
       if (netRoomsPanelOpen()) netRenderRooms(result.rooms);
       netRenderOnline(result.online);
+      netRenderMatches(result.matches);
       netQuickNext({ candidates: netQuickCandidates(result.rooms) });
     })
     .catch(() => {
@@ -408,11 +424,13 @@ function netRefreshRooms(manual) {
          not repaint a list they can no longer act on. */
       if (netRoomsPanelOpen()) netRenderRooms(rooms);
       netRenderOnline(body && body.online);
+      netRenderMatches(body && body.matches);
     })
     .catch(() => {
       if (netRoomsPanelOpen())
         netRenderRooms(null, 'No room server reachable.');
       netRenderOnline(null);
+      netRenderMatches(null);
     })
     .then(() => {
       if (bail) clearTimeout(bail);
