@@ -1178,7 +1178,7 @@ test('the room handshake carries the round so a player who joins between rounds 
   late.ws.terminate();
 });
 
-test('the room browser lists only rooms you could actually join', async (t) => {
+test('the room browser lists rooms you can join and rooms you can only see', async (t) => {
   let nextId = 0;
   let nextCode = 0;
   const codes = ['AAAAAA', 'BBBBBB', 'CCCCCC', 'DDDDDD'];
@@ -1209,7 +1209,7 @@ test('the room browser lists only rooms you could actually join', async (t) => {
   await open.next('room');
 
   assert.deepEqual(await fetchRooms(), [
-    { code: 'AAAAAA', host: 'Open Host', players: 1, max: Protocol.MAX_PLAYERS }
+    { code: 'AAAAAA', host: 'Open Host', players: 1, max: Protocol.MAX_PLAYERS, inProgress: false }
   ]);
 
   const secret = websocketClient(`ws://127.0.0.1:${port}/ws`);
@@ -1227,22 +1227,24 @@ test('the room browser lists only rooms you could actually join', async (t) => {
 
   open.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   await open.next('start');
-  assert.deepEqual(await fetchRooms(), [], 'a room in a live match is not joinable');
+  assert.deepEqual(await fetchRooms(), [
+    { code: 'AAAAAA', host: 'Open Host', players: 2, max: Protocol.MAX_PLAYERS, inProgress: true }
+  ], 'a room in a live match is still advertised, flagged as unjoinable');
 
   open.send({
     t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1,
     round: 1, winner: null
   });
   await guest.next('lobby');
-  assert.deepEqual((await fetchRooms()).map((room) => room.code), ['AAAAAA'],
-    'it comes back once the round ends');
+  assert.deepEqual((await fetchRooms()).map((room) => room.inProgress), [false],
+    'it becomes joinable again once the round ends');
 
   open.ws.terminate();
   const promoted = await guest.next('host-changed');
   assert.equal(promoted.host, 'peer-3');
   assert.equal(promoted.authorityEpoch, 2);
   assert.deepEqual(await fetchRooms(), [
-    { code: 'AAAAAA', host: 'Guest', players: 1, max: Protocol.MAX_PLAYERS }
+    { code: 'AAAAAA', host: 'Guest', players: 1, max: Protocol.MAX_PLAYERS, inProgress: false }
   ], 'closing the host promotes a survivor and preserves the listed room');
 
   secret.ws.terminate();
@@ -1260,15 +1262,20 @@ test('room summaries from an untrusted server are cleaned entry by entry', () =>
     { code: 'CCCCCC', host: 'Full', players: 4, max: 4 },
     { code: 'DDDDDD', host: 'Bad count', players: 1.5, max: 4 },
     { code: 'EEEEEE', host: 'Oversized', players: 1, max: 99 },
+    { code: 'FFFFFF', host: 'Running full', players: 4, max: 4, inProgress: true },
+    { code: 'GGGGGG', host: 'Overfull', players: 5, max: 4, inProgress: true },
+    { code: 'HHHHHH', host: 'Truthy', players: 1, max: 4, inProgress: 'yes' },
     null,
     'nope'
   ]);
 
   assert.deepEqual(cleaned, [
-    { code: 'AAAAAA', host: 'Nova', players: 2, max: 4 },
-    { code: 'BBBBBB', host: 'script', players: 1, max: 4 },
-    { code: 'EEEEEE', host: 'Oversized', players: 1, max: Protocol.MAX_PLAYERS }
-  ]);
+    { code: 'AAAAAA', host: 'Nova', players: 2, max: 4, inProgress: false },
+    { code: 'BBBBBB', host: 'script', players: 1, max: 4, inProgress: false },
+    { code: 'EEEEEE', host: 'Oversized', players: 1, max: Protocol.MAX_PLAYERS, inProgress: false },
+    { code: 'FFFFFF', host: 'Running full', players: 4, max: 4, inProgress: true },
+    { code: 'HHHHHH', host: 'Truthy', players: 1, max: 4, inProgress: false }
+  ], 'only a running room may be full, and only a real boolean says it is running');
 
   assert.deepEqual(Protocol.cleanRoomSummaries(null), []);
   assert.equal(

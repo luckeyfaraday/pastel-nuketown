@@ -43,6 +43,16 @@ const NET_SNAP_DISTANCE = 3;
 const NET_RESIDUAL_SMOOTHING = 0.5;
 const NET_MAX_HISTORY_SAMPLES = 32;
 const NET_MAX_REPLICA_SAMPLES = 16;
+/* Long enough that a host keeping a seat for one more friend has time to say
+   so, short enough that two strangers are not left reading a roster. */
+const NET_AUTOSTART_SECONDS = 15;
+/* Nobody else is arriving into a full room, so stop pretending to wait. */
+const NET_AUTOSTART_FULL_SECONDS = 5;
+/* Errors that mean "not that room" rather than "not this game". A quick-play
+   candidate can fill, close or start in the moment between the poll that
+   offered it and the socket that dials it; that is the next candidate's turn,
+   not a failure to report. */
+const NET_QUICK_RETRY_ERRORS = ['room-not-found', 'room-full', 'match-started'];
 const NET = {
   mode: 'solo',                 // solo | connecting | host | guest
   phase: 'idle',                // idle | connecting | lobby | playing
@@ -89,7 +99,11 @@ const NET = {
   scoreSignature: '',
   connectTimer: 0,
   roomsBusy: false,
-  roomsTimer: 0
+  roomsTimer: 0,
+  quick: null,                  // in-flight quick-play plan, or null
+  countdown: 0,
+  countdownTimer: 0,
+  autoStartHeld: false
 };
 
 function netIsHost() { return NET.mode === 'host'; }
@@ -223,13 +237,14 @@ function netRenderRooms(rooms, message) {
   if (!rooms || !rooms.length) {
     const empty = document.createElement('li');
     empty.className = 'rooms-empty';
-    empty.textContent = message || 'No open rooms — create one.';
+    empty.textContent = message || 'Nothing running — press PLAY to open a room.';
     list.appendChild(empty);
     return;
   }
 
   for (const room of rooms) {
     const li = document.createElement('li');
+    if (room.inProgress) li.className = 'busy';
 
     const code = document.createElement('strong');
     code.textContent = room.code;
@@ -243,18 +258,132 @@ function netRenderRooms(rooms, message) {
     seats.textContent = room.players + '/' + room.max;
     li.appendChild(seats);
 
-    const join = document.createElement('button');
-    join.className = 'mini-btn';
-    join.type = 'button';
-    join.textContent = 'JOIN';
-    join.addEventListener('click', () => {
-      const input = document.getElementById('roomCode');
-      if (input) input.value = room.code;
-      netConnect('join', room.code);
-    });
-    li.appendChild(join);
+    /* A running room is shown for the population it proves, not the seat it
+       cannot offer, so it gets a label where the others get a button. */
+    if (room.inProgress) {
+      const tag = document.createElement('b');
+      tag.className = 'tag';
+      tag.textContent = 'IN PROGRESS';
+      li.appendChild(tag);
+    } else {
+      const join = document.createElement('button');
+      join.className = 'mini-btn';
+      join.type = 'button';
+      join.textContent = 'JOIN';
+      join.addEventListener('click', () => {
+        const input = document.getElementById('roomCode');
+        if (input) input.value = room.code;
+        netConnect('join', room.code);
+      });
+      li.appendChild(join);
+    }
 
     list.appendChild(li);
+  }
+}
+
+/* One fetch, two callers: the menu poller repaints the browser with it and
+   quick play chooses from it. Quick play deliberately does not reuse the
+   poller's last answer — a five-second-old list is old enough to send someone
+   at a room that has already filled or started. */
+function netFetchRooms() {
+  const url = netRoomsURL();
+  if (!url || typeof fetch !== 'function')
+    return Promise.reject(new Error('no room server'));
+
+  const control = typeof AbortController === 'function' ? new AbortController() : null;
+  const bail = control ? setTimeout(() => control.abort(), 4000) : 0;
+  const done = () => { if (bail) clearTimeout(bail); };
+
+  return fetch(url, { cache: 'no-store', signal: control ? control.signal : undefined })
+    .then(response => (response.ok ? response.json() : Promise.reject(response.status)))
+    .then(body => {
+      done();
+      return {
+        rooms: NETP.cleanRoomSummaries(body && body.rooms, NETP.MAX_ROOM_LIST),
+        online: body && body.online
+      };
+    }, error => {
+      done();
+      return Promise.reject(error);
+    });
+}
+
+function netRefreshRooms(manual) {
+  if (NET.roomsBusy) return;
+  if (!manual && !netRoomsPanelOpen()) return;
+
+  const url = netRoomsURL();
+  if (!url) {
+    netRenderRooms(null, 'The multiplayer server address is invalid.');
+    return;
+  }
+
+  NET.roomsBusy = true;
+  netFetchRooms()
+    .then(result => {
+      /* A refresh that lands after the player has already left the menu must
+         not repaint a list they can no longer act on. */
+      if (netRoomsPanelOpen()) netRenderRooms(result.rooms);
+      netRenderOnline(result.online);
+    })
+    .catch(() => {
+      if (netRoomsPanelOpen())
+        netRenderRooms(null, 'No room server reachable.');
+      netRenderOnline(null);
+    })
+    .then(() => { NET.roomsBusy = false; });
+}
+
+/* PLAY is the entire matchmaking interface for anyone who does not care what a
+   room is: take the busiest one with a seat free, and open one when there is
+   nothing to join. Fullest-first on purpose — a thin population belongs in one
+   match rather than scattered across four rooms of one. */
+function netQuickPlay() {
+  if (NET.phase === 'connecting' || netIsMultiplayer()) return;
+
+  netSetMenuBusy(true);
+  netStatus('Finding a match…');
+  netRenderRooms(null, 'Looking for a match…');
+
+  netFetchRooms()
+    .then(result => {
+      if (NET.phase === 'connecting') return;
+      if (netRoomsPanelOpen()) netRenderRooms(result.rooms);
+      netRenderOnline(result.online);
+      netQuickNext({ candidates: netQuickCandidates(result.rooms) });
+    })
+    .catch(() => {
+      /* Failing to browse is not the same as failing to play: creating a room
+         still works on a relay that just missed an HTTP poll, and if it really
+         is down, the socket says so in one clear sentence instead of two. */
+      if (NET.phase !== 'connecting') netQuickNext({ candidates: [] });
+    });
+}
+
+function netQuickCandidates(rooms) {
+  return (rooms || [])
+    .filter(room => !room.inProgress && room.players < room.max)
+    .sort((a, b) => b.players - a.players)
+    .map(room => room.code);
+}
+
+function netQuickNext(plan) {
+  const code = plan.candidates.shift();
+  if (code) {
+    netStatus('Joining ' + code + '…');
+    netConnect('join', code, plan);
+    return;
+  }
+  plan.creating = true;
+  netStatus('Opening a room…');
+  netConnect('create', '', plan);
+}
+
+function netSetMenuBusy(busy) {
+  for (const id of ['quickPlay', 'hostGame', 'joinGame', 'play']) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !!busy;
   }
 }
 
@@ -351,6 +480,7 @@ function netShowLobby() {
     start.disabled = NET.phase !== 'lobby';
   }
   netRenderMembers();
+  netUpdateAutoStart();
 }
 
 function netShowMainMenu(message) {
@@ -359,15 +489,98 @@ function netShowMainMenu(message) {
   if (menu) { menu.hidden = false; menu.classList.remove('pause'); }
   if (lobby) lobby.hidden = true;
   const play = document.getElementById('play');
-  if (play) { play.textContent = 'SOLO'; play.disabled = false; }
-  const host = document.getElementById('hostGame');
-  const join = document.getElementById('joinGame');
-  if (host) host.disabled = false;
-  if (join) join.disabled = false;
+  if (play) play.textContent = 'SOLO';
+  netSetMenuBusy(false);
   const note = document.getElementById('menuNote');
   if (note) note.textContent = message ||
-    'Join an open room below, create your own, or enter a six-character code.';
+    'PLAY finds you a room with people in it. SOLO is you and eight bots.';
   netRefreshRooms(true);
+}
+
+/* ---- automatic start ----------------------------------------------------
+   The lobby used to wait on a person: guests sat until the host clicked, and a
+   host who wandered off froze everyone behind them. It now waits on a clock
+   the host can stop, and START MATCH is left for the impatient. */
+
+function netAutoStartSeconds() {
+  return NET.members.length >= (NETP ? NETP.MAX_PLAYERS : 4)
+    ? NET_AUTOSTART_FULL_SECONDS
+    : NET_AUTOSTART_SECONDS;
+}
+
+function netCancelAutoStart(held) {
+  if (NET.countdownTimer) clearInterval(NET.countdownTimer);
+  NET.countdownTimer = 0;
+  NET.countdown = 0;
+  if (held) NET.autoStartHeld = true;
+  netRenderCountdown();
+}
+
+function netUpdateAutoStart() {
+  if (!netIsHost() || NET.phase !== 'lobby' || NET.autoStartHeld ||
+      NET.members.length < 2) {
+    netCancelAutoStart();
+    return;
+  }
+
+  const seconds = netAutoStartSeconds();
+  /* A room filling up shortens the wait but never lengthens it: whoever is
+     already watching the number count down should not see it jump back up. */
+  if (!NET.countdownTimer) {
+    NET.countdown = seconds;
+    NET.countdownTimer = setInterval(netTickAutoStart, 1000);
+  } else if (seconds < NET.countdown) {
+    NET.countdown = seconds;
+  }
+  netRenderCountdown();
+}
+
+function netTickAutoStart() {
+  if (!netIsHost() || NET.phase !== 'lobby' || NET.members.length < 2) {
+    netCancelAutoStart();
+    return;
+  }
+  NET.countdown--;
+  if (NET.countdown > 0) {
+    netRenderCountdown();
+    return;
+  }
+  netCancelAutoStart();
+  netHostStart();
+}
+
+function netRenderCountdown() {
+  const wrap = document.getElementById('lobbyCountdown');
+  const text = document.getElementById('countdownText');
+  const hold = document.getElementById('holdStart');
+  if (!wrap || !text) return;
+
+  const show = (message, holdable) => {
+    text.textContent = message;
+    if (hold) hold.hidden = !holdable;
+    wrap.hidden = false;
+  };
+
+  if (!netIsMultiplayer() || NET.phase !== 'lobby') {
+    wrap.hidden = true;
+    return;
+  }
+  if (!netIsHost()) {
+    /* A guest cannot see the host's clock without a message this protocol
+       version does not have, but it can be told the rule instead of being left
+       to watch a roster that never moves. */
+    show('Waiting for the host — matches start on their own.', false);
+    return;
+  }
+  if (NET.countdownTimer) {
+    show('Starting in ' + NET.countdown + '…', true);
+    return;
+  }
+  if (NET.autoStartHeld && NET.members.length >= 2) {
+    show('Auto-start held — press START MATCH when you are ready.', false);
+    return;
+  }
+  wrap.hidden = true;
 }
 
 function netSetPauseMenu(paused) {
@@ -454,12 +667,16 @@ function netResetTransport() {
   NET.migration = null;
   NET.lastKillerId = null;
   NET.scoreSignature = '';
+  NET.quick = null;
+  NET.autoStartHeld = false;
+  netCancelAutoStart();
   NET.manualClose = false;
 }
 
-function netConnect(kind, requestedRoom) {
+function netConnect(kind, requestedRoom, quickPlan) {
   if (!NETP || typeof WebSocket !== 'function') {
     netStatus('Multiplayer is not supported in this browser.', 'error');
+    netSetMenuBusy(false);
     return;
   }
   const nameEl = document.getElementById('playerName');
@@ -469,6 +686,7 @@ function netConnect(kind, requestedRoom) {
   const room = NETP.normalizeRoomCode(requestedRoom || '');
   if (kind === 'join' && room.length !== 6) {
     netStatus('Enter the six-character room code.', 'error');
+    netSetMenuBusy(false);
     return;
   }
 
@@ -479,13 +697,12 @@ function netConnect(kind, requestedRoom) {
   NET.mode = 'connecting';
   NET.phase = 'connecting';
   NET.wanted = { kind, name, room, listed };
-  netStatus(kind === 'create' ? 'Creating room…' : 'Finding room ' + room + '…');
-  const hostBtn = document.getElementById('hostGame');
-  const joinBtn = document.getElementById('joinGame');
-  const playBtn = document.getElementById('play');
-  if (hostBtn) hostBtn.disabled = true;
-  if (joinBtn) joinBtn.disabled = true;
-  if (playBtn) playBtn.disabled = true;
+  /* Reinstalled after the reset: a quick-play run outlives the individual
+     connection attempts it is made of. */
+  NET.quick = quickPlan || null;
+  if (!NET.quick)
+    netStatus(kind === 'create' ? 'Creating room…' : 'Finding room ' + room + '…');
+  netSetMenuBusy(true);
 
   const socketURL = netWsURL();
   if (!socketURL) {
@@ -530,9 +747,7 @@ function netConnect(kind, requestedRoom) {
         netStatus('Connection closed.', 'error');
       }
     }
-    if (hostBtn) hostBtn.disabled = false;
-    if (joinBtn) joinBtn.disabled = false;
-    if (playBtn) playBtn.disabled = false;
+    netSetMenuBusy(false);
   });
   NET.connectTimer = setTimeout(() => {
     if (NET.phase !== 'connecting') return;
@@ -569,8 +784,16 @@ function netHandleWire(raw) {
        already played a round leaves NET.round behind otherwise, and every
        subsequent `start` looks like it skipped ahead and gets ignored. */
     NET.round = Number.isSafeInteger(msg.round) && msg.round >= 0 ? msg.round : 0;
+    /* Whether this room was chosen or fallen back to changes what the host
+       needs to hear, and the plan is finished either way. */
+    const opened = !!NET.quick && !!NET.quick.creating;
+    NET.quick = null;
     netShowLobby();
-    netStatus(netIsHost() ? 'Room ready — share the code, then start.' : 'Connected — waiting for the host.');
+    netStatus(netIsHost()
+      ? (opened
+          ? 'Nothing to join, so this room is yours — copy the invite, or start now with bots.'
+          : 'Room ready — share the code, then start.')
+      : 'Joined ' + NET.room + '.');
     return;
   }
   if (msg.t === 'host-changed') {
@@ -610,6 +833,7 @@ function netHandleWire(raw) {
     if (!netIsMultiplayer() || !members || !members.some(member => member.id === NET.id)) return;
     NET.members = members;
     netRenderMembers();
+    netUpdateAutoStart();
     if (NET.phase === 'migrating' && netIsHost()) {
       const liveGuests = new Set(
         members.filter(member => member.id !== NET.id).map(member => member.id));
@@ -685,7 +909,16 @@ function netHandleWire(raw) {
       : 'Multiplayer error.';
     NET.starting = false;
     if (NET.phase === 'connecting') {
+      const plan = NET.quick;
+      /* Only a join can be retried elsewhere. A create that fails failed for a
+         reason the next attempt would hit too. */
+      const retry = !!plan && !plan.creating &&
+        NET_QUICK_RETRY_ERRORS.indexOf(msg.code) !== -1;
       netResetTransport();
+      if (retry) {
+        netQuickNext(plan);
+        return;
+      }
       netShowMainMenu();
       netStatus(errorText, 'error');
     } else {
@@ -731,6 +964,7 @@ function netHostStart() {
 function netBeginMatch() {
   NET.phase = 'playing';
   NET.starting = false;
+  netCancelAutoStart();
   NET.inputSeq = 0;
   NET.lastFireSeqSent = 0;
   NET.inputSentTimes.clear();
@@ -2043,15 +2277,43 @@ function initNetworkUI() {
   const roomInput = document.getElementById('roomCode');
   const invited = NETP.normalizeRoomCode(QS.get('room') || '');
   if (roomInput && invited) roomInput.value = invited;
-  const note = document.getElementById('menuNote');
-  if (note && invited) note.textContent = 'Invite detected — enter a name and join ' + invited + '.';
 
+  document.getElementById('quickPlay').addEventListener('click', () => {
+    SFX.init(); SFX.resume(); SFX.ui();
+    netQuickPlay();
+  });
   document.getElementById('hostGame').addEventListener('click', () => netConnect('create'));
   document.getElementById('joinGame').addEventListener('click', () => netConnect('join', roomInput.value));
+
+  const toggle = document.getElementById('roomToggle');
+  const options = document.getElementById('roomOptions');
+  if (toggle && options) {
+    toggle.addEventListener('click', () => {
+      const open = options.hidden;
+      options.hidden = !open;
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    /* Someone who arrived on a link already cares about a specific room, so
+       give them the code they came with rather than making them find it. */
+    if (invited) {
+      options.hidden = false;
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  const hold = document.getElementById('holdStart');
+  if (hold) hold.addEventListener('click', () => { SFX.ui(); netCancelAutoStart(true); });
 
   const refresh = document.getElementById('refreshRooms');
   if (refresh) refresh.addEventListener('click', () => netRefreshRooms(true));
   netRefreshRooms(true);
+
+  /* An invite link is an instruction, not a suggestion. Dial it — the callsign
+     is either remembered or generated, and neither is worth a click. */
+  if (invited) {
+    netStatus('Joining ' + invited + '…');
+    netConnect('join', invited);
+  }
   /* Poll only while the setup menu is actually on screen — netRefreshRooms
      bails out on its own once the match starts or the pause card is up. */
   NET.roomsTimer = setInterval(() => netRefreshRooms(false), 5000);

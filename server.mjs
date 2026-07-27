@@ -183,27 +183,34 @@ export function createRelayServer(options = {}) {
     return message.events.every((event) => validCheckpointEvent(event, actorIds));
   }
 
-  /* The room browser only ever advertises rooms you could actually walk into
-     right now: opted in to listing, still between rounds, and with a seat
-     free. A room that fails any of those is simply absent rather than shown
-     and then refused on click. */
+  /* Every room that opted in to listing, whether or not you can walk into it
+     right now. Hiding running rooms made the browser read "no open rooms" at
+     exactly the times the game had the most people in it, so a match in
+     progress is advertised as unjoinable rather than left out — the population
+     is the point, not just the vacancies.
+
+     Joinable rooms are emitted first so a busy relay spends the list budget on
+     seats you can take before it spends it on scenery. */
   function listedRooms() {
-    const out = [];
+    const open = [];
+    const running = [];
 
     for (const room of rooms.values()) {
-      if (out.length >= maxListedRooms) break;
-      if (!room.listed || room.started || !room.host) continue;
-      if (room.members.size >= Protocol.MAX_PLAYERS) continue;
+      if (!room.listed || !room.host) continue;
 
-      out.push({
+      const summary = {
         code: room.code,
         host: room.host.name,
         players: room.members.size,
-        max: Protocol.MAX_PLAYERS
-      });
+        max: Protocol.MAX_PLAYERS,
+        inProgress: room.started
+      };
+
+      if (room.started) running.push(summary);
+      else if (room.members.size < Protocol.MAX_PLAYERS) open.push(summary);
     }
 
-    return out;
+    return open.concat(running).slice(0, maxListedRooms);
   }
 
   async function handleHttp(request, response) {

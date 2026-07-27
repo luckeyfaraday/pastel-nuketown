@@ -154,6 +154,10 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   background:linear-gradient(180deg,#fff2c9,#ffe08a);box-shadow:0 6px 0 var(--ink),0 12px 26px rgba(74,63,92,.28);
   transition:transform .09s,box-shadow .09s}
 .menu-btn.alt{font-size:19px;padding:14px 25px 16px;background:linear-gradient(180deg,#e3f7ff,#a8dcf0)}
+/* SOLO is the second choice on the title screen but the same button becomes
+   RESUME / ENTER MATCH on the pause card, where it is the only thing to press
+   and has to stay the loudest. */
+#menu:not(.pause) #play{font-size:19px;padding:14px 25px 16px;background:linear-gradient(180deg,#e3f7ff,#a8dcf0)}
 .menu-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 0 var(--ink),0 16px 30px rgba(74,63,92,.3)}
 .menu-btn:active:not(:disabled){transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
 .menu-btn:disabled,.mini-btn:disabled,#again:disabled{cursor:not-allowed!important;opacity:.55;filter:saturate(.45)}
@@ -168,6 +172,17 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 .listed{display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--disp);font-size:11px;
   font-weight:700;letter-spacing:.11em;color:var(--ink-soft)}
 .listed input{width:15px;height:15px;accent-color:#d4638f;cursor:pointer}
+/* Hosting a room by hand is a minority path now that PLAY picks one; it stays
+   one click away rather than competing with the button most people want. */
+.link-btn{pointer-events:auto;cursor:pointer;border:0;background:none;padding:2px 6px;
+  font-family:var(--disp);font-size:11px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft);
+  text-decoration:underline;text-underline-offset:3px}
+.link-btn:hover{color:var(--ink)}
+.link-btn::after{content:" \25BE"}
+.link-btn[aria-expanded="true"]::after{content:" \25B4"}
+#roomOptions{width:min(330px,100%);display:flex;flex-direction:column;gap:9px}
+#roomOptions[hidden]{display:none}
+.opt-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 /* ---------- room browser ---------- */
 .rooms{width:min(390px,100%);display:flex;flex-direction:column;gap:7px}
 .rooms-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
@@ -183,6 +198,11 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 #roomList li .mini-btn{padding:4px 11px 5px;font-size:11px}
 #roomList li.rooms-empty{display:block;text-align:center;border-style:dashed;color:var(--ink-soft);
   font-size:12px;font-weight:600;letter-spacing:.04em;background:rgba(255,255,255,.42)}
+/* A running match is shown but not offered: present enough to prove the game
+   has people in it, faded enough that nobody aims for a seat it cannot give. */
+#roomList li.busy{opacity:.6;border-style:dashed}
+#roomList li .tag{font-size:10px;letter-spacing:.09em;color:var(--ink-soft);white-space:nowrap;
+  padding:4px 9px 5px;border:2px dashed rgba(74,63,92,.5);border-radius:10px}
 #menuNote,#netStatus{min-height:18px;text-align:center;font-family:var(--disp);font-size:12px;font-weight:600;
   letter-spacing:.035em;color:var(--ink-soft)}
 #netStatus{margin-top:9px;color:#4f7389}
@@ -202,6 +222,10 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   font-family:var(--disp);font-size:14px}
 #roster li i{width:17px;height:17px;border:2px solid var(--ink);border-radius:5px}
 #roster li b{font-size:10px;letter-spacing:.1em;color:var(--ink-soft)}
+#lobbyCountdown{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:15px;
+  font-family:var(--disp);font-size:13px;font-weight:700;letter-spacing:.05em;color:#4f7389;text-align:center}
+#lobbyCountdown[hidden]{display:none}
+#lobbyCountdown .mini-btn{padding:4px 11px 5px;font-size:11px}
 .lobby-actions{justify-content:center;margin-top:16px}
 #netStart{font-size:20px;padding:11px 25px 13px}
 .keys{margin-top:20px;display:flex;gap:9px;flex-wrap:wrap;justify-content:center;max-width:640px}
@@ -227,7 +251,7 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   .lobby-actions{flex-wrap:wrap}
   #netStart{flex:1 1 180px}
   .menu-btn{font-size:22px;padding:12px 35px 14px}
-  .menu-btn.alt{font-size:17px;padding:12px 18px 14px}
+  .menu-btn.alt,#menu:not(.pause) #play{font-size:17px;padding:12px 18px 14px}
   .keys{gap:6px;padding:0 6px}
   .keys span{padding:4px 8px 5px}
 }
@@ -247,7 +271,7 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   .online-count{display:none}
   .identity{padding-top:3px;padding-bottom:3px}
   .menu-btn{padding-top:8px;padding-bottom:10px}
-  .menu-btn.alt{padding-top:8px;padding-bottom:10px}
+  .menu-btn.alt,#menu:not(.pause) #play{padding-top:8px;padding-bottom:10px}
   #roomCode{padding-top:5px;padding-bottom:6px}
   .keys span{font-size:10px;padding:2px 7px 3px}
 }

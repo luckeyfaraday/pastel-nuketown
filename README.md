@@ -2,11 +2,12 @@
 
 Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs entirely in the browser. Built with Three.js and vanilla JavaScript, it features a pastel-styled Nuketown-inspired arena with host-authoritative multiplayer over WebSockets. Play solo against AI bots or create a room for up to 4 players. No downloads, no plugins, no accounts — open the page and play.
 
-![Pastel Nuketown title screen showing the pastel-coloured arena map with two houses, a bus, and a truck](shots/title.png)
+![Pastel Nuketown title screen: a PLAY button over the pastel arena, with a room browser listing two joinable rooms and one marked IN PROGRESS](shots/title.png)
 
 ## Features
 
 - **Browser-based FPS** — runs in any modern browser (Chrome, Firefox, Edge, Safari) with no install
+- **One-button matchmaking** — PLAY joins the busiest room with a seat free, opens one when there is nothing to join, and starts the match on a countdown instead of waiting for someone to click
 - **Plays on a phone** — on-screen thumbstick, look-drag and button cluster appear automatically on touch devices, with an analog stick the netcode carries as-is
 - **Multiplayer rooms** — host-authoritative relay server supports up to 4 players per room with client-side interpolation and prediction
 - **AI bots** — three difficulty levels (easy, normal, hard) with navigation mesh pathfinding, burst-fire combat, and retreat behaviour
@@ -34,14 +35,26 @@ Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs enti
 
 ```bash
 npm install
-npm start          # builds index.html, then starts the relay on port 3000
+npm start          # builds index.html, then starts the relay on port 8080
 ```
 
-Open `http://localhost:3000` in a modern browser. Click the canvas to lock the pointer and start playing.
+Open `http://localhost:8080` in a modern browser (set `PORT` to use another). Click the canvas to lock the pointer and start playing.
 
 ### How to play on LAN with friends
 
-The WebSocket relay accepts any origin by default. Players on your local network can connect at `http://<your-ip>:3000` without any configuration. To restrict origins in production, set `ALLOWED_ORIGINS` in `deploy/provision.sh`.
+The WebSocket relay accepts any origin by default. Players on your local network can connect at `http://<your-ip>:8080` without any configuration. To restrict origins in production, set `ALLOWED_ORIGINS` in `deploy/provision.sh`.
+
+## Matchmaking
+
+**PLAY** is the whole flow for anyone who does not want to think about rooms. It reads the room browser, joins the room with the most players and a seat still free, and opens a room of its own only when there is nothing to join. Fullest-first on purpose: a thin population belongs in one match rather than scattered across four rooms of one.
+
+Once a room holds two people the host's lobby counts down and starts on its own — 15 seconds, or 5 once the room is full. A host saving a seat for a friend presses **HOLD** to stop the clock; **START MATCH** is still there for the impatient. Nobody is left staring at a roster waiting for a person who wandered off.
+
+![The room lobby showing a two-player roster, a COPY INVITE button, and a countdown reading "Starting in 11…" next to a HOLD button](shots/lobby.png)
+
+The browser lists rooms in a live match as well as open ones, greyed out and marked `IN PROGRESS`. They cannot be joined until the round ends — that comes with drop-in, which needs a protocol change — but hiding them is what used to make a busy relay read "no open rooms" at exactly the times the game had the most people in it.
+
+An invite link (`?room=CODE`, produced by **COPY INVITE**) joins that room on arrival rather than typing the code into the box for you. **ROOM OPTIONS** holds the manual controls: join by code, create a room, and whether that room is listed publicly.
 
 ## Controls
 
@@ -124,7 +137,7 @@ npm test           # run the test suite (node --test)
 npm run check      # syntax-check every source file + tests + build freshness
 ```
 
-The test suite covers bot navigation, weapon validation, wire protocol parsing, room lifecycle, origin allowlisting, hostile-input rejection, and — through a headless harness that runs the real client — guest-side prediction and the host/guest fairness baseline.
+The test suite covers bot navigation, weapon validation, wire protocol parsing, room lifecycle, origin allowlisting, hostile-input rejection, and — through a headless harness that runs the real client — guest-side prediction, the host/guest fairness baseline, and the matchmaking decisions PLAY makes on the player's behalf.
 
 ### The pre-commit hook
 
@@ -146,7 +159,13 @@ It runs only when a build input is staged, stays out of rebases, merges and docs
 No. Pastel Nuketown runs entirely in the browser. Open the page, click the canvas, and play. The only server-side requirement is Node.js >= 18.14 to run the WebSocket relay.
 
 **How many players can join a multiplayer room?**
-Up to 4 players per room. The server enforces this limit in the protocol (`MAX_PLAYERS = 4`).
+Up to 4 players per room. The server enforces this limit in the protocol (`MAX_PLAYERS = 4`). A room fills the remaining slots with bots, so a match is always nine combatants.
+
+**How do I find a game?**
+Press PLAY. It picks the busiest room with a seat free and opens one for you if there is nothing to join, then the match starts on a countdown. You never have to know what a room code is unless a friend sends you one.
+
+**Can I join a match that has already started?**
+Not yet. Running rooms appear in the browser marked `IN PROGRESS` so you can see the game is alive, but joining one mid-round needs a protocol change and is tracked separately.
 
 **Can I play without other people?**
 Yes. Solo mode fills the arena with 8 AI bots across three difficulty levels. Bots use A* pathfinding on a navigation mesh and exhibit patrol, hunt, engage, reposition, and retreat behaviours.

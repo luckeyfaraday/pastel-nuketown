@@ -409,3 +409,119 @@ test('neither peer outruns the relay\'s message budget', () => {
     `cached migration state is ${migrationBytes} bytes against a ` +
     `${SIM.NETP.MAX_MESSAGE_BYTES}-byte message limit`);
 });
+
+/* ---------------------------------------------------------------------
+   Matchmaking
+
+   These drive the real client's matchmaking functions in a bare instance --
+   no link, no match. The point is that the decisions PLAY makes on the
+   player's behalf are decisions the repo can check, rather than something
+   that only ever ran in a browser nobody was measuring.
+   --------------------------------------------------------------------- */
+
+function matchmakingClient() {
+  return SIM.createInstance({ ms: 0 });
+}
+
+test('quick play offers the busiest room with a seat free', () => {
+  const client = matchmakingClient();
+  const pick = (rooms) =>
+    client.run(`netQuickCandidates(${JSON.stringify(rooms)})`);
+
+  assert.deepEqual(pick([
+    { code: 'AAAAAA', host: 'A', players: 1, max: 4, inProgress: false },
+    { code: 'BBBBBB', host: 'B', players: 3, max: 4, inProgress: false },
+    { code: 'CCCCCC', host: 'C', players: 2, max: 4, inProgress: false }
+  ]), ['BBBBBB', 'CCCCCC', 'AAAAAA'],
+  'a thin population belongs in one match, so the fullest room goes first');
+
+  assert.deepEqual(pick([
+    { code: 'AAAAAA', host: 'A', players: 3, max: 4, inProgress: true },
+    { code: 'BBBBBB', host: 'B', players: 4, max: 4, inProgress: true },
+    { code: 'CCCCCC', host: 'C', players: 1, max: 4, inProgress: false }
+  ]), ['CCCCCC'],
+  'a running room is scenery: listed for its population, never dialled');
+
+  assert.deepEqual(pick([]), [], 'nothing to join is answered by hosting');
+  assert.deepEqual(pick(null), [], 'an unreachable browser is not a crash');
+});
+
+test('the lobby starts itself, and stops when the host says so', () => {
+  const client = matchmakingClient();
+  const started = () => client.get('SIM_STARTS');
+  client.run(`
+    var SIM_STARTS = 0;
+    netHostStart = function () { SIM_STARTS++; };
+    NET.mode = 'host';
+    NET.phase = 'lobby';
+    NET.members = [{ id: 'a', name: 'A', role: 'host' }];
+  `);
+
+  try {
+    client.run('netUpdateAutoStart();');
+    assert.strictEqual(client.get('NET.countdownTimer'), 0,
+      'one player in a room is not a match waiting to happen');
+
+    client.run(`
+      NET.members.push({ id: 'b', name: 'B', role: 'guest' });
+      netUpdateAutoStart();
+    `);
+    assert.strictEqual(client.get('NET.countdown'), client.get('NET_AUTOSTART_SECONDS'),
+      'a second arrival arms the clock');
+
+    /* Filling the room shortens the wait; the count already on screen must
+       never jump back up when somebody joins or leaves. */
+    client.run('netTickAutoStart(); netTickAutoStart();');
+    const midway = client.get('NET.countdown');
+    client.run(`
+      NET.members.push({ id: 'c', name: 'C', role: 'guest' });
+      netUpdateAutoStart();
+    `);
+    assert.strictEqual(client.get('NET.countdown'), midway,
+      'a third player does not restart a countdown already running');
+
+    client.run(`
+      NET.members.push({ id: 'd', name: 'D', role: 'guest' });
+      netUpdateAutoStart();
+    `);
+    const full = client.get('NET_AUTOSTART_FULL_SECONDS');
+    assert.strictEqual(client.get('NET.countdown'), full,
+      'a full room stops pretending to wait for anyone');
+
+    assert.strictEqual(started(), 0, 'nothing has started yet');
+    for (let i = 0; i < full; i++) client.run('netTickAutoStart();');
+    assert.strictEqual(started(), 1, 'the clock, not a person, starts the match');
+    assert.strictEqual(client.get('NET.countdownTimer'), 0,
+      'and it stops counting once it has');
+
+    /* HOLD is the escape hatch for a host keeping a seat for a friend: it
+       disarms for good rather than re-arming on the next roster change. */
+    client.run('netUpdateAutoStart(); netCancelAutoStart(true);');
+    assert.strictEqual(client.get('NET.autoStartHeld'), true);
+    client.run('netUpdateAutoStart();');
+    assert.strictEqual(client.get('NET.countdownTimer'), 0,
+      'held means held, even when the roster changes again');
+    assert.strictEqual(started(), 1, 'and nothing starts behind the host\'s back');
+  } finally {
+    client.run('netCancelAutoStart();');
+  }
+});
+
+test('a guest never runs the host\'s countdown', () => {
+  const client = matchmakingClient();
+  client.run(`
+    var SIM_STARTS = 0;
+    netHostStart = function () { SIM_STARTS++; };
+    NET.mode = 'guest';
+    NET.phase = 'lobby';
+    NET.members = [
+      { id: 'a', name: 'A', role: 'host' },
+      { id: 'b', name: 'B', role: 'guest' }
+    ];
+    netUpdateAutoStart();
+  `);
+
+  assert.strictEqual(client.get('NET.countdownTimer'), 0,
+    'only the authority may start a round, so only it counts down');
+  assert.strictEqual(client.get('SIM_STARTS'), 0);
+});
