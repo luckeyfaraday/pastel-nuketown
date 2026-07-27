@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Last gate before a foreign identity leaves the machine.
+#
+# pre-commit already refuses to create these, but it is skippable with
+# --no-verify and it never runs for commits replayed by a rebase. Anything
+# that slipped through is still cheap to amend while it is local, and
+# effectively permanent the moment it is published.
+#
+# Shared by every linked worktree: hooks live in the common .git directory.
+set -euo pipefail
+
+allowed_identity='^(luckeyfaraday@proton\.me|soysatoshi@protonmail\.com)$'
+zero='0000000000000000000000000000000000000000'
+bad=0
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+
+  # A brand-new branch has no remote counterpart to diff against, so ask for
+  # everything not already published anywhere on the remote instead.
+  if [ "$remote_sha" = "$zero" ]; then
+    range=$(git rev-list "$local_sha" --not --remotes=origin)
+  else
+    range=$(git rev-list "$remote_sha..$local_sha")
+  fi
+
+  for sha in $range; do
+    while IFS= read -r email; do
+      if ! printf '%s' "$email" | grep -qE "$allowed_identity"; then
+        echo "pre-push: $(git rev-parse --short "$sha") is attributed to <$email>" >&2
+        bad=1
+      fi
+    done < <(git show -s --format='%ae%n%ce' "$sha" | sort -u)
+  done
+done
+
+if [ "$bad" -ne 0 ]; then
+  echo "" >&2
+  echo "pre-push: refusing to publish commits under a foreign identity." >&2
+  echo "          rewrite them first, e.g." >&2
+  echo "          git rebase -x 'git commit --amend --no-edit --reset-author' <base>" >&2
+  echo "          or add the address to allowed_identity here if it is yours." >&2
+  exit 1
+fi

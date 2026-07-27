@@ -14,6 +14,31 @@ set -euo pipefail
 
 git_dir=$(git rev-parse --git-dir)
 
+# Refuse to sign a commit with an identity that is not ours.
+#
+# `git -c user.email=...` and the GIT_AUTHOR_* / GIT_COMMITTER_* environment
+# variables outrank every config file, so any tool that supplies its own
+# address silently wins over ~/.gitconfig. Author metadata is permanent once
+# pushed — forks and clones keep it well beyond the reach of a rewrite — so
+# it is worth one string comparison per commit to get right up front.
+#
+# Checked before the rebase/merge bail-outs below: this is the one thing that
+# has to hold on every commit, replays included.
+allowed_identity='^(luckeyfaraday@proton\.me|soysatoshi@protonmail\.com)$'
+for role in AUTHOR COMMITTER; do
+  ident=$(git var "GIT_${role}_IDENT")
+  email=${ident##*<}
+  email=${email%%>*}
+  if ! printf '%s' "$email" | grep -qE "$allowed_identity"; then
+    echo "pre-commit: refusing to commit as <$email> ($role)." >&2
+    echo "            expected one of: luckeyfaraday@proton.me" >&2
+    echo "            a 'git -c user.email=' override outranks ~/.gitconfig;" >&2
+    echo "            drop it, or add the address to allowed_identity in" >&2
+    echo "            .githooks/pre-commit if it is genuinely yours." >&2
+    exit 1
+  fi
+done
+
 # Stay out of the way of operations that replay or combine existing commits.
 # Rebase does not run this hook for replayed commits, but `rebase --continue`
 # after a conflict does, and regenerating an artifact mid-conflict fights the
