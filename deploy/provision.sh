@@ -8,12 +8,23 @@
 set -euo pipefail
 
 DOMAIN="${DOMAIN:-relay.luckeysystems.com}"
+SITE="${SITE:-nuketown.luckeysystems.com}"
 ADMIN="${ADMIN:-alan}"
 APP_DIR="${APP_DIR:-/opt/pastel-nuketown}"
 REPO="${REPO:-https://github.com/luckeyfaraday/pastel-nuketown.git}"
 # Until the multiplayer work lands on main, provision from the branch:
 #   BRANCH=multiplayer bash provision.sh
 BRANCH="${BRANCH:-main}"
+
+# Origins allowed to open a socket here. WebSockets ignore the same-origin
+# policy, so without this any page on the internet can dial the relay and sit
+# in the rooms. Two entries: the site the game is served from, and the relay
+# itself (it serves index.html at / as well).
+#
+# Note the '-' rather than ':-' — an explicitly empty ALLOWED_ORIGINS= means
+# "accept every origin", which is what a LAN box or a private relay wants:
+#   ALLOWED_ORIGINS= bash provision.sh
+ALLOWED_ORIGINS="${ALLOWED_ORIGINS-https://$SITE,https://$DOMAIN}"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$1"; }
 
@@ -69,8 +80,10 @@ npm run build
 npm test
 chown -R nuketown:nuketown "$APP_DIR"
 
-say "systemd unit"
-cat > /etc/systemd/system/nuketown.service <<'UNIT'
+say "systemd unit (allowed origins: ${ALLOWED_ORIGINS:-<any>})"
+# Unquoted heredoc: $ALLOWED_ORIGINS is expanded below. Keep literal '$' and
+# systemd specifiers out of this block, or escape them as '\$' / '%%'.
+cat > /etc/systemd/system/nuketown.service <<UNIT
 [Unit]
 Description=Pastel Nuketown relay
 After=network.target
@@ -81,8 +94,7 @@ Group=nuketown
 WorkingDirectory=/opt/pastel-nuketown
 Environment=PORT=8080
 Environment=HOST=127.0.0.1
-# Lock the relay to known origins once the site is live:
-# Environment=ALLOWED_ORIGINS=https://nuketown.luckeysystems.com,https://relay.luckeysystems.com
+Environment=ALLOWED_ORIGINS=$ALLOWED_ORIGINS
 ExecStart=/usr/bin/node server.mjs
 Restart=always
 RestartSec=3
@@ -129,6 +141,46 @@ sleep 5
 echo -n "local relay:  "; curl -fsS http://127.0.0.1:8080/rooms || echo FAILED
 echo -n "public https: "; curl -fsS "https://$DOMAIN/rooms" || echo "not ready yet (cert may still be issuing)"
 echo
+
+# A mistyped origin locks every real player out and looks exactly like a
+# broken relay, so prove the gate lets the site in before walking away.
+if [ -n "$ALLOWED_ORIGINS" ]; then
+  FIRST_ORIGIN="${ALLOWED_ORIGINS%%,*}"
+
+  acao() {
+    curl -fsS -o /dev/null -D - -H "origin: $1" http://127.0.0.1:8080/rooms 2>/dev/null \
+      | tr -d '\r' \
+      | awk 'tolower($1) == "access-control-allow-origin:" { print $2 }' || true
+  }
+  echo -n "rooms cors:   "
+  MINE="$(acao "$FIRST_ORIGIN")"
+  THEIRS="$(acao https://evil.example)"
+  if [ "$MINE" = "$FIRST_ORIGIN" ] && [ -z "$THEIRS" ]; then
+    echo "ok ($FIRST_ORIGIN shared, foreign origins not)"
+  else
+    echo "FAILED (allowed='$MINE' foreign='$THEIRS')"
+  fi
+
+  echo -n "socket gate:  "
+  # Run from APP_DIR so the bare "ws" import resolves against its node_modules.
+  cd "$APP_DIR"
+  ORIGIN="$FIRST_ORIGIN" node --input-type=module -e '
+    import { WebSocket } from "ws";
+    const dial = (origin) => new Promise((resolve) => {
+      const ws = new WebSocket("ws://127.0.0.1:8080/ws", { origin });
+      const timer = setTimeout(() => { ws.terminate(); resolve("timeout"); }, 5000);
+      const done = (result) => { clearTimeout(timer); resolve(result); };
+      ws.on("open", () => { ws.terminate(); done("open"); });
+      ws.on("error", () => done("refused"));
+    });
+    const mine = await dial(process.env.ORIGIN);
+    const theirs = await dial("https://evil.example");
+    console.log(mine === "open" && theirs === "refused"
+      ? "ok (site connects, foreign pages refused)"
+      : `FAILED (allowed=${mine} foreign=${theirs})`);
+  '
+  echo
+fi
 
 say "done — remaining manual step"
 cat <<'NEXT'
