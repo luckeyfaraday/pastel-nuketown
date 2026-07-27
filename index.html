@@ -1694,7 +1694,7 @@ if (typeof THREE === "undefined") {
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = 1;
+  var VERSION = 2;
   var MAX_PLAYERS = 4;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
@@ -1703,6 +1703,7 @@ if (typeof THREE === "undefined") {
   var MAX_ROOM_LIST = 50;
   var ALLOWED_WEAPONS = Object.freeze(['smg', 'shotgun', 'rifle']);
   var MAX_PITCH = 1.45;
+  var FIRE_INTENT_TTL = 0.2;
 
   function result(ok, value, error) {
     return {
@@ -1755,6 +1756,51 @@ if (typeof THREE === "undefined") {
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
   }
 
+  function isPrivateHost(hostname) {
+    if (typeof hostname !== 'string') return false;
+    var host = hostname.trim().toLowerCase();
+    if (host.charAt(host.length - 1) === '.') host = host.slice(0, -1);
+    if (host.charAt(0) === '[' && host.charAt(host.length - 1) === ']') {
+      host = host.slice(1, -1);
+    }
+    host = host.split('%')[0];
+
+    if (host === 'localhost' || host === '::1' || /\.local$/.test(host)) return true;
+
+    var ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4) {
+      var octets = ipv4.slice(1).map(Number);
+      if (octets.some(function (octet) { return octet > 255; })) return false;
+      return octets[0] === 127 ||
+        octets[0] === 10 ||
+        (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] === 192 && octets[1] === 168) ||
+        (octets[0] === 169 && octets[1] === 254);
+    }
+
+    if (host.indexOf(':') !== -1) {
+      var firstText = host.split(':', 1)[0];
+      if (!/^[0-9a-f]{1,4}$/.test(firstText)) return false;
+      var first = parseInt(firstText, 16);
+      return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+    }
+
+    return false;
+  }
+
+  function isWeaponStateAcknowledged(localWeaponSeq, echoedWeaponSeq) {
+    return Number.isSafeInteger(localWeaponSeq) && localWeaponSeq >= 0 &&
+      Number.isSafeInteger(echoedWeaponSeq) && echoedWeaponSeq >= localWeaponSeq;
+  }
+
+  function classifyFireIntent(alive, sprinting, fireCd, reloadT, ammo) {
+    if (!alive || sprinting) return 'drop';
+    if (reloadT > 0) return 'retain';
+    if (ammo <= 0) return 'drop';
+    if (fireCd > 0) return 'retain';
+    return 'fire';
+  }
+
   function createRoomCode(randomFn) {
     var random = typeof randomFn === 'function' ? randomFn : Math.random;
     var code = '';
@@ -1803,7 +1849,7 @@ if (typeof THREE === "undefined") {
     return out;
   }
 
-  function sanitizeInput(message, lastSeq) {
+  function sanitizeInput(message, lastSeq, lastWeaponSeq) {
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       return result(false, null, 'input must be an object');
     }
@@ -1840,8 +1886,13 @@ if (typeof THREE === "undefined") {
       return result(false, null, 'unknown weapon');
     }
     if (!Number.isSafeInteger(message.fireSeq) || message.fireSeq < 0 ||
-        !Number.isSafeInteger(message.reloadSeq) || message.reloadSeq < 0) {
+        !Number.isSafeInteger(message.reloadSeq) || message.reloadSeq < 0 ||
+        !Number.isSafeInteger(message.weaponSeq) || message.weaponSeq < 0) {
       return result(false, null, 'action counters must be non-negative safe integers');
+    }
+    var previousWeapon = Number.isSafeInteger(lastWeaponSeq) ? lastWeaponSeq : -1;
+    if (message.weaponSeq < previousWeapon) {
+      return result(false, null, 'weaponSeq must not decrease');
     }
 
     return result(true, {
@@ -1858,6 +1909,7 @@ if (typeof THREE === "undefined") {
       yaw: wrapAngle(message.yaw),
       pitch: clamp(message.pitch, -MAX_PITCH, MAX_PITCH),
       weapon: message.weapon,
+      weaponSeq: message.weaponSeq,
       reloadSeq: message.reloadSeq
     }, null);
   }
@@ -1958,8 +2010,12 @@ if (typeof THREE === "undefined") {
     MAX_ROOM_LIST: MAX_ROOM_LIST,
     ALLOWED_WEAPONS: ALLOWED_WEAPONS,
     MAX_PITCH: MAX_PITCH,
+    FIRE_INTENT_TTL: FIRE_INTENT_TTL,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    isPrivateHost: isPrivateHost,
+    isWeaponStateAcknowledged: isWeaponStateAcknowledged,
+    classifyFireIntent: classifyFireIntent,
     cleanRoomSummaries: cleanRoomSummaries,
     createRoomCode: createRoomCode,
     isFiniteNumber: isFiniteNumber,
@@ -4459,8 +4515,9 @@ function makeActor(opts) {
     onGround: false, stepPhase: 0,
     lastHitBy: null, lastHitT: -99, shield: 0,
     brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
-    netInput: null, netTarget: null, lastInputSeq: -1,
-    lastFireSeq: 0, lastReloadSeq: 0
+    netInput: null, netTarget: null, lastInputSeq: -1, lastWeaponSeq: -1,
+    inputAck: 0, weaponAck: 0,
+    lastFireSeq: 0, lastReloadSeq: 0, pendingFireUntil: 0
   };
   const w = WBY[a.weapon];
   a.ammo = w.mag; a.reserve = w.reserve;
@@ -4880,6 +4937,7 @@ function exitPointerLock() { try { if (document.exitPointerLock) document.exitPo
 
 function switchWeapon(id) {
   if (!WBY[id] || G.player.weapon === id) return;
+  if (typeof netOnLocalWeaponChanged === 'function') netOnLocalWeaponChanged();
   G.player.weapon = id;
   const w = WBY[id];
   if (G.player.ammo > w.mag) G.player.ammo = w.mag;
@@ -4975,7 +5033,25 @@ function switchRemoteWeapon(a, id) {
 /* The host simulates remote humans from their latest sequenced input.
    This intentionally mirrors local movement, but omits camera/viewmodel UI. */
 function stepRemotePlayer(a, dt) {
+  const fresh = a.netInput && G.time - (a.netInputAt || 0) <= 0.45;
+  const it = fresh ? a.netInput : {
+    fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
+    fireSeq: a.lastFireSeq, reloadSeq: a.lastReloadSeq,
+    yaw: a.yaw, pitch: a.pitch, weapon: a.weapon,
+    seq: a.inputAck, weaponSeq: a.weaponAck
+  };
+  if (fresh) {
+    a.inputAck = it.seq;
+    if (it.weaponSeq > a.weaponAck) switchRemoteWeapon(a, it.weapon);
+    a.weaponAck = it.weaponSeq;
+  }
+
+  const fireEdge = it.fireSeq > a.lastFireSeq;
+  /* Death is a permanent blocker for this life. Consume its edges before
+     returning so a late tap cannot turn into a shot immediately on respawn. */
   if (!a.alive) {
+    if (fireEdge) a.lastFireSeq = it.fireSeq;
+    a.pendingFireUntil = 0;
     a.respawnT -= dt;
     if (a.respawnT <= 0) {
       respawnActor(a);
@@ -4984,16 +5060,9 @@ function stepRemotePlayer(a, dt) {
     return;
   }
 
-  const fresh = a.netInput && G.time - (a.netInputAt || 0) <= 0.45;
-  const it = fresh ? a.netInput : {
-    fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
-    fireSeq: a.lastFireSeq, reloadSeq: a.lastReloadSeq,
-    yaw: a.yaw, pitch: a.pitch, weapon: a.weapon
-  };
   a.yaw = Number.isFinite(it.yaw) ? it.yaw : a.yaw;
   a.pitch = Number.isFinite(it.pitch) ? clamp(it.pitch, -1.45, 1.45) : a.pitch;
   a.aimYaw = a.yaw; a.aimPitch = a.pitch;
-  switchRemoteWeapon(a, it.weapon);
 
   if (it.reloadSeq > a.lastReloadSeq) {
     a.lastReloadSeq = it.reloadSeq;
@@ -5028,11 +5097,33 @@ function stepRemotePlayer(a, dt) {
      ends inside one packet never appears as a held `fire`. The fireSeq edge is
      what carries a fast tap across the wire — auto weapons need to honour it
      too, or the SMG silently eats quick taps. */
-  const fireEdge = it.fireSeq > a.lastFireSeq;
-  if (!sprinting && (fireEdge || (w.auto && it.fire))) fireWeapon(a);
   /* Acknowledge the tap even when sprinting swallowed it. Leaving it unacked
      buffers the shot, which then goes off by itself the instant sprint ends. */
-  if (fireEdge) a.lastFireSeq = it.fireSeq;
+  if (fireEdge) {
+    a.lastFireSeq = it.fireSeq;
+    const decision = NETP.classifyFireIntent(
+      a.alive, sprinting, a.fireCd, a.reloadT, a.ammo);
+    if (decision === 'retain') {
+      a.pendingFireUntil = G.time + NETP.FIRE_INTENT_TTL;
+    } else {
+      a.pendingFireUntil = 0;
+      /* Empty-magazine taps still start the normal automatic reload, but the
+         tap itself is not kept waiting for that reload to finish. */
+      if (!sprinting) fireWeapon(a);
+    }
+  }
+
+  if (a.pendingFireUntil > 0) {
+    const decision = NETP.classifyFireIntent(
+      a.alive, sprinting, a.fireCd, a.reloadT, a.ammo);
+    if (G.time > a.pendingFireUntil || decision === 'drop') {
+      a.pendingFireUntil = 0;
+    } else if (decision === 'fire') {
+      a.pendingFireUntil = 0;
+      fireWeapon(a);
+    }
+  }
+  if (!sprinting && w.auto && it.fire) fireWeapon(a);
 
   if (!a._ammoBy) a._ammoBy = {};
   a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };
@@ -5197,6 +5288,8 @@ const NET = {
   manualClose: false,
   starting: false,
   inputSeq: 0,
+  weaponSeq: 0,
+  lastInputAck: 0,
   snapshotAcc: 0,
   lastSnapshotTick: -1,
   lastInputSentAt: 0,
@@ -5281,8 +5374,7 @@ function netSameOriginURL() {
 }
 
 function netIsDevOrigin() {
-  const h = location.hostname;
-  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+  return NETP.isPrivateHost(location.hostname);
 }
 
 function netWsURL() {
@@ -5292,8 +5384,8 @@ function netWsURL() {
   if (requested) return netNormalizeServer(requested);
 
   if (location.protocol === 'file:') return 'ws://localhost:8080/ws';
-  /* Serving from localhost means you are running the relay yourself; stay
-     on this machine instead of dialling the public one. */
+  /* Private origins are serving the game from a relay on this LAN; stay on
+     that origin instead of sending players in the same room through public. */
   if (netIsDevOrigin()) return netSameOriginURL();
 
   return netNormalizeServer(NET_SERVER) || netSameOriginURL();
@@ -5528,6 +5620,8 @@ function netResetTransport() {
   NET.wanted = null;
   NET.starting = false;
   NET.inputSeq = 0;
+  NET.weaponSeq = 0;
+  NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
   NET.lastSnapshotTick = -1;
   NET.lastInputSentAt = 0;
@@ -5684,10 +5778,11 @@ function netHandleWire(raw) {
       msg.round === NET.round && typeof msg.from === 'string') {
     const a = G.actors.find(x => x.controller === 'remote' && x.netId === msg.from);
     if (!a) return;
-    const checked = NETP.sanitizeInput(msg, a.lastInputSeq);
+    const checked = NETP.sanitizeInput(msg, a.lastInputSeq, a.lastWeaponSeq);
     if (!checked.ok) return;
     a.netInput = checked.value;
     a.lastInputSeq = checked.value.seq;
+    a.lastWeaponSeq = checked.value.weaponSeq;
     a.netInputAt = G.time;
     return;
   }
@@ -5754,6 +5849,8 @@ function netBeginMatch() {
   NET.phase = 'playing';
   NET.starting = false;
   NET.inputSeq = 0;
+  NET.weaponSeq = 0;
+  NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
   NET.lastSnapshotTick = -1;
   NET.lastInputSentAt = 0;
@@ -5820,8 +5917,13 @@ function netActorId(a) {
   return a && (a.netId || ('actor-' + a.id));
 }
 
+function netOnLocalWeaponChanged() {
+  if (netIsGuest()) NET.weaponSeq++;
+}
+
 function netRound(v) { return Math.round(v * 1000) / 1000; }
 function netPackActor(a) {
+  const remote = a.controller === 'remote';
   return {
     id: a.id,
     netId: netActorId(a),
@@ -5847,6 +5949,8 @@ function netPackActor(a) {
     ammo: a.ammo,
     reserve: a.reserve,
     reloadT: netRound(a.reloadT),
+    ack: remote ? a.inputAck : 0,
+    weaponSeq: remote ? a.weaponAck : 0,
     kills: a.kills,
     deaths: a.deaths,
     streak: a.streak,
@@ -5901,6 +6005,7 @@ function netFrame(now) {
     sprint: active && (!!KEY.ShiftLeft || !!KEY.ShiftRight),
     fire: active && !!IN.firing,
     fireSeq: IN.fireSeq,
+    weaponSeq: NET.weaponSeq,
     reloadSeq: IN.reloadSeq,
     yaw: p.yaw,
     pitch: p.pitch,
@@ -5943,6 +6048,8 @@ function netValidActorState(s) {
     netFiniteIn(s.shield, 0, 60) && !!WBY[s.weapon] &&
     netSafeCount(s.ammo) && netSafeCount(s.reserve) &&
     netFiniteIn(s.reloadT, 0, 60) &&
+    Number.isSafeInteger(s.ack) && s.ack >= 0 &&
+    Number.isSafeInteger(s.weaponSeq) && s.weaponSeq >= 0 &&
     netSafeCount(s.kills) && netSafeCount(s.deaths) &&
     netSafeCount(s.streak) && netSafeCount(s.bestStreak));
 }
@@ -5978,16 +6085,21 @@ function netApplyActorState(a, s, local) {
   a.shield = Math.max(0, s.shield || 0);
   a.onGround = !!s.onGround;
   a.aiming = !!s.aiming;
-  a.weapon = WBY[s.weapon] ? s.weapon : a.weapon;
-  a.ammo = Math.max(0, Math.floor(s.ammo || 0));
-  a.reserve = Math.max(0, Math.floor(s.reserve || 0));
-  a.reloadT = Math.max(0, s.reloadT || 0);
+  const applyWeaponState = !local ||
+    NETP.isWeaponStateAcknowledged(NET.weaponSeq, s.weaponSeq);
+  if (applyWeaponState) {
+    a.weapon = WBY[s.weapon] ? s.weapon : a.weapon;
+    a.ammo = Math.max(0, Math.floor(s.ammo || 0));
+    a.reserve = Math.max(0, Math.floor(s.reserve || 0));
+    a.reloadT = Math.max(0, s.reloadT || 0);
+  }
   a.kills = Math.max(0, Math.floor(s.kills || 0));
   a.deaths = Math.max(0, Math.floor(s.deaths || 0));
   a.streak = Math.max(0, Math.floor(s.streak || 0));
   a.bestStreak = Math.max(0, Math.floor(s.bestStreak || 0));
 
   if (local) {
+    NET.lastInputAck = Math.max(NET.lastInputAck, s.ack);
     if (Number.isInteger(s.id)) a.id = s.id;
     const dx = s.pos[0] - a.pos.x, dy = s.pos[1] - a.pos.y, dz = s.pos[2] - a.pos.z;
     const err = Math.hypot(dx, dy, dz);

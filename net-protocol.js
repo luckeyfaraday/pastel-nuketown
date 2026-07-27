@@ -14,7 +14,7 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = 1;
+  var VERSION = 2;
   var MAX_PLAYERS = 4;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
@@ -23,6 +23,7 @@
   var MAX_ROOM_LIST = 50;
   var ALLOWED_WEAPONS = Object.freeze(['smg', 'shotgun', 'rifle']);
   var MAX_PITCH = 1.45;
+  var FIRE_INTENT_TTL = 0.2;
 
   function result(ok, value, error) {
     return {
@@ -75,6 +76,51 @@
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
   }
 
+  function isPrivateHost(hostname) {
+    if (typeof hostname !== 'string') return false;
+    var host = hostname.trim().toLowerCase();
+    if (host.charAt(host.length - 1) === '.') host = host.slice(0, -1);
+    if (host.charAt(0) === '[' && host.charAt(host.length - 1) === ']') {
+      host = host.slice(1, -1);
+    }
+    host = host.split('%')[0];
+
+    if (host === 'localhost' || host === '::1' || /\.local$/.test(host)) return true;
+
+    var ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4) {
+      var octets = ipv4.slice(1).map(Number);
+      if (octets.some(function (octet) { return octet > 255; })) return false;
+      return octets[0] === 127 ||
+        octets[0] === 10 ||
+        (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] === 192 && octets[1] === 168) ||
+        (octets[0] === 169 && octets[1] === 254);
+    }
+
+    if (host.indexOf(':') !== -1) {
+      var firstText = host.split(':', 1)[0];
+      if (!/^[0-9a-f]{1,4}$/.test(firstText)) return false;
+      var first = parseInt(firstText, 16);
+      return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+    }
+
+    return false;
+  }
+
+  function isWeaponStateAcknowledged(localWeaponSeq, echoedWeaponSeq) {
+    return Number.isSafeInteger(localWeaponSeq) && localWeaponSeq >= 0 &&
+      Number.isSafeInteger(echoedWeaponSeq) && echoedWeaponSeq >= localWeaponSeq;
+  }
+
+  function classifyFireIntent(alive, sprinting, fireCd, reloadT, ammo) {
+    if (!alive || sprinting) return 'drop';
+    if (reloadT > 0) return 'retain';
+    if (ammo <= 0) return 'drop';
+    if (fireCd > 0) return 'retain';
+    return 'fire';
+  }
+
   function createRoomCode(randomFn) {
     var random = typeof randomFn === 'function' ? randomFn : Math.random;
     var code = '';
@@ -123,7 +169,7 @@
     return out;
   }
 
-  function sanitizeInput(message, lastSeq) {
+  function sanitizeInput(message, lastSeq, lastWeaponSeq) {
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       return result(false, null, 'input must be an object');
     }
@@ -160,8 +206,13 @@
       return result(false, null, 'unknown weapon');
     }
     if (!Number.isSafeInteger(message.fireSeq) || message.fireSeq < 0 ||
-        !Number.isSafeInteger(message.reloadSeq) || message.reloadSeq < 0) {
+        !Number.isSafeInteger(message.reloadSeq) || message.reloadSeq < 0 ||
+        !Number.isSafeInteger(message.weaponSeq) || message.weaponSeq < 0) {
       return result(false, null, 'action counters must be non-negative safe integers');
+    }
+    var previousWeapon = Number.isSafeInteger(lastWeaponSeq) ? lastWeaponSeq : -1;
+    if (message.weaponSeq < previousWeapon) {
+      return result(false, null, 'weaponSeq must not decrease');
     }
 
     return result(true, {
@@ -178,6 +229,7 @@
       yaw: wrapAngle(message.yaw),
       pitch: clamp(message.pitch, -MAX_PITCH, MAX_PITCH),
       weapon: message.weapon,
+      weaponSeq: message.weaponSeq,
       reloadSeq: message.reloadSeq
     }, null);
   }
@@ -278,8 +330,12 @@
     MAX_ROOM_LIST: MAX_ROOM_LIST,
     ALLOWED_WEAPONS: ALLOWED_WEAPONS,
     MAX_PITCH: MAX_PITCH,
+    FIRE_INTENT_TTL: FIRE_INTENT_TTL,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    isPrivateHost: isPrivateHost,
+    isWeaponStateAcknowledged: isWeaponStateAcknowledged,
+    classifyFireIntent: classifyFireIntent,
     cleanRoomSummaries: cleanRoomSummaries,
     createRoomCode: createRoomCode,
     isFiniteNumber: isFiniteNumber,

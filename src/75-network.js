@@ -31,6 +31,8 @@ const NET = {
   manualClose: false,
   starting: false,
   inputSeq: 0,
+  weaponSeq: 0,
+  lastInputAck: 0,
   snapshotAcc: 0,
   lastSnapshotTick: -1,
   lastInputSentAt: 0,
@@ -115,8 +117,7 @@ function netSameOriginURL() {
 }
 
 function netIsDevOrigin() {
-  const h = location.hostname;
-  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+  return NETP.isPrivateHost(location.hostname);
 }
 
 function netWsURL() {
@@ -126,8 +127,8 @@ function netWsURL() {
   if (requested) return netNormalizeServer(requested);
 
   if (location.protocol === 'file:') return 'ws://localhost:8080/ws';
-  /* Serving from localhost means you are running the relay yourself; stay
-     on this machine instead of dialling the public one. */
+  /* Private origins are serving the game from a relay on this LAN; stay on
+     that origin instead of sending players in the same room through public. */
   if (netIsDevOrigin()) return netSameOriginURL();
 
   return netNormalizeServer(NET_SERVER) || netSameOriginURL();
@@ -362,6 +363,8 @@ function netResetTransport() {
   NET.wanted = null;
   NET.starting = false;
   NET.inputSeq = 0;
+  NET.weaponSeq = 0;
+  NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
   NET.lastSnapshotTick = -1;
   NET.lastInputSentAt = 0;
@@ -518,10 +521,11 @@ function netHandleWire(raw) {
       msg.round === NET.round && typeof msg.from === 'string') {
     const a = G.actors.find(x => x.controller === 'remote' && x.netId === msg.from);
     if (!a) return;
-    const checked = NETP.sanitizeInput(msg, a.lastInputSeq);
+    const checked = NETP.sanitizeInput(msg, a.lastInputSeq, a.lastWeaponSeq);
     if (!checked.ok) return;
     a.netInput = checked.value;
     a.lastInputSeq = checked.value.seq;
+    a.lastWeaponSeq = checked.value.weaponSeq;
     a.netInputAt = G.time;
     return;
   }
@@ -588,6 +592,8 @@ function netBeginMatch() {
   NET.phase = 'playing';
   NET.starting = false;
   NET.inputSeq = 0;
+  NET.weaponSeq = 0;
+  NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
   NET.lastSnapshotTick = -1;
   NET.lastInputSentAt = 0;
@@ -654,8 +660,13 @@ function netActorId(a) {
   return a && (a.netId || ('actor-' + a.id));
 }
 
+function netOnLocalWeaponChanged() {
+  if (netIsGuest()) NET.weaponSeq++;
+}
+
 function netRound(v) { return Math.round(v * 1000) / 1000; }
 function netPackActor(a) {
+  const remote = a.controller === 'remote';
   return {
     id: a.id,
     netId: netActorId(a),
@@ -681,6 +692,8 @@ function netPackActor(a) {
     ammo: a.ammo,
     reserve: a.reserve,
     reloadT: netRound(a.reloadT),
+    ack: remote ? a.inputAck : 0,
+    weaponSeq: remote ? a.weaponAck : 0,
     kills: a.kills,
     deaths: a.deaths,
     streak: a.streak,
@@ -735,6 +748,7 @@ function netFrame(now) {
     sprint: active && (!!KEY.ShiftLeft || !!KEY.ShiftRight),
     fire: active && !!IN.firing,
     fireSeq: IN.fireSeq,
+    weaponSeq: NET.weaponSeq,
     reloadSeq: IN.reloadSeq,
     yaw: p.yaw,
     pitch: p.pitch,
@@ -777,6 +791,8 @@ function netValidActorState(s) {
     netFiniteIn(s.shield, 0, 60) && !!WBY[s.weapon] &&
     netSafeCount(s.ammo) && netSafeCount(s.reserve) &&
     netFiniteIn(s.reloadT, 0, 60) &&
+    Number.isSafeInteger(s.ack) && s.ack >= 0 &&
+    Number.isSafeInteger(s.weaponSeq) && s.weaponSeq >= 0 &&
     netSafeCount(s.kills) && netSafeCount(s.deaths) &&
     netSafeCount(s.streak) && netSafeCount(s.bestStreak));
 }
@@ -812,16 +828,21 @@ function netApplyActorState(a, s, local) {
   a.shield = Math.max(0, s.shield || 0);
   a.onGround = !!s.onGround;
   a.aiming = !!s.aiming;
-  a.weapon = WBY[s.weapon] ? s.weapon : a.weapon;
-  a.ammo = Math.max(0, Math.floor(s.ammo || 0));
-  a.reserve = Math.max(0, Math.floor(s.reserve || 0));
-  a.reloadT = Math.max(0, s.reloadT || 0);
+  const applyWeaponState = !local ||
+    NETP.isWeaponStateAcknowledged(NET.weaponSeq, s.weaponSeq);
+  if (applyWeaponState) {
+    a.weapon = WBY[s.weapon] ? s.weapon : a.weapon;
+    a.ammo = Math.max(0, Math.floor(s.ammo || 0));
+    a.reserve = Math.max(0, Math.floor(s.reserve || 0));
+    a.reloadT = Math.max(0, s.reloadT || 0);
+  }
   a.kills = Math.max(0, Math.floor(s.kills || 0));
   a.deaths = Math.max(0, Math.floor(s.deaths || 0));
   a.streak = Math.max(0, Math.floor(s.streak || 0));
   a.bestStreak = Math.max(0, Math.floor(s.bestStreak || 0));
 
   if (local) {
+    NET.lastInputAck = Math.max(NET.lastInputAck, s.ack);
     if (Number.isInteger(s.id)) a.id = s.id;
     const dx = s.pos[0] - a.pos.x, dy = s.pos[1] - a.pos.y, dz = s.pos[2] - a.pos.z;
     const err = Math.hypot(dx, dy, dz);
