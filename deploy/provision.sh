@@ -12,8 +12,8 @@ SITE="${SITE:-nuketown.luckeysystems.com}"
 ADMIN="${ADMIN:-alan}"
 APP_DIR="${APP_DIR:-/opt/pastel-nuketown}"
 REPO="${REPO:-https://github.com/luckeyfaraday/pastel-nuketown.git}"
-# Until the multiplayer work lands on main, provision from the branch:
-#   BRANCH=multiplayer bash provision.sh
+# Deploy something other than main — a fix branch, or a tag — with:
+#   BRANCH=fix-guest-host-advantage bash provision.sh
 BRANCH="${BRANCH:-main}"
 
 # Origins allowed to open a socket here. WebSockets ignore the same-origin
@@ -67,10 +67,17 @@ say "service account + application"
 if ! id -u nuketown >/dev/null 2>&1; then
   adduser --system --group --no-create-home nuketown
 fi
+# The chown at the end of this block hands the tree to the service account, so
+# from the second run onward root is driving a repository it does not own and
+# git refuses with "dubious ownership" — which is why re-running used to fail
+# here despite the idempotency claim at the top. Scope the exception to these
+# commands instead of writing it into root's global config, where it would
+# outlive the script and silently cover every other repo on the box.
+APP_GIT=(git -c "safe.directory=$APP_DIR" -C "$APP_DIR")
 if [ -d "$APP_DIR/.git" ]; then
-  git -C "$APP_DIR" fetch --all --prune
-  git -C "$APP_DIR" checkout "$BRANCH"
-  git -C "$APP_DIR" reset --hard "origin/$BRANCH"
+  "${APP_GIT[@]}" fetch --all --prune
+  "${APP_GIT[@]}" checkout "$BRANCH"
+  "${APP_GIT[@]}" reset --hard "origin/$BRANCH"
 else
   git clone --branch "$BRANCH" "$REPO" "$APP_DIR"
 fi
