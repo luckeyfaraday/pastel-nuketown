@@ -601,3 +601,40 @@ test('a decided round seats nobody', () => {
   assert.strictEqual(match.host.get('G.actors.length'), before);
   assert.strictEqual(match.host.get(`!!G.actors.find(a => a.netId === '${LATE_ID}')`), false);
 });
+
+test('the deploy card a drop-in lands on can actually be clicked', () => {
+  const client = SIM.createInstance({ ms: 0 });
+
+  /* The harness hands back a fresh stub per getElementById call, so DOM state
+     is invisible by default. Memoise it for this test: the regression being
+     guarded is entirely about the state left on one button. */
+  client.run(`
+    var SIM_ELS = new Map();
+    document.getElementById = function (id) {
+      if (!SIM_ELS.has(id)) SIM_ELS.set(id, {
+        id: id, textContent: '', hidden: false, disabled: false, dataset: {},
+        classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+        addEventListener() {}, appendChild(child) { return child; }, innerHTML: ''
+      });
+      return SIM_ELS.get(id);
+    };
+    startMatch = function () { G.started = true; };
+    setPaused = function () {};
+    showHint = function () {};
+    NET.mode = 'guest';
+    NET.id = 'late-0001';
+    NET.room = 'ABCDEF';
+    NET.members = [
+      { id: 'host-0001', name: 'Host', role: 'host' },
+      { id: 'late-0001', name: 'Latecomer', role: 'guest' }
+    ];
+  `);
+
+  /* netConnect disables these while it dials. A player who joins a lobby gets
+     them back when the lobby renders; a drop-in never sees a lobby. */
+  client.run('netSetMenuBusy(true); netBeginMatch();');
+
+  assert.strictEqual(client.get("SIM_ELS.get('play').textContent"), 'ENTER MATCH');
+  assert.strictEqual(client.get("SIM_ELS.get('play').disabled"), false,
+    'a deploy card nobody can click is a player frozen at the door');
+});

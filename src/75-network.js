@@ -1023,8 +1023,14 @@ function netBeginMatch() {
   if (netIsMultiplayer()) {
     /* A message from the host is not a browser user gesture, so Pointer Lock
        cannot reliably start here. Leave a one-click deploy card. The host
-       keeps simulating with neutral input while its card is open. */
+       keeps simulating with neutral input while its card is open.
+
+       That card is the #play button, which netConnect disabled while dialling.
+       Anyone arriving through the lobby had it switched back on there; a
+       drop-in never passes through the lobby, so re-enable it here — a deploy
+       card nobody can click is a player frozen at the door. */
     setPaused(true);
+    netSetMenuBusy(false);
     document.getElementById('play').textContent = 'ENTER MATCH';
     const note = document.getElementById('menuNote');
     if (note) note.textContent = 'The match is live. Click to deploy.';
