@@ -426,8 +426,9 @@ function endMatch(winner) {
 const KEY = {};
 /* A second movement source, left at rest for keyboard play. Filled in by the
    touch layer; merged into intent by readLocalInput rather than by teaching
-   every consumer about it. */
-const TOUCH = { fwd: 0, strafe: 0, jump: false, sprint: false };
+   every consumer about it. `on` is the mode flag the touch layer raises once
+   it takes over — pointer lock in particular has to stand down when it does. */
+const TOUCH = { on: false, fwd: 0, strafe: 0, jump: false, sprint: false };
 const IN = {
   lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
   fireSeq: 0, fireRenderTime: 0, reloadSeq: 0
@@ -471,6 +472,15 @@ function readLocalInput(accepts) {
   };
 }
 
+/* Shared by mouse-look and touch-drag; they differ only in sensitivity. */
+function applyLook(dx, dy, sens) {
+  if (!G.player) return;
+  G.player.yaw -= dx * sens;
+  G.player.pitch = clamp(G.player.pitch - dy * sens, -1.45, 1.45);
+  IN.lookDX = clamp(IN.lookDX + dx * 0.006, -1, 1);
+  IN.lookDY = clamp(IN.lookDY + dy * 0.006, -1, 1);
+}
+
 function initInput() {
   addEventListener('keydown', e => {
     if (e.code === 'Tab') e.preventDefault();
@@ -500,15 +510,18 @@ function initInput() {
 
   addEventListener('mousemove', e => {
     if (!IN.locked) return;
-    const dx = e.movementX || 0, dy = e.movementY || 0;
-    G.player.yaw -= dx * mouseSens;
-    G.player.pitch = clamp(G.player.pitch - dy * mouseSens, -1.45, 1.45);
-    IN.lookDX = clamp(IN.lookDX + dx * 0.006, -1, 1);
-    IN.lookDY = clamp(IN.lookDY + dy * 0.006, -1, 1);
+    applyLook(e.movementX || 0, e.movementY || 0, mouseSens);
   });
 
   document.addEventListener('pointerlockchange', () => {
     IN.locked = document.pointerLockElement === canvas;
+    /* Losing the lock is the desktop pause gesture, because on desktop it
+       means the cursor is loose and the player has stopped playing. Once
+       the on-screen controls are up that inference is wrong — a phone
+       never holds the lock in the first place, so honouring it there
+       would pause the match on the way in and never let it resume. The
+       touch layer has its own pause button. */
+    if (TOUCH.on) return;
     if (!IN.locked && G.started && !G.over) setPaused(true);
     else if (IN.locked) setPaused(false);
   });
@@ -517,6 +530,12 @@ function initInput() {
    That's not fatal — the match still runs, you just aren't mouse-looking. */
 function requestLock() {
   try {
+    /* Not merely pointless on touch — actively harmful. Mobile Chrome
+       grants the lock, and a locked pointer routes every pointermove to
+       the canvas with frozen clientX/clientY. That is precisely the
+       stream the stick and look zones read, so the controls go dead
+       while looking like they were pressed. */
+    if (TOUCH.on) return;
     if (!canvas.requestPointerLock) return;
     const r = canvas.requestPointerLock();       // newer Chrome returns a Promise
     if (r && typeof r.catch === 'function') r.catch(() => {});
@@ -863,5 +882,6 @@ function startMatch() {
   again.disabled = false;
   again.textContent = 'REMATCH';
   showHint('FIRST TO ' + CFG.killsToWin + ' KILLS');
+  touchEnterImmersive();                  // no-op unless this is a phone
   requestLock();
 }

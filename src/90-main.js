@@ -52,8 +52,12 @@ function updateCamera(dt) {
     camera.position.y += rand(-s, s) * 0.16;
     camera.rotation.z += rand(-s, s) * 0.035;
   }
-  // slight roll when strafing reads as weight
-  const str = (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0);
+  /* Slight roll when strafing reads as weight. Read through the same
+     function the simulation uses — this used to be a third transcription
+     of "which way is the player leaning", and a stick would not have
+     rolled the camera at all. Anything past the guards above is started
+     and unpaused, so input is live by definition. */
+  const str = readLocalInput(true).strafe;
   camera.rotation.z += damp(camera.rotation.z, -str * 0.022, 8, dt) * 0 + (-str * 0.022);
 }
 
@@ -162,6 +166,7 @@ function frame(now) {
     updateDamageDirs(dt);
     updateDeadScreen();
     updateHUD();
+    updateTouchUI();
   }
   renderAll();
   PROF.frames++;
@@ -180,7 +185,8 @@ function boot() {
   buildWorld();    set(60);
   initViewmodel(); set(74);
   initFX();        set(82);
-  initInput();     set(88);
+  initInput();
+  initTouch();     set(88);
   initAI();        set(96);
   initNetworkUI();
 
