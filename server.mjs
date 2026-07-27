@@ -318,6 +318,7 @@ export function createRelayServer(options = {}) {
       room: peer.room.code,
       id: peer.id,
       role: peer.role,
+      authorityEpoch: peer.room.authorityEpoch,
       round: peer.room.round,
       members: memberList(peer.room)
     });
@@ -346,6 +347,7 @@ export function createRelayServer(options = {}) {
       members: new Map(),
       started: false,
       round: 0,
+      authorityEpoch: 1,
       /* Listed by default so the room browser is useful out of the box;
          a host that wants the old code-only privacy sends listed:false. */
       listed: message.listed !== false
@@ -384,7 +386,8 @@ export function createRelayServer(options = {}) {
   }
 
   function handleGuestInput(peer, message) {
-    if (!peer.room.started || message.round !== peer.room.round) return;
+    if (!peer.room.started || message.round !== peer.room.round ||
+        message.authorityEpoch !== peer.room.authorityEpoch) return;
     const sanitized = Protocol.sanitizeInput(message, peer.lastSeq);
     if (!sanitized.ok) {
       sendError(peer, 'invalid-input', sanitized.error);
@@ -396,6 +399,12 @@ export function createRelayServer(options = {}) {
       ...sanitized.value,
       from: peer.id
     });
+  }
+
+  function hasCurrentAuthority(peer, message) {
+    if (message.authorityEpoch === peer.room.authorityEpoch) return true;
+    sendError(peer, 'stale-authority', 'That authority epoch is no longer active.');
+    return false;
   }
 
   function handleRoomMessage(peer, message) {
@@ -418,6 +427,7 @@ export function createRelayServer(options = {}) {
         sendError(peer, 'host-only', 'Only the host can start a match.');
         return;
       }
+      if (!hasCurrentAuthority(peer, message)) return;
       if (peer.room.started) {
         sendError(peer, 'already-started', 'The match is already running.');
         return;
@@ -428,6 +438,7 @@ export function createRelayServer(options = {}) {
       const start = {
         t: 'start',
         v: Protocol.VERSION,
+        authorityEpoch: peer.room.authorityEpoch,
         round: peer.room.round,
         members: memberList(peer.room)
       };
@@ -440,11 +451,13 @@ export function createRelayServer(options = {}) {
         sendError(peer, 'host-only', 'Only the host can end a round.');
         return;
       }
+      if (!hasCurrentAuthority(peer, message)) return;
       if (!peer.room.started || message.round !== peer.room.round) return;
       peer.room.started = false;
       broadcastRoom(peer.room, {
         t: 'lobby',
         v: Protocol.VERSION,
+        authorityEpoch: peer.room.authorityEpoch,
         round: peer.room.round,
         winner: typeof message.winner === 'string' ? message.winner.slice(0, 80) : null
       });
@@ -456,6 +469,7 @@ export function createRelayServer(options = {}) {
         sendError(peer, 'host-only', 'Only the host can send match state.');
         return;
       }
+      if (!hasCurrentAuthority(peer, message)) return;
       if (!peer.room.started || message.round !== peer.room.round) return;
       if (message.t === 'snapshot' &&
           (!Number.isSafeInteger(message.tick) || !Array.isArray(message.actors) ||
@@ -512,22 +526,44 @@ export function createRelayServer(options = {}) {
     handleRoomMessage(peer, message);
   }
 
-  function closeHostedRoom(room) {
-    rooms.delete(room.code);
-    const encoded = encode({
-      t: 'room-closed',
-      v: Protocol.VERSION
-    });
+  function clearRoomMembership(peer) {
+    peer.room = null;
+    peer.role = null;
+    peer.name = '';
+    peer.lastSeq = -1;
+  }
 
-    for (const member of room.members.values()) {
-      if (member.role === 'guest') sendEncoded(member, encoded);
-      member.room = null;
-      member.role = null;
-      member.name = '';
-      member.lastSeq = -1;
+  /* The oldest surviving guest becomes host. The in-progress round is
+     deliberately abandoned: advancing both counters creates a clean barrier
+     against delayed packets, and every survivor returns to the normal lobby
+     flow before the promoted host can start a fresh round. */
+  function migrateHostedRoom(room, departedHost) {
+    room.members.delete(departedHost.id);
+    clearRoomMembership(departedHost);
+
+    const nextHost = room.members.values().next().value;
+    if (!nextHost) {
+      rooms.delete(room.code);
+      room.host = null;
+      room.started = false;
+      return;
     }
-    room.members.clear();
-    room.host = null;
+
+    nextHost.role = 'host';
+    room.host = nextHost;
+    room.started = false;
+    room.round++;
+    room.authorityEpoch++;
+    for (const member of room.members.values()) member.lastSeq = -1;
+
+    broadcastRoom(room, {
+      t: 'host-changed',
+      v: Protocol.VERSION,
+      authorityEpoch: room.authorityEpoch,
+      round: room.round,
+      host: nextHost.id,
+      members: memberList(room)
+    }, true);
   }
 
   function leaveRoom(peer) {
@@ -535,15 +571,12 @@ export function createRelayServer(options = {}) {
     if (!room) return;
 
     if (peer.role === 'host') {
-      closeHostedRoom(room);
+      migrateHostedRoom(room, peer);
       return;
     }
 
     room.members.delete(peer.id);
-    peer.room = null;
-    peer.role = null;
-    peer.name = '';
-    peer.lastSeq = -1;
+    clearRoomMembership(peer);
     broadcastMembers(room);
   }
 

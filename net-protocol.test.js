@@ -28,6 +28,7 @@ function validInput(overrides) {
   return Object.assign({
     t: 'input',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     seq: 1,
     fwd: 0.5,
@@ -127,7 +128,7 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 3);
+  assert.equal(Protocol.VERSION, 4);
   assert.equal(Protocol.MAX_PLAYERS, 4);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
@@ -148,6 +149,59 @@ test('normalizes human-entered room codes and cleans display names', () => {
     Array.from(Protocol.cleanPlayerName('😀'.repeat(30))).length,
     Protocol.MAX_PLAYER_NAME_LENGTH
   );
+});
+
+test('validates host promotion as a forward-only authority transition', () => {
+  const changed = Protocol.sanitizeHostChanged({
+    t: 'host-changed',
+    v: Protocol.VERSION,
+    authorityEpoch: 2,
+    round: 3,
+    host: 'peer-2',
+    members: [
+      { id: 'peer-2', name: ' New Host ', role: 'host' },
+      { id: 'peer-3', name: 'Guest', role: 'guest' }
+    ]
+  }, 'peer-3', 1, 2);
+
+  assert.equal(changed.ok, true);
+  assert.deepEqual(changed.value, {
+    t: 'host-changed',
+    v: Protocol.VERSION,
+    authorityEpoch: 2,
+    round: 3,
+    host: 'peer-2',
+    members: [
+      { id: 'peer-2', name: 'New Host', role: 'host' },
+      { id: 'peer-3', name: 'Guest', role: 'guest' }
+    ]
+  });
+
+  const invalid = [
+    [{ t: 'snapshot' }, 'type'],
+    [{ authorityEpoch: 1 }, 'authorityEpoch'],
+    [{ round: 2 }, 'round'],
+    [{ host: 'missing' }, 'host'],
+    [{ members: [{ id: 'peer-2', name: 'Host', role: 'guest' }] }, 'roster'],
+    [{ members: [{ id: 'peer-2', name: 'Host', role: 'host' }] }, 'roster']
+  ];
+  const base = {
+    t: 'host-changed',
+    v: Protocol.VERSION,
+    authorityEpoch: 2,
+    round: 3,
+    host: 'peer-2',
+    members: [
+      { id: 'peer-2', name: 'Host', role: 'host' },
+      { id: 'peer-3', name: 'Guest', role: 'guest' }
+    ]
+  };
+  for (const [override, expected] of invalid) {
+    const checked = Protocol.sanitizeHostChanged(
+      { ...base, ...override }, 'peer-3', 1, 2);
+    assert.equal(checked.ok, false);
+    assert.match(checked.error, new RegExp(expected));
+  }
 });
 
 test('creates fixed-length, unambiguous room codes with an injectable RNG', () => {
@@ -322,7 +376,8 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
   assert.equal(sanitized.error, null);
   assert.deepEqual(sanitized.value, {
     t: 'input',
-    v: 3,
+    v: 4,
+    authorityEpoch: 1,
     round: 1,
     seq: 9,
     fwd: 1,
@@ -345,6 +400,8 @@ test('rejects stale sequences, malformed controls, and unknown weapons', () => {
     [null, 'object'],
     [validInput({ t: 'snapshot' }), 'type'],
     [validInput({ v: Protocol.VERSION + 1 }), 'version'],
+    [validInput({ authorityEpoch: 0 }), 'authorityEpoch'],
+    [validInput({ authorityEpoch: 1.5 }), 'authorityEpoch'],
     [validInput({ round: 0 }), 'round'],
     [validInput({ round: 1.5 }), 'round'],
     [validInput({ seq: -1 }), 'seq'],
@@ -475,6 +532,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     room: 'AAAAAA',
     id: 'peer-1',
     role: 'host',
+    authorityEpoch: 1,
     round: 0,
     members: [{ id: 'peer-1', name: 'Host', role: 'host' }]
   });
@@ -491,13 +549,21 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   guest.send(validInput({ round: 1, seq: 1 }));
   await expectNoMessage(host, 'input');
 
-  guest.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 1, actors: [] });
+  guest.send({
+    t: 'snapshot',
+    v: Protocol.VERSION,
+    authorityEpoch: 1,
+    round: 1,
+    tick: 1,
+    actors: []
+  });
   assert.equal((await guest.next('error')).code, 'host-only');
 
-  host.send({ t: 'start', v: Protocol.VERSION, seed: 42 });
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1, seed: 42 });
   const expectedStart = {
     t: 'start',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     members: [
       { id: 'peer-1', name: 'Host', role: 'host' },
@@ -511,7 +577,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   assert.deepEqual(hostStart, expectedStart);
   assert.deepEqual(guestStart, expectedStart);
 
-  host.send({ t: 'start', v: Protocol.VERSION });
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   assert.equal((await host.next('error')).code, 'already-started');
   await expectNoMessage(guest, 'start');
 
@@ -540,48 +606,78 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   guest.send(validInput({ round: 1, seq: 5 }));
   assert.equal((await host.next('input')).seq, 5);
 
-  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 0, tick: 6, actors: [] });
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 0, tick: 6, actors: []
+  });
   await expectNoMessage(guest, 'snapshot');
-  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 7, actors: [] });
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, tick: 7, actors: []
+  });
   assert.deepEqual(await guest.next('snapshot'), {
     t: 'snapshot',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     tick: 7,
     actors: []
   });
 
-  host.send({ t: 'event', v: Protocol.VERSION, round: 0, events: [{ id: 1, kind: 'shot' }] });
+  host.send({
+    t: 'event', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 0, events: [{ id: 1, kind: 'shot' }]
+  });
   await expectNoMessage(guest, 'event');
-  host.send({ t: 'event', v: Protocol.VERSION, round: 1, events: [{ id: 1, kind: 'shot' }] });
+  host.send({
+    t: 'event', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, events: [{ id: 1, kind: 'shot' }]
+  });
   assert.deepEqual(await guest.next('event'), {
     t: 'event',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     events: [{ id: 1, kind: 'shot' }]
   });
 
-  host.send({ t: 'lobby', v: Protocol.VERSION, round: 0, winner: 'peer-1' });
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 0, winner: 'peer-1'
+  });
   await expectNoMessage(guest, 'lobby');
-  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 8, actors: [] });
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, tick: 8, actors: []
+  });
   assert.equal((await guest.next('snapshot')).tick, 8);
 
-  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: 'peer-1' });
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, winner: 'peer-1'
+  });
   assert.deepEqual(await guest.next('lobby'), {
     t: 'lobby',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     winner: 'peer-1'
   });
 
-  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: 'peer-1' });
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, winner: 'peer-1'
+  });
   await expectNoMessage(guest, 'lobby');
-  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 9, actors: [] });
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, tick: 9, actors: []
+  });
   await expectNoMessage(guest, 'snapshot');
   guest.send(validInput({ round: 1, seq: 6 }));
   await expectNoMessage(host, 'input');
 
-  host.send({ t: 'start', v: Protocol.VERSION });
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   const [hostRematch, guestRematch] = await Promise.all([
     host.next('start'),
     guest.next('start')
@@ -596,21 +692,47 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   assert.equal(firstRematchInput.round, 2);
   assert.equal(firstRematchInput.seq, 1);
 
-  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 10, actors: [] });
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, tick: 10, actors: []
+  });
   await expectNoMessage(guest, 'snapshot');
-  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 2, tick: 1, actors: [] });
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 2, tick: 1, actors: []
+  });
   assert.equal((await guest.next('snapshot')).round, 2);
 
-  host.send({ t: 'event', v: Protocol.VERSION, round: 1, events: [{ id: 2, kind: 'shot' }] });
+  host.send({
+    t: 'event', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, events: [{ id: 2, kind: 'shot' }]
+  });
   await expectNoMessage(guest, 'event');
-  host.send({ t: 'event', v: Protocol.VERSION, round: 2, events: [{ id: 1, kind: 'respawn' }] });
+  host.send({
+    t: 'event', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 2, events: [{ id: 1, kind: 'respawn' }]
+  });
   assert.equal((await guest.next('event')).round, 2);
 
   host.ws.close();
-  assert.equal((await guest.next('room-closed')).v, Protocol.VERSION);
+  assert.deepEqual(await guest.next('host-changed'), {
+    t: 'host-changed',
+    v: Protocol.VERSION,
+    authorityEpoch: 2,
+    round: 3,
+    host: 'peer-2',
+    members: [{ id: 'peer-2', name: 'Guest', role: 'host' }]
+  });
+
+  guest.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  assert.equal((await guest.next('error')).code, 'stale-authority');
+  guest.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 2 });
+  const restarted = await guest.next('start');
+  assert.equal(restarted.authorityEpoch, 2);
+  assert.equal(restarted.round, 4);
 });
 
-test('started rooms reject late joins, round-scoped lobby reopens them, and capacity is four', async (t) => {
+test('started rooms reject late joins, host migration reopens them, and capacity is four', async (t) => {
   let nextId = 0;
   const { port } = await startRelay(t, {
     idFactory: () => `id-${++nextId}`,
@@ -630,7 +752,7 @@ test('started rooms reject late joins, round-scoped lobby reopens them, and capa
   await first.next('members');
   await host.next('members');
 
-  host.send({ t: 'start', v: Protocol.VERSION });
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   const [hostStart, firstStart] = await Promise.all([
     host.next('start'),
     first.next('start')
@@ -643,28 +765,51 @@ test('started rooms reject late joins, round-scoped lobby reopens them, and capa
   late.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Late' });
   assert.equal((await late.next('error')).code, 'match-started');
 
-  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1 });
-  assert.equal((await first.next('lobby')).round, 1);
+  host.ws.close();
+  const promoted = await first.next('host-changed');
+  assert.equal(promoted.host, 'id-2');
+  assert.equal(promoted.authorityEpoch, 2);
+  assert.equal(promoted.round, 2);
+  assert.deepEqual(promoted.members, [
+    { id: 'id-2', name: 'One', role: 'host' }
+  ]);
+
   late.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Two' });
   await late.next('room');
   await late.next('members');
-  await host.next('members');
+  await first.next('members');
 
   const third = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await third.opened;
   third.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Three' });
   await third.next('room');
   await third.next('members');
-  await host.next('members');
+  await first.next('members');
 
-  const fifth = websocketClient(`ws://127.0.0.1:${port}/ws`);
-  await fifth.opened;
-  fifth.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Four' });
-  assert.equal((await fifth.next('error')).code, 'room-full');
+  const fourth = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await fourth.opened;
+  fourth.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Four' });
+  await fourth.next('room');
+  await fourth.next('members');
+  await first.next('members');
+
+  const overflow = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await overflow.opened;
+  overflow.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Five' });
+  assert.equal((await overflow.next('error')).code, 'room-full');
 
   first.ws.close();
-  const roster = await host.next('members');
-  assert.equal(roster.members.length, 3);
+  const [secondPromotion, observedByThird, observedByFourth] = await Promise.all([
+    late.next('host-changed'),
+    third.next('host-changed'),
+    fourth.next('host-changed')
+  ]);
+  assert.equal(secondPromotion.host, 'id-3',
+    'the next-oldest surviving guest wins the next election');
+  assert.equal(secondPromotion.authorityEpoch, 3);
+  assert.equal(secondPromotion.round, 3);
+  assert.deepEqual(observedByThird, secondPromotion);
+  assert.deepEqual(observedByFourth, secondPromotion);
 });
 
 test('hostile nesting and non-string fields are rejected without killing usable connections', async (t) => {
@@ -701,12 +846,13 @@ test('hostile nesting and non-string fields are rejected without killing usable 
   await guest.next('members');
   await host.next('members');
 
-  host.send({ t: 'start', v: Protocol.VERSION });
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   await Promise.all([host.next('start'), guest.next('start')]);
 
   host.send({
     t: 'event',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     events: [{ id: 1, kind: 'shot', nested }]
   });
@@ -716,20 +862,29 @@ test('hostile nesting and non-string fields are rejected without killing usable 
   host.send({
     t: 'event',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     events: [{ id: 1, kind: 'shot' }]
   });
   assert.deepEqual(await guest.next('event'), {
     t: 'event',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     events: [{ id: 1, kind: 'shot' }]
   });
 
-  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: { id: 'safe-1' } });
+  host.send({
+    t: 'lobby',
+    v: Protocol.VERSION,
+    authorityEpoch: 1,
+    round: 1,
+    winner: { id: 'safe-1' }
+  });
   assert.deepEqual(await guest.next('lobby'), {
     t: 'lobby',
     v: Protocol.VERSION,
+    authorityEpoch: 1,
     round: 1,
     winner: null
   });
@@ -748,9 +903,12 @@ test('the room handshake carries the round so a player who joins between rounds 
   const created = await host.next('room');
   assert.equal(created.round, 0, 'a brand new room starts before round 1');
 
-  host.send({ t: 'start', v: Protocol.VERSION });
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   assert.equal((await host.next('start')).round, 1);
-  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: null });
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, winner: null
+  });
 
   /* Joining is only possible between rounds, which is exactly the case that
      used to hand the newcomer a round baseline of 0 against a room on 1. */
@@ -760,7 +918,7 @@ test('the room handshake carries the round so a player who joins between rounds 
   const joined = await late.next('room');
   assert.equal(joined.round, 1, 'the newcomer inherits the round already played');
 
-  host.send({ t: 'start', v: Protocol.VERSION });
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   const started = await late.next('start');
   assert.equal(started.round, 2);
   assert.ok(started.round > joined.round,
@@ -817,21 +975,30 @@ test('the room browser lists only rooms you could actually join', async (t) => {
   await guest.next('room');
   assert.equal((await fetchRooms())[0].players, 2, 'the seat count tracks the roster');
 
-  open.send({ t: 'start', v: Protocol.VERSION });
+  open.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   await open.next('start');
   assert.deepEqual(await fetchRooms(), [], 'a room in a live match is not joinable');
 
-  open.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: null });
+  open.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1,
+    round: 1, winner: null
+  });
   await guest.next('lobby');
   assert.deepEqual((await fetchRooms()).map((room) => room.code), ['AAAAAA'],
     'it comes back once the round ends');
 
   open.ws.terminate();
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  assert.deepEqual(await fetchRooms(), [], 'closing the host closes the room');
+  const promoted = await guest.next('host-changed');
+  assert.equal(promoted.host, 'peer-3');
+  assert.equal(promoted.authorityEpoch, 2);
+  assert.deepEqual(await fetchRooms(), [
+    { code: 'AAAAAA', host: 'Guest', players: 1, max: Protocol.MAX_PLAYERS }
+  ], 'closing the host promotes a survivor and preserves the listed room');
 
   secret.ws.terminate();
   guest.ws.terminate();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(await fetchRooms(), [], 'the room closes once no survivors remain');
 });
 
 test('room summaries from an untrusted server are cleaned entry by entry', () => {

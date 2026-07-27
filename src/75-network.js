@@ -30,6 +30,7 @@ const NET = {
   room: '',
   id: '',
   members: [],
+  authorityEpoch: 0,
   round: 0,
   wanted: null,
   manualClose: false,
@@ -371,6 +372,7 @@ function netResetTransport() {
   NET.room = '';
   NET.id = '';
   NET.members = [];
+  NET.authorityEpoch = 0;
   NET.round = 0;
   NET.wanted = null;
   NET.starting = false;
@@ -491,6 +493,7 @@ function netHandleWire(raw) {
     const room = NETP.normalizeRoomCode(msg.room);
     if (NET.phase !== 'connecting' || typeof msg.id !== 'string' || !msg.id ||
         msg.id.length > 80 || room.length !== 6 ||
+        !NETP.isAuthorityEpoch(msg.authorityEpoch) ||
         (msg.role !== 'host' && msg.role !== 'guest') || !members ||
         !members.some(member => member.id === msg.id && member.role === msg.role)) {
       if (NET.socket) try { NET.socket.close(1008, 'invalid room handshake'); } catch (e) {}
@@ -503,12 +506,28 @@ function netHandleWire(raw) {
     NET.mode = msg.role === 'host' ? 'host' : 'guest';
     NET.phase = 'lobby';
     NET.members = members;
+    NET.authorityEpoch = msg.authorityEpoch;
     /* Adopt the room's round at the handshake. Joining a room that has
        already played a round leaves NET.round behind otherwise, and every
        subsequent `start` looks like it skipped ahead and gets ignored. */
     NET.round = Number.isSafeInteger(msg.round) && msg.round >= 0 ? msg.round : 0;
     netShowLobby();
     netStatus(netIsHost() ? 'Room ready — share the code, then start.' : 'Connected — waiting for the host.');
+    return;
+  }
+  if (msg.t === 'host-changed') {
+    if (!netIsMultiplayer()) return;
+    const checked = NETP.sanitizeHostChanged(
+      msg, NET.id, NET.authorityEpoch, NET.round);
+    if (!checked.ok) return;
+    const change = checked.value;
+    NET.authorityEpoch = change.authorityEpoch;
+    NET.round = change.round;
+    NET.members = change.members;
+    NET.mode = change.host === NET.id ? 'host' : 'guest';
+    NET.phase = 'lobby';
+    NET.starting = false;
+    netReturnToLobbyAfterHostChange(change.host);
     return;
   }
   if (msg.t === 'members') {
@@ -524,6 +543,7 @@ function netHandleWire(raw) {
     /* Rounds only ever move forward. Requiring exactly +1 breaks any client
        whose baseline came from the handshake rather than from round 1. */
     if (!netIsMultiplayer() || !Number.isSafeInteger(msg.round) ||
+        msg.authorityEpoch !== NET.authorityEpoch ||
         msg.round <= NET.round || !members ||
         !members.some(member => member.id === NET.id)) return;
     NET.round = msg.round;
@@ -533,11 +553,12 @@ function netHandleWire(raw) {
     return;
   }
   if (msg.t === 'lobby' && netIsGuest() && NET.phase === 'playing' &&
-      msg.round === NET.round) {
+      msg.authorityEpoch === NET.authorityEpoch && msg.round === NET.round) {
     netShowRemoteMatchOver(typeof msg.winner === 'string' ? msg.winner : null);
     return;
   }
   if (msg.t === 'input' && netIsHost() && NET.phase === 'playing' &&
+      msg.authorityEpoch === NET.authorityEpoch &&
       msg.round === NET.round && typeof msg.from === 'string') {
     const a = G.actors.find(x => x.controller === 'remote' && x.netId === msg.from);
     if (!a) return;
@@ -550,11 +571,12 @@ function netHandleWire(raw) {
     return;
   }
   if (msg.t === 'snapshot' && netIsGuest() && NET.phase === 'playing' &&
-      msg.round === NET.round) {
+      msg.authorityEpoch === NET.authorityEpoch && msg.round === NET.round) {
     netApplySnapshot(msg);
     return;
   }
   if (msg.t === 'event' && netIsGuest() && NET.phase === 'playing' &&
+      msg.authorityEpoch === NET.authorityEpoch &&
       msg.round === NET.round && Array.isArray(msg.events) && msg.events.length <= 256) {
     for (const event of msg.events) netApplyEvent(event);
     return;
@@ -597,7 +619,11 @@ function netHostStart() {
     again.textContent = 'STARTING…';
   }
   netStatus('Starting the match…');
-  if (!netSend({ t: 'start', v: NETP.VERSION })) {
+  if (!netSend({
+    t: 'start',
+    v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch
+  })) {
     NET.starting = false;
     if (start) start.disabled = false;
     if (again && G.over) {
@@ -660,6 +686,31 @@ function netLeaveLobby() {
   netResetTransport();
   netShowMainMenu();
   netStatus('');
+}
+
+function netReturnToLobbyAfterHostChange(hostId) {
+  if (G.started) {
+    G.paused = true;
+    G.fixedAcc = 0;
+    exitPointerLock();
+    document.getElementById('hud').classList.add('hide');
+    document.getElementById('dead').classList.add('off');
+    document.getElementById('over').classList.add('off');
+    restoreBoard();
+    G.started = false;
+    G.over = false;
+    G.winner = null;
+  }
+  const menu = document.getElementById('menu');
+  if (menu) menu.classList.remove('pause');
+  document.getElementById('title').classList.remove('off');
+  netShowLobby();
+
+  const promoted = hostId === NET.id;
+  const host = NET.members.find(member => member.id === hostId);
+  netStatus(promoted
+    ? 'The previous host left. You are the new host — start a fresh round.'
+    : ((host ? host.name : 'A player') + ' is the new host. Waiting for a fresh round.'));
 }
 
 function netEndSession(message) {
@@ -737,6 +788,7 @@ function netFlushEvents() {
   netSend({
     t: 'event',
     v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
     round: NET.round,
     events: events
   });
@@ -834,6 +886,7 @@ function netAfterSimulation(dt, force) {
   netSend({
     t: 'snapshot',
     v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
     round: NET.round,
     tick: G.tick,
     time: netRound(G.time),
@@ -895,6 +948,7 @@ function netFrame(now) {
   const message = {
     t: 'input',
     v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
     round: NET.round,
     seq: seq,
     fwd: inp.fwd,
@@ -1198,6 +1252,7 @@ function netOnAuthoritativeMatchOver(winner) {
   netSend({
     t: 'lobby',
     v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
     round: NET.round,
     winner: netActorId(winner)
   });
