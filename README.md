@@ -55,6 +55,8 @@ Once a room holds two people the host's lobby counts down and starts on its own 
 
 The browser lists rooms in a live match as well as open ones, marked `IN PROGRESS` with a dashed edge and a **DROP IN** button. You can walk straight into a round already underway: the host seats you on a spawn point with the usual shield, a bot gives up its slot so the match does not quietly get busier, and the world arrives on the next snapshot. No waiting out somebody else's 25 kills.
 
+A guest who stops playing for a minute during a match is removed and told why, so the seat goes back to somebody who wants it. "Playing" means moving, jumping, firing, reloading, switching weapon — or just looking around, since someone turning to watch a firefight is present. An idle client still sends input sixty times a second, so the relay judges what the input says rather than that it arrived. Lobbies are exempt, because waiting is what a lobby is for, and the host is exempt, because it is the simulation.
+
 Drop-in needs no message of its own. The actor manifest is versioned and guests already accept it changing mid-round — the same machinery host migration uses — so seating an arrival is `netPruneDepartedPlayers` run backwards. The relay hands over no world state; it tells the arrival the round is live and tells the host the roster changed, and the host's next snapshot does the rest.
 
 An invite link (`?room=CODE`, produced by **COPY INVITE**) joins that room on arrival rather than typing the code into the box for you. **ROOM OPTIONS** holds the manual controls: join by code, create a room, and whether that room is listed publicly.
