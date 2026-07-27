@@ -299,6 +299,9 @@ function createLink(clock, opts) {
      through a plain delay line and read as a latency regression rather than
      the dropped packet it is. staleEpoch makes it a number instead. */
   let authorityEpoch = opts.authorityEpoch === undefined ? 1 : opts.authorityEpoch;
+  let latestSnapshot = null;
+  let latestCheckpoint = null;
+  let promoted = false;
 
   function epochCurrent(message) {
     if (message.authorityEpoch === authorityEpoch) return true;
@@ -322,6 +325,21 @@ function createLink(clock, opts) {
     /* Guest -> relay -> host. */
     fromGuest(message) {
       stats.fromGuest++;
+      if (promoted) {
+        if (!epochCurrent(message)) return;
+        if (message.t === 'snapshot') latestSnapshot = message;
+        if (message.t === 'checkpoint') latestCheckpoint = message;
+        if (message.t === 'authority-ready') {
+          enqueue('guest', {
+            t: 'authority-ready',
+            v: NETP.VERSION,
+            authorityEpoch: authorityEpoch,
+            round: message.round,
+            host: GUEST_ID
+          });
+        }
+        return;
+      }
       if (message.t !== 'input') { enqueue('host', message); return; }
       if (!epochCurrent(message)) return;
       const sanitized = NETP.sanitizeInput(message, relayLastSeq);
@@ -333,12 +351,32 @@ function createLink(clock, opts) {
     fromHost(message) {
       stats.fromHost++;
       if (!epochCurrent(message)) return;
+      if (message.t === 'snapshot') latestSnapshot = message;
+      if (message.t === 'checkpoint') latestCheckpoint = message;
       enqueue('guest', message);
     },
-    /* Host departure and promotion bump the room's epoch. Exposed so a future
-       migration scenario can drive it; nothing calls it yet. */
+    /* Host departure and promotion bump the room's epoch. */
     epoch: () => authorityEpoch,
     bumpEpoch() { return ++authorityEpoch; },
+    latestSnapshot: () => latestSnapshot,
+    latestCheckpoint: () => latestCheckpoint,
+    beginPromotion(members) {
+      if (!latestSnapshot || !latestCheckpoint)
+        throw new Error('migration requires cached snapshot and checkpoint');
+      authorityEpoch++;
+      promoted = true;
+      enqueue('guest', {
+        t: 'host-changed',
+        v: NETP.VERSION,
+        authorityEpoch: authorityEpoch,
+        round: latestSnapshot.round,
+        host: GUEST_ID,
+        members: members,
+        seamless: true,
+        snapshot: latestSnapshot,
+        checkpoint: latestCheckpoint
+      });
+    },
     /* Deliver everything due, oldest first. */
     pump(deliver) {
       inflight.sort((a, b) => a.at - b.at);
@@ -414,12 +452,13 @@ function createMatch(opts = {}) {
   }
 
   let ticks = 0;
+  let hostDeparted = false;
   function tick() {
     clock.ms += FIXED * 1000;
     link.pump(deliver);
     guest.run(`netFrame(${clock.ms})`);
-    host.run(`simulate(${FIXED})`);
-    guest.run(`simulate(${FIXED})`);
+    if (!hostDeparted) host.run(`simulate(${FIXED})`);
+    if (guest.get("NET.phase === 'playing'")) guest.run(`simulate(${FIXED})`);
     ticks++;
   }
 
@@ -428,6 +467,13 @@ function createMatch(opts = {}) {
     HOST_ID, GUEST_ID,
     tick,
     ticks: () => ticks,
+    migrateHost() {
+      hostDeparted = true;
+      members.splice(0, members.length,
+        { id: GUEST_ID, name: 'GUEST', role: 'host' });
+      link.beginPromotion(members);
+      return this;
+    },
     /* Advance whole seconds of simulated time at the fixed step. */
     run(seconds) {
       const steps = Math.round(seconds / FIXED);

@@ -11,7 +11,10 @@ const ROOT_DIR = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_INDEX_PATH = resolve(ROOT_DIR, 'index.html');
 const DEFAULT_PROTOCOL_PATH = resolve(ROOT_DIR, 'net-protocol.js');
 
-const RELAY_TYPES = new Set(['snapshot', 'event']);
+const RELAY_TYPES = new Set(['snapshot', 'checkpoint', 'event']);
+const CHECKPOINT_CONTROLLERS = new Set(['local', 'remote', 'bot']);
+const CHECKPOINT_SKILLS = new Set(['easy', 'normal', 'hard']);
+const EVENT_KINDS = new Set(['shot', 'shield', 'damage', 'kill', 'respawn', 'match-over']);
 
 function positiveInteger(value, fallback) {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
@@ -69,6 +72,8 @@ export function createRelayServer(options = {}) {
     return allowedOrigins.has(origin.trim().replace(/\/+$/, '').toLowerCase());
   }
   const joinTimeoutMs = positiveInteger(options.joinTimeoutMs, 15_000);
+  const promotionTimeoutMs = positiveInteger(options.promotionTimeoutMs, 3_000);
+  const snapshotStallCount = positiveInteger(options.snapshotStallCount, 24);
   const makeId = typeof options.idFactory === 'function'
     ? options.idFactory
     : randomUUID;
@@ -109,6 +114,73 @@ export function createRelayServer(options = {}) {
   function encode(message) {
     try { return JSON.stringify(message); }
     catch (error) { return null; }
+  }
+
+  function safeCount(value) {
+    return Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
+  }
+
+  function validCheckpointEvent(event, actorIds) {
+    if (!event || typeof event !== 'object' || Array.isArray(event) ||
+        !Number.isSafeInteger(event.id) || event.id < 1 ||
+        !EVENT_KINDS.has(event.kind)) return false;
+    const known = (id) => typeof id === 'string' && actorIds.has(id);
+    const point = (value) => Array.isArray(value) && value.length === 3 &&
+      value.every((n) => Number.isFinite(n) && n >= -200 && n <= 200);
+    const source = event.from === null || known(event.from);
+    if (event.kind === 'shot') {
+      return known(event.from) && Protocol.ALLOWED_WEAPONS.includes(event.weapon) &&
+        Array.isArray(event.lines) && event.lines.length <= 16 &&
+        event.lines.every((line) => Array.isArray(line) && line.length === 6 &&
+          line.every((n) => Number.isFinite(n) && n >= -200 && n <= 200));
+    }
+    if (event.kind === 'shield')
+      return known(event.target) && source && point(event.at) &&
+        (event.seq == null || safeCount(event.seq));
+    if (event.kind === 'damage')
+      return known(event.target) && source && Number.isFinite(event.damage) &&
+        event.damage >= 0 && event.damage <= 500 && typeof event.head === 'boolean' &&
+        point(event.at) && (event.seq == null || safeCount(event.seq));
+    if (event.kind === 'kill')
+      return known(event.target) && source && safeCount(event.streak);
+    if (event.kind === 'respawn')
+      return known(event.actor) && point(event.at) &&
+        Number.isSafeInteger(event.color) && event.color >= 0 && event.color <= 0xffffff;
+    return known(event.winner);
+  }
+
+  function validCheckpoint(message) {
+    if (!Number.isSafeInteger(message.tick) || message.tick < 0 ||
+        !Number.isFinite(message.time) || message.time < 0 ||
+        message.time > 100_000_000 ||
+        !Number.isSafeInteger(message.manifestVersion) ||
+        message.manifestVersion < 1 ||
+        !Array.isArray(message.actors) || message.actors.length < 1 ||
+        message.actors.length > 16 ||
+        !Array.isArray(message.events) || message.events.length > 128) return false;
+
+    const actorIds = new Set();
+    for (const actor of message.actors) {
+      if (!actor || typeof actor !== 'object' || Array.isArray(actor) ||
+          typeof actor.netId !== 'string' || !actor.netId ||
+          actor.netId.length > 80 || actorIds.has(actor.netId) ||
+          !CHECKPOINT_CONTROLLERS.has(actor.controller) ||
+          typeof actor.human !== 'boolean' ||
+          (actor.human ? actor.controller === 'bot' : actor.controller !== 'bot') ||
+          !CHECKPOINT_SKILLS.has(actor.skill) ||
+          !actor.ammoBy || typeof actor.ammoBy !== 'object' ||
+          Array.isArray(actor.ammoBy)) return false;
+      const weapons = Object.keys(actor.ammoBy);
+      if (weapons.length > Protocol.ALLOWED_WEAPONS.length ||
+          weapons.some((weapon) => !Protocol.ALLOWED_WEAPONS.includes(weapon))) return false;
+      for (const weapon of weapons) {
+        const ammo = actor.ammoBy[weapon];
+        if (!Array.isArray(ammo) || ammo.length !== 2 ||
+            !safeCount(ammo[0]) || !safeCount(ammo[1])) return false;
+      }
+      actorIds.add(actor.netId);
+    }
+    return message.events.every((event) => validCheckpointEvent(event, actorIds));
   }
 
   /* The room browser only ever advertises rooms you could actually walk into
@@ -348,6 +420,12 @@ export function createRelayServer(options = {}) {
       started: false,
       round: 0,
       authorityEpoch: 1,
+      latestSnapshot: null,
+      latestCheckpoint: null,
+      migrating: null,
+      snapshotAt: 0,
+      snapshotIntervalMs: 0,
+      snapshotStallTimer: null,
       /* Listed by default so the room browser is useful out of the box;
          a host that wants the old code-only privacy sends listed:false. */
       listed: message.listed !== false
@@ -386,7 +464,8 @@ export function createRelayServer(options = {}) {
   }
 
   function handleGuestInput(peer, message) {
-    if (!peer.room.started || message.round !== peer.room.round ||
+    if (!peer.room.started || peer.room.migrating ||
+        message.round !== peer.room.round ||
         message.authorityEpoch !== peer.room.authorityEpoch) return;
     const sanitized = Protocol.sanitizeInput(message, peer.lastSeq);
     if (!sanitized.ok) {
@@ -413,6 +492,38 @@ export function createRelayServer(options = {}) {
       return;
     }
 
+    if (message.t === 'authority-state') {
+      const migration = peer.room.migrating;
+      if (peer.role !== 'guest' || !migration ||
+          message.authorityEpoch !== peer.room.authorityEpoch ||
+          message.round !== peer.room.round) return;
+      const checked = Protocol.sanitizeAuthorityState(message);
+      if (!checked.ok) {
+        sendError(peer, 'invalid-authority-state', checked.error);
+        return;
+      }
+      migration.states.set(peer.id, checked.value);
+      send(peer.room.host, { ...checked.value, from: peer.id });
+      return;
+    }
+
+    if (message.t === 'authority-ready') {
+      const migration = peer.room.migrating;
+      if (peer.role !== 'host' || !migration ||
+          message.authorityEpoch !== peer.room.authorityEpoch ||
+          message.round !== peer.room.round ||
+          !Number.isSafeInteger(message.tick) ||
+          message.tick !== migration.snapshot.tick) return;
+      for (const id of migration.expected) {
+        if (!migration.states.has(id)) {
+          sendError(peer, 'authority-not-ready', 'Waiting for surviving guest state.');
+          return;
+        }
+      }
+      finishMigration(peer.room);
+      return;
+    }
+
     if (message.t === 'input') {
       if (peer.role !== 'guest') {
         sendError(peer, 'guest-only', 'Only guests send input to the host.');
@@ -434,6 +545,11 @@ export function createRelayServer(options = {}) {
       }
       peer.room.started = true;
       peer.room.round++;
+      peer.room.latestSnapshot = null;
+      peer.room.latestCheckpoint = null;
+      clearSnapshotStall(peer.room);
+      peer.room.snapshotAt = 0;
+      peer.room.snapshotIntervalMs = 0;
       for (const member of peer.room.members.values()) member.lastSeq = -1;
       const start = {
         t: 'start',
@@ -454,6 +570,9 @@ export function createRelayServer(options = {}) {
       if (!hasCurrentAuthority(peer, message)) return;
       if (!peer.room.started || message.round !== peer.room.round) return;
       peer.room.started = false;
+      clearSnapshotStall(peer.room);
+      peer.room.snapshotAt = 0;
+      peer.room.snapshotIntervalMs = 0;
       broadcastRoom(peer.room, {
         t: 'lobby',
         v: Protocol.VERSION,
@@ -470,17 +589,35 @@ export function createRelayServer(options = {}) {
         return;
       }
       if (!hasCurrentAuthority(peer, message)) return;
+      if (peer.room.migrating) return;
       if (!peer.room.started || message.round !== peer.room.round) return;
       if (message.t === 'snapshot' &&
-          (!Number.isSafeInteger(message.tick) || !Array.isArray(message.actors) ||
+          (!Number.isSafeInteger(message.tick) || !Number.isFinite(message.time) ||
+           !Number.isSafeInteger(message.eventSeq) ||
+           !Number.isSafeInteger(message.manifestVersion) ||
+           !Array.isArray(message.actors) ||
            message.actors.length > 16)) {
         sendError(peer, 'invalid-snapshot', 'Invalid snapshot.');
+        return;
+      }
+      if (message.t === 'checkpoint' && !validCheckpoint(message)) {
+        sendError(peer, 'invalid-checkpoint', 'Invalid checkpoint.');
         return;
       }
       if (message.t === 'event' &&
           (!Array.isArray(message.events) || message.events.length > 256)) {
         sendError(peer, 'invalid-event', 'Invalid event batch.');
         return;
+      }
+      if (message.t === 'snapshot') {
+        if (peer.room.latestSnapshot &&
+            message.tick < peer.room.latestSnapshot.tick) return;
+        peer.room.latestSnapshot = message;
+        observeSnapshot(peer.room, peer);
+      } else if (message.t === 'checkpoint') {
+        if (peer.room.latestCheckpoint &&
+            message.tick < peer.room.latestCheckpoint.tick) return;
+        peer.room.latestCheckpoint = message;
       }
       broadcastRoom(peer.room, message);
       return;
@@ -533,14 +670,68 @@ export function createRelayServer(options = {}) {
     peer.lastSeq = -1;
   }
 
-  /* The oldest surviving guest becomes host. The in-progress round is
-     deliberately abandoned: advancing both counters creates a clean barrier
-     against delayed packets, and every survivor returns to the normal lobby
-     flow before the promoted host can start a fresh round. */
-  function migrateHostedRoom(room, departedHost) {
-    room.members.delete(departedHost.id);
-    clearRoomMembership(departedHost);
+  function clearSnapshotStall(room) {
+    if (room.snapshotStallTimer) clearTimeout(room.snapshotStallTimer);
+    room.snapshotStallTimer = null;
+  }
 
+  function observeSnapshot(room, host) {
+    const now = Date.now();
+    if (room.snapshotAt) {
+      const sample = now - room.snapshotAt;
+      if (sample >= 10 && sample <= 5_000) {
+        room.snapshotIntervalMs = room.snapshotIntervalMs
+          ? room.snapshotIntervalMs * 0.8 + sample * 0.2
+          : sample;
+      }
+    }
+    room.snapshotAt = now;
+    clearSnapshotStall(room);
+    if (!room.snapshotIntervalMs) return;
+    const epoch = room.authorityEpoch;
+    room.snapshotStallTimer = setTimeout(() => {
+      room.snapshotStallTimer = null;
+      if (room.started && !room.migrating && room.host === host &&
+          room.authorityEpoch === epoch) {
+        beginMigration(room, host, true);
+        try { host.ws.close(1012, 'authority snapshot stalled'); } catch (error) {}
+      }
+    }, Math.ceil(room.snapshotIntervalMs * snapshotStallCount));
+    if (typeof room.snapshotStallTimer.unref === 'function')
+      room.snapshotStallTimer.unref();
+  }
+
+  function canMigrateSeamlessly(room) {
+    const snapshot = room.latestSnapshot;
+    const checkpoint = room.latestCheckpoint;
+    if (!snapshot || !checkpoint ||
+        snapshot.authorityEpoch !== room.authorityEpoch ||
+        checkpoint.authorityEpoch !== room.authorityEpoch ||
+        snapshot.round !== room.round || checkpoint.round !== room.round ||
+        !Array.isArray(snapshot.actors) || snapshot.actors.length < 1 ||
+        snapshot.over !== false ||
+        snapshot.manifestVersion !== checkpoint.manifestVersion) return false;
+    const migrationBytes = encode({ snapshot, checkpoint });
+    if (migrationBytes === null ||
+        Buffer.byteLength(migrationBytes, 'utf8') > maxMessageBytes - 4096) return false;
+    const metadata = new Set(checkpoint.actors.map((actor) => actor.netId));
+    return metadata.size === snapshot.actors.length &&
+      snapshot.actors.every((actor) =>
+      actor && typeof actor.netId === 'string' && metadata.has(actor.netId));
+  }
+
+  function nextMigrationCandidate(room) {
+    const attempted = room.migrating ? room.migrating.attempted : new Set();
+    for (const peer of room.members.values()) {
+      if (peer.role === 'guest' && peer.alive && !attempted.has(peer.id)) return peer;
+    }
+    return null;
+  }
+
+  function fallbackRestart(room) {
+    if (room.migrating && room.migrating.timer) clearTimeout(room.migrating.timer);
+    room.migrating = null;
+    clearSnapshotStall(room);
     const nextHost = room.members.values().next().value;
     if (!nextHost) {
       rooms.delete(room.code);
@@ -548,14 +739,15 @@ export function createRelayServer(options = {}) {
       room.started = false;
       return;
     }
-
-    nextHost.role = 'host';
+    for (const member of room.members.values())
+      member.role = member === nextHost ? 'host' : 'guest';
     room.host = nextHost;
     room.started = false;
     room.round++;
     room.authorityEpoch++;
+    room.latestSnapshot = null;
+    room.latestCheckpoint = null;
     for (const member of room.members.values()) member.lastSeq = -1;
-
     broadcastRoom(room, {
       t: 'host-changed',
       v: Protocol.VERSION,
@@ -564,6 +756,98 @@ export function createRelayServer(options = {}) {
       host: nextHost.id,
       members: memberList(room)
     }, true);
+  }
+
+  function attemptPromotion(room) {
+    const nextHost = nextMigrationCandidate(room);
+    if (!nextHost) {
+      fallbackRestart(room);
+      return;
+    }
+    if (room.migrating.timer) clearTimeout(room.migrating.timer);
+    for (const member of room.members.values())
+      member.role = member === nextHost ? 'host' : 'guest';
+    room.migrating.attempted.add(nextHost.id);
+    room.migrating.states = new Map();
+    room.migrating.expected = new Set(
+      Array.from(room.members.values(), (peer) => peer.id)
+        .filter((id) => id !== nextHost.id)
+    );
+    room.host = nextHost;
+    room.authorityEpoch++;
+    broadcastRoom(room, {
+      t: 'host-changed',
+      v: Protocol.VERSION,
+      authorityEpoch: room.authorityEpoch,
+      round: room.round,
+      host: nextHost.id,
+      members: memberList(room),
+      seamless: true,
+      snapshot: room.migrating.snapshot,
+      checkpoint: room.migrating.checkpoint
+    }, true);
+    room.migrating.timer = setTimeout(() => {
+      if (!room.migrating || room.host !== nextHost) return;
+      nextHost.role = 'guest';
+      attemptPromotion(room);
+    }, promotionTimeoutMs);
+    if (typeof room.migrating.timer.unref === 'function')
+      room.migrating.timer.unref();
+  }
+
+  function beginMigration(room, failedHost, removeHost) {
+    clearSnapshotStall(room);
+    if (removeHost) {
+      room.members.delete(failedHost.id);
+      clearRoomMembership(failedHost);
+    } else {
+      failedHost.role = 'guest';
+    }
+    if (!room.members.size) {
+      rooms.delete(room.code);
+      room.host = null;
+      room.started = false;
+      return;
+    }
+    if (!room.started || !canMigrateSeamlessly(room)) {
+      fallbackRestart(room);
+      return;
+    }
+    room.migrating = {
+      attempted: new Set([failedHost.id]),
+      states: new Map(),
+      expected: new Set(),
+      snapshot: room.latestSnapshot,
+      checkpoint: room.latestCheckpoint,
+      timer: null
+    };
+    attemptPromotion(room);
+  }
+
+  function finishMigration(room) {
+    if (!room.migrating) return;
+    if (room.migrating.timer) clearTimeout(room.migrating.timer);
+    room.migrating = null;
+    for (const member of room.members.values()) member.lastSeq = -1;
+    broadcastRoom(room, {
+      t: 'authority-ready',
+      v: Protocol.VERSION,
+      authorityEpoch: room.authorityEpoch,
+      round: room.round,
+      host: room.host.id
+    }, true);
+    room.snapshotAt = 0;
+    room.snapshotIntervalMs = 0;
+  }
+
+  function migrateHostedRoom(room, departedHost) {
+    if (room.migrating) {
+      room.members.delete(departedHost.id);
+      clearRoomMembership(departedHost);
+      attemptPromotion(room);
+      return;
+    }
+    beginMigration(room, departedHost, true);
   }
 
   function leaveRoom(peer) {
@@ -577,6 +861,7 @@ export function createRelayServer(options = {}) {
 
     room.members.delete(peer.id);
     clearRoomMembership(peer);
+    if (room.migrating) room.migrating.expected.delete(peer.id);
     broadcastMembers(room);
   }
 
@@ -676,6 +961,10 @@ export function createRelayServer(options = {}) {
 
   async function close() {
     if (heartbeat) clearInterval(heartbeat);
+    for (const room of rooms.values()) {
+      clearSnapshotStall(room);
+      if (room.migrating && room.migrating.timer) clearTimeout(room.migrating.timer);
+    }
     for (const peer of peers.values()) peer.ws.terminate();
 
     if (!server.listening) return;

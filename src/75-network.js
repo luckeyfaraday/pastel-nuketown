@@ -25,6 +25,7 @@ const NET_SNAPSHOT_INTERVAL = 1 / 20;
    but not once per 60Hz tick: the relay closes a peer over 90 messages a
    second, and snapshots already claim 20 of those. */
 const NET_EVENT_INTERVAL = 1 / 30;
+const NET_CHECKPOINT_INTERVAL = 1;
 /* One recorded step per simulated tick; a second of them is far more than the
    round trip a replay ever has to cover, and bounds the buffer if the socket
    stalls. */
@@ -60,6 +61,8 @@ const NET = {
   weaponSeq: 0,
   lastInputAck: 0,
   snapshotAcc: 0,
+  checkpointAcc: 0,
+  checkpointDirty: false,
   eventAcc: 0,
   pendingSteps: [],
   lastResidual: 0,
@@ -78,6 +81,10 @@ const NET = {
   arrivalJitter: 0,
   lastSnapshotAt: 0,
   actorManifest: null,
+  manifestVersion: 1,
+  lastRawSnapshot: null,
+  lastCheckpoint: null,
+  migration: null,
   lastKillerId: null,
   scoreSignature: '',
   connectTimer: 0,
@@ -407,6 +414,8 @@ function netResetTransport() {
   NET.weaponSeq = 0;
   NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
+  NET.checkpointAcc = 0;
+  NET.checkpointDirty = false;
   NET.eventAcc = 0;
   NET.pendingSteps = [];
   NET.lastResidual = 0;
@@ -425,6 +434,10 @@ function netResetTransport() {
   NET.arrivalJitter = 0;
   NET.lastSnapshotAt = 0;
   NET.actorManifest = null;
+  NET.manifestVersion = 1;
+  NET.lastRawSnapshot = null;
+  NET.lastCheckpoint = null;
+  NET.migration = null;
   NET.lastKillerId = null;
   NET.scoreSignature = '';
   NET.manualClose = false;
@@ -548,6 +561,7 @@ function netHandleWire(raw) {
   }
   if (msg.t === 'host-changed') {
     if (!netIsMultiplayer()) return;
+    const previousEpoch = NET.authorityEpoch;
     const checked = NETP.sanitizeHostChanged(
       msg, NET.id, NET.authorityEpoch, NET.round);
     if (!checked.ok) return;
@@ -556,9 +570,25 @@ function netHandleWire(raw) {
     NET.round = change.round;
     NET.members = change.members;
     NET.mode = change.host === NET.id ? 'host' : 'guest';
-    NET.phase = 'lobby';
     NET.starting = false;
-    netReturnToLobbyAfterHostChange(change.host);
+    if (change.seamless) {
+      if (!netBeginSeamlessMigration(change, previousEpoch))
+        netEndSession('Host migration state was unsafe. Reconnect to continue.');
+    } else {
+      NET.phase = 'lobby';
+      netReturnToLobbyAfterHostChange(change.host);
+    }
+    return;
+  }
+  if (msg.t === 'authority-state' && netIsHost() && NET.phase === 'migrating' &&
+      msg.authorityEpoch === NET.authorityEpoch && msg.round === NET.round) {
+    netAcceptAuthorityState(msg);
+    return;
+  }
+  if (msg.t === 'authority-ready' && NET.phase === 'migrating' &&
+      msg.authorityEpoch === NET.authorityEpoch && msg.round === NET.round &&
+      msg.host === NET.members.find(member => member.role === 'host')?.id) {
+    netFinishSeamlessMigration();
     return;
   }
   if (msg.t === 'members') {
@@ -566,6 +596,14 @@ function netHandleWire(raw) {
     if (!netIsMultiplayer() || !members || !members.some(member => member.id === NET.id)) return;
     NET.members = members;
     netRenderMembers();
+    if (NET.phase === 'migrating' && netIsHost()) {
+      const liveGuests = new Set(
+        members.filter(member => member.id !== NET.id).map(member => member.id));
+      for (const id of NET.migration.expected)
+        if (!liveGuests.has(id)) NET.migration.expected.delete(id);
+      netPruneDepartedPlayers();
+      netMaybeAuthorityReady();
+    }
     if (netIsHost() && NET.phase === 'playing') netPruneDepartedPlayers();
     return;
   }
@@ -615,14 +653,16 @@ function netHandleWire(raw) {
     netApplySnapshot(msg);
     return;
   }
+  if (msg.t === 'checkpoint' && netIsGuest() && NET.phase === 'playing' &&
+      msg.authorityEpoch === NET.authorityEpoch && msg.round === NET.round &&
+      netValidCheckpoint(msg)) {
+    NET.lastCheckpoint = msg;
+    return;
+  }
   if (msg.t === 'event' && netIsGuest() && NET.phase === 'playing' &&
       msg.authorityEpoch === NET.authorityEpoch &&
       msg.round === NET.round && Array.isArray(msg.events) && msg.events.length <= 256) {
     for (const event of msg.events) netApplyEvent(event);
-    return;
-  }
-  if (msg.t === 'room-closed') {
-    netEndSession('The host closed the room.');
     return;
   }
   if (msg.t === 'error') {
@@ -683,6 +723,8 @@ function netBeginMatch() {
   NET.weaponSeq = 0;
   NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
+  NET.checkpointAcc = 0;
+  NET.checkpointDirty = true;
   NET.eventAcc = 0;
   NET.pendingSteps = [];
   NET.lastResidual = 0;
@@ -701,6 +743,10 @@ function netBeginMatch() {
   NET.arrivalJitter = 0;
   NET.lastSnapshotAt = 0;
   NET.actorManifest = null;
+  NET.manifestVersion = 1;
+  NET.lastRawSnapshot = null;
+  NET.lastCheckpoint = null;
+  NET.migration = null;
   NET.lastKillerId = null;
   NET.scoreSignature = '';
   IN.firing = false;
@@ -759,6 +805,310 @@ function netReturnToLobbyAfterHostChange(hostId) {
     : ((host ? host.name : 'A player') + ' is the new host. Waiting for a fresh round.'));
 }
 
+function netValidMigrationSnapshot(snapshot, previousEpoch, round) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) ||
+      snapshot.t !== 'snapshot' || snapshot.v !== NETP.VERSION ||
+      snapshot.authorityEpoch !== previousEpoch || snapshot.round !== round ||
+      !Number.isSafeInteger(snapshot.tick) || snapshot.tick < 0 ||
+      !netFiniteIn(snapshot.time, 0, 100_000_000) ||
+      !Number.isSafeInteger(snapshot.eventSeq) || snapshot.eventSeq < 0 ||
+      !Number.isSafeInteger(snapshot.manifestVersion) ||
+      snapshot.manifestVersion < 1 || typeof snapshot.over !== 'boolean' ||
+      !Array.isArray(snapshot.actors) || snapshot.actors.length < 1 ||
+      snapshot.actors.length > 16) return false;
+  const ids = new Set();
+  for (const actor of snapshot.actors) {
+    if (!netValidActorState(actor) || ids.has(actor.netId)) return false;
+    ids.add(actor.netId);
+  }
+  if (!ids.has(NET.id)) return false;
+  if (snapshot.winner !== null &&
+      (typeof snapshot.winner !== 'string' || !ids.has(snapshot.winner))) return false;
+  if (snapshot.over &&
+      (typeof snapshot.winner !== 'string' || !ids.has(snapshot.winner))) return false;
+  return true;
+}
+
+function netCheckpointMetadata(checkpoint) {
+  return new Map(checkpoint.actors.map(actor => [actor.netId, actor]));
+}
+
+function netBotOrdinal(netId) {
+  const match = /^bot-([1-9]\d*)$/.exec(netId);
+  return match ? Number(match[1]) - 1 : null;
+}
+
+function netRestoreAmmoStore(actor, metadata) {
+  actor._ammoBy = {};
+  for (const weapon of Object.keys(metadata.ammoBy)) {
+    const value = metadata.ammoBy[weapon];
+    actor._ammoBy[weapon] = { ammo: value[0], reserve: value[1] };
+  }
+  actor._ammoBy[actor.weapon] = { ammo: actor.ammo, reserve: actor.reserve };
+}
+
+function netHydrateActor(actor, state, metadata, local) {
+  actor.id = state.id;
+  actor.netId = state.netId;
+  actor.name = NETP.cleanPlayerName(state.name);
+  actor.isPlayer = local;
+  actor.isHuman = !!state.human;
+  actor.controller = local ? 'local' : (state.human ? 'remote' : 'bot');
+  actor.skill = metadata.skill;
+  actor.colors = {
+    body: state.colors.body, trim: state.colors.trim, name: state.colors.name
+  };
+  actor.pos.x = state.pos[0]; actor.pos.y = state.pos[1]; actor.pos.z = state.pos[2];
+  actor.vel.x = state.vel[0]; actor.vel.y = state.vel[1]; actor.vel.z = state.vel[2];
+  actor.yaw = state.yaw; actor.pitch = state.pitch;
+  actor.aimYaw = state.aimYaw; actor.aimPitch = state.aimPitch;
+  actor.bodyYaw = state.bodyYaw;
+  actor.onGround = !!state.onGround;
+  actor.aiming = !!state.aiming;
+  actor.health = state.health; actor.maxHealth = state.maxHealth;
+  actor.alive = !!state.alive;
+  actor.deathT = state.deathT; actor.respawnT = state.respawnT;
+  actor.shield = state.shield;
+  actor.weapon = state.weapon;
+  actor.ammo = state.ammo; actor.reserve = state.reserve;
+  actor.reloadT = state.reloadT;
+  actor.fireCd = 0;
+  actor.kills = state.kills; actor.deaths = state.deaths;
+  actor.streak = state.streak; actor.bestStreak = state.bestStreak;
+  actor.lastHitBy = state.lastHitBy;
+  actor.stepPhase = 0;
+  actor.pendingFireUntil = 0;
+  actor.pendingFireSeq = 0;
+  actor.pendingRenderTime = 0;
+  actor.netInput = null;
+  actor.netInputQueue = [];
+  actor.lastInputSeq = -1;
+  actor.lastWeaponSeq = -1;
+  actor.inputAck = 0;
+  actor.weaponAck = 0;
+  actor.lastFireSeq = 0;
+  actor.lastReloadSeq = 0;
+  actor.netHistory = [];
+  actor.netSamples = [];
+  netRestoreAmmoStore(actor, metadata);
+
+  if (actor.controller === 'bot') {
+    const ordinal = netBotOrdinal(actor.netId);
+    actor.brain = G.aiOK && ordinal !== null
+      ? AI.createBrain({
+        id: actor.id,
+        seed: 1000 + ordinal * 77,
+        skill: actor.skill
+      })
+      : null;
+  } else {
+    actor.brain = null;
+  }
+}
+
+function netHydrateMigration(snapshot, checkpoint) {
+  const metadata = netCheckpointMetadata(checkpoint);
+  const members = new Set(NET.members.map(member => member.id));
+  const oldActors = G.actors.slice();
+  const restored = [];
+  const manifest = new Set();
+  let pruned = false;
+
+  for (const state of snapshot.actors) {
+    const slow = metadata.get(state.netId);
+    if (!slow) return false;
+    if ((state.human && (slow.controller === 'bot' || !slow.human)) ||
+        (!state.human && (slow.controller !== 'bot' || slow.human))) return false;
+    if (state.human && !members.has(state.netId)) {
+      pruned = true;
+      continue;
+    }
+    const local = state.netId === NET.id;
+    let actor = local ? G.player : oldActors.find(item => item.netId === state.netId);
+    if (!actor) {
+      actor = makeActor({
+        id: state.id,
+        netId: state.netId,
+        name: NETP.cleanPlayerName(state.name),
+        controller: state.human ? 'remote' : 'bot',
+        isHuman: !!state.human,
+        colors: {
+          body: state.colors.body, trim: state.colors.trim, name: state.colors.name
+        },
+        weapon: state.weapon,
+        skill: slow.skill
+      });
+      attachCharacter(actor);
+    }
+    netHydrateActor(actor, state, slow, local);
+    restored.push(actor);
+    manifest.add(state.netId);
+  }
+  if (!manifest.has(NET.id)) return false;
+  for (const actor of oldActors) {
+    if (!restored.includes(actor)) disposeActorVisuals(actor);
+  }
+  G.actors = restored;
+  G.player = restored.find(actor => actor.netId === NET.id);
+  _nextId = restored.reduce((max, actor) => Math.max(max, actor.id), 0) + 1;
+  G.time = snapshot.time;
+  G.tick = snapshot.tick;
+  G.over = snapshot.over;
+  G.winner = snapshot.winner
+    ? restored.find(actor => actor.netId === snapshot.winner) || null
+    : null;
+  if (snapshot.over && !G.winner) return false;
+  G.fixedAcc = 0;
+
+  NET.actorManifest = manifest;
+  NET.manifestVersion = snapshot.manifestVersion + (pruned ? 1 : 0);
+  NET.lastRawSnapshot = snapshot;
+  NET.lastCheckpoint = checkpoint;
+  NET.lastSnapshotTick = snapshot.tick;
+  NET.lastSnapshotTime = snapshot.time;
+  NET.hostClock = snapshot.time;
+  NET.hostClockAt = performance.now() / 1000;
+  NET.pendingSteps = [];
+  NET.inputSentTimes.clear();
+  NET.lastInputAck = NET.inputSeq;
+  NET.eventSeq = Math.max(
+    snapshot.eventSeq,
+    ...checkpoint.events.map(event => event.id)
+  );
+  NET.eventQueue = netIsHost()
+    ? checkpoint.events.filter(event => netValidEvent(event, manifest))
+    : [];
+  NET.checkpointDirty = pruned;
+  NET.snapshotAcc = 0;
+  NET.checkpointAcc = 0;
+  NET.eventAcc = 0;
+  NET.lastResidual = 0;
+
+  if (G.player) vmSetWeapon(G.player.weapon);
+  refreshBoard();
+  updateHUD();
+  return true;
+}
+
+function netSendAuthorityState() {
+  if (!netIsGuest() || NET.phase !== 'migrating' || !G.player) return;
+  const state = NET.migration.authorityState;
+  netSend({
+    t: 'authority-state',
+    v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
+    round: NET.round,
+    inputSeq: state.inputSeq,
+    fireSeq: state.fireSeq,
+    reloadSeq: state.reloadSeq,
+    weaponSeq: state.weaponSeq,
+    weapon: state.weapon
+  });
+}
+
+function netBeginSeamlessMigration(change, previousEpoch) {
+  const snapshot = change.snapshot;
+  const checkpoint = change.checkpoint;
+  const sourceEpoch = snapshot && snapshot.authorityEpoch;
+  if (!NETP.isAuthorityEpoch(sourceEpoch) ||
+      sourceEpoch >= change.authorityEpoch ||
+      sourceEpoch > previousEpoch ||
+      (NET.lastRawSnapshot && NET.lastRawSnapshot.round === change.round &&
+       snapshot.tick < NET.lastRawSnapshot.tick) ||
+      (NET.lastCheckpoint && NET.lastCheckpoint.round === change.round &&
+       checkpoint.tick < NET.lastCheckpoint.tick) ||
+      !netValidMigrationSnapshot(snapshot, sourceEpoch, change.round) ||
+      !netValidCheckpoint(checkpoint) ||
+      checkpoint.authorityEpoch !== sourceEpoch ||
+      checkpoint.round !== change.round ||
+      checkpoint.manifestVersion !== snapshot.manifestVersion) return false;
+  const metadata = netCheckpointMetadata(checkpoint);
+  if (metadata.size !== snapshot.actors.length ||
+      snapshot.actors.some(actor => !metadata.has(actor.netId))) return false;
+
+  NET.phase = 'migrating';
+  NET.migration = {
+    paused: G.paused,
+    frozen: G.frozen,
+    expected: new Set(
+      change.members.filter(member => member.id !== NET.id).map(member => member.id)),
+    received: new Set(),
+    readySent: false,
+    authorityState: {
+      inputSeq: NET.inputSeq,
+      fireSeq: IN.fireSeq,
+      reloadSeq: IN.reloadSeq,
+      weaponSeq: NET.weaponSeq,
+      weapon: G.player.weapon
+    }
+  };
+  G.frozen = true;
+  G.fixedAcc = 0;
+  if (!netHydrateMigration(snapshot, checkpoint)) return false;
+  if (netIsHost()) netMaybeAuthorityReady();
+  else netSendAuthorityState();
+  netStatus(netIsHost()
+    ? 'Taking over the current round…'
+    : 'The host changed — resuming the current round…');
+  return true;
+}
+
+function netAcceptAuthorityState(message) {
+  if (!NET.migration || typeof message.from !== 'string' ||
+      !NET.migration.expected.has(message.from)) return;
+  const checked = NETP.sanitizeAuthorityState(message);
+  if (!checked.ok) return;
+  const actor = G.actors.find(item =>
+    item.controller === 'remote' && item.netId === message.from);
+  if (!actor) return;
+  const state = checked.value;
+  actor.lastInputSeq = state.inputSeq;
+  actor.inputAck = state.inputSeq;
+  actor.lastFireSeq = state.fireSeq;
+  actor.lastReloadSeq = state.reloadSeq;
+  actor.lastWeaponSeq = state.weaponSeq;
+  actor.weaponAck = state.weaponSeq;
+  if (actor.weapon !== state.weapon) switchRemoteWeapon(actor, state.weapon);
+  actor.netInput = {
+    fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
+    fireSeq: state.fireSeq, reloadSeq: state.reloadSeq,
+    yaw: actor.yaw, pitch: actor.pitch, weapon: actor.weapon,
+    seq: state.inputSeq, weaponSeq: state.weaponSeq, renderTime: G.time
+  };
+  actor.netInputAt = G.time;
+  NET.migration.received.add(message.from);
+  netMaybeAuthorityReady();
+}
+
+function netMaybeAuthorityReady() {
+  if (!netIsHost() || NET.phase !== 'migrating' || !NET.migration ||
+      NET.migration.readySent) return;
+  for (const id of NET.migration.expected)
+    if (!NET.migration.received.has(id)) return;
+  NET.migration.readySent = netSend({
+    t: 'authority-ready',
+    v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
+    round: NET.round,
+    tick: G.tick
+  });
+}
+
+function netFinishSeamlessMigration() {
+  if (!NET.migration) return;
+  const migration = NET.migration;
+  NET.migration = null;
+  NET.phase = 'playing';
+  G.frozen = migration.frozen;
+  G.paused = migration.paused;
+  G.fixedAcc = 0;
+  NET.lastSnapshotAt = performance.now() / 1000;
+  NET.hostClockAt = NET.lastSnapshotAt;
+  netStatus('');
+  showHint(netIsHost() ? 'YOU ARE THE HOST' : 'HOST MIGRATION COMPLETE');
+  if (netIsHost()) netAfterSimulation(0, true);
+}
+
 function netEndSession(message) {
   if (G.started) {
     G.paused = true;
@@ -776,8 +1126,16 @@ function netEndSession(message) {
 
 function netPruneDepartedPlayers() {
   const live = new Set(NET.members.map(m => m.id));
+  let changed = false;
   for (const a of G.actors.slice()) {
-    if (a.controller === 'remote' && !live.has(a.netId)) detachActor(a);
+    if (a.controller === 'remote' && !live.has(a.netId)) {
+      detachActor(a);
+      changed = true;
+    }
+  }
+  if (changed && netIsHost()) {
+    NET.manifestVersion++;
+    NET.checkpointDirty = true;
   }
   refreshBoard();
 }
@@ -788,6 +1146,11 @@ function netActorId(a) {
 
 function netOnLocalWeaponChanged() {
   if (netIsGuest()) NET.weaponSeq++;
+  if (netIsHost()) NET.checkpointDirty = true;
+}
+
+function netOnAuthoritySlowStateChanged() {
+  if (netIsHost()) NET.checkpointDirty = true;
 }
 
 function netRound(v) { return Math.round(v * 1000) / 1000; }
@@ -826,6 +1189,39 @@ function netPackActor(a) {
     bestStreak: a.bestStreak,
     lastHitBy: a.lastHitBy
   };
+}
+
+function netPackCheckpointActor(a) {
+  const ammoBy = {};
+  const stored = a._ammoBy && typeof a._ammoBy === 'object' ? a._ammoBy : {};
+  for (const weapon of NETP.ALLOWED_WEAPONS) {
+    const value = stored[weapon];
+    if (value && netSafeCount(value.ammo) && netSafeCount(value.reserve))
+      ammoBy[weapon] = [value.ammo, value.reserve];
+  }
+  ammoBy[a.weapon] = [Math.max(0, Math.floor(a.ammo)), Math.max(0, Math.floor(a.reserve))];
+  return {
+    netId: netActorId(a),
+    controller: a.controller,
+    human: !!a.isHuman,
+    skill: a.skill || 'normal',
+    ammoBy: ammoBy
+  };
+}
+
+function netSendCheckpoint() {
+  if (!netIsHost() || NET.phase !== 'playing' || !netSocketOpen()) return false;
+  return netSend({
+    t: 'checkpoint',
+    v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
+    round: NET.round,
+    tick: G.tick,
+    time: G.time,
+    manifestVersion: NET.manifestVersion,
+    actors: G.actors.map(netPackCheckpointActor),
+    events: NET.eventQueue.slice()
+  });
 }
 
 function netFlushEvents() {
@@ -930,6 +1326,7 @@ function netAfterSimulation(dt, force) {
   if (netIsHost() && NET.phase === 'playing') netRecordActorHistory();
   if (!netIsHost() || NET.phase !== 'playing' || !netSocketOpen()) return;
   NET.snapshotAcc += dt;
+  NET.checkpointAcc += dt;
   NET.eventAcc += dt;
 
   if (force || NET.snapshotAcc >= NET_SNAPSHOT_INTERVAL) {
@@ -940,11 +1337,18 @@ function netAfterSimulation(dt, force) {
       authorityEpoch: NET.authorityEpoch,
       round: NET.round,
       tick: G.tick,
-      time: netRound(G.time),
+      time: G.time,
+      eventSeq: NET.eventSeq,
+      manifestVersion: NET.manifestVersion,
       actors: G.actors.map(netPackActor),
       over: !!G.over,
       winner: G.winner ? netActorId(G.winner) : null
     }, !force);
+  }
+
+  if (force || NET.checkpointDirty || NET.checkpointAcc >= NET_CHECKPOINT_INTERVAL) {
+    NET.checkpointAcc = force ? 0 : NET.checkpointAcc % NET_CHECKPOINT_INTERVAL;
+    if (netSendCheckpoint()) NET.checkpointDirty = false;
   }
 
   /* Events used to leave only when a snapshot did, which put up to a whole
@@ -1129,6 +1533,39 @@ function netSafeCount(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
 }
 
+function netValidCheckpoint(message) {
+  if (!message || typeof message !== 'object' || Array.isArray(message) ||
+      message.t !== 'checkpoint' || message.v !== NETP.VERSION ||
+      !Number.isSafeInteger(message.tick) || message.tick < 0 ||
+      !netFiniteIn(message.time, 0, 100_000_000) ||
+      !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
+      !Array.isArray(message.actors) || message.actors.length < 1 ||
+      message.actors.length > 16 ||
+      !Array.isArray(message.events) || message.events.length > 128) return false;
+  const ids = new Set();
+  for (const actor of message.actors) {
+    if (!actor || typeof actor !== 'object' || Array.isArray(actor) ||
+        typeof actor.netId !== 'string' || !actor.netId || actor.netId.length > 80 ||
+        ids.has(actor.netId) ||
+        !['local', 'remote', 'bot'].includes(actor.controller) ||
+        typeof actor.human !== 'boolean' ||
+        (actor.human ? actor.controller === 'bot' : actor.controller !== 'bot') ||
+        !['easy', 'normal', 'hard'].includes(actor.skill) ||
+        !actor.ammoBy || typeof actor.ammoBy !== 'object' ||
+        Array.isArray(actor.ammoBy)) return false;
+    const weapons = Object.keys(actor.ammoBy);
+    if (weapons.length > NETP.ALLOWED_WEAPONS.length ||
+        weapons.some(weapon => !NETP.ALLOWED_WEAPONS.includes(weapon))) return false;
+    for (const weapon of weapons) {
+      const ammo = actor.ammoBy[weapon];
+      if (!Array.isArray(ammo) || ammo.length !== 2 ||
+          !netSafeCount(ammo[0]) || !netSafeCount(ammo[1])) return false;
+    }
+    ids.add(actor.netId);
+  }
+  return message.events.every(event => netValidEvent(event, ids));
+}
+
 function netValidActorState(s) {
   const b = MAP.bounds;
   return !!(s && typeof s === 'object' && !Array.isArray(s) &&
@@ -1159,7 +1596,10 @@ function netValidActorState(s) {
     Number.isSafeInteger(s.ack) && s.ack >= 0 &&
     Number.isSafeInteger(s.weaponSeq) && s.weaponSeq >= 0 &&
     netSafeCount(s.kills) && netSafeCount(s.deaths) &&
-    netSafeCount(s.streak) && netSafeCount(s.bestStreak));
+    netSafeCount(s.streak) && netSafeCount(s.bestStreak) &&
+    (s.lastHitBy === null ||
+      (Number.isSafeInteger(s.lastHitBy) && s.lastHitBy > 0 &&
+       s.lastHitBy <= 100_000)));
 }
 
 function netCreateReplica(s) {
@@ -1275,6 +1715,8 @@ function netApplyActorState(a, s, local, sampleTime) {
 function netApplySnapshot(msg) {
   if (!Number.isSafeInteger(msg.tick) || msg.tick < 0 || msg.tick <= NET.lastSnapshotTick ||
       !netFiniteIn(msg.time, 0, 100_000_000) || typeof msg.over !== 'boolean' ||
+      !Number.isSafeInteger(msg.eventSeq) || msg.eventSeq < 0 ||
+      !Number.isSafeInteger(msg.manifestVersion) || msg.manifestVersion < 1 ||
       !Array.isArray(msg.actors) || msg.actors.length < 1 || msg.actors.length > 16) return;
 
   const seen = new Set();
@@ -1284,14 +1726,23 @@ function netApplySnapshot(msg) {
   }
   if (!seen.has(NET.id)) return;
   if (NET.actorManifest) {
-    for (const id of seen) if (!NET.actorManifest.has(id)) return;
+    if (msg.manifestVersion < NET.manifestVersion) return;
+    if (msg.manifestVersion === NET.manifestVersion) {
+      if (seen.size !== NET.actorManifest.size) return;
+      for (const id of seen) if (!NET.actorManifest.has(id)) return;
+    } else {
+      NET.actorManifest = new Set(seen);
+      NET.manifestVersion = msg.manifestVersion;
+    }
   } else {
     NET.actorManifest = new Set(seen);
+    NET.manifestVersion = msg.manifestVersion;
   }
   if (msg.over &&
       (typeof msg.winner !== 'string' || !NET.actorManifest.has(msg.winner))) return;
 
   NET.lastSnapshotTick = msg.tick;
+  NET.lastRawSnapshot = msg;
   if (NET.lastSnapshotTime >= 0) {
     const interval = msg.time - NET.lastSnapshotTime;
     if (interval >= NET_SNAPSHOT_INTERVAL * 0.5 && interval <= NET_SNAPSHOT_INTERVAL * 4)
@@ -1444,8 +1895,9 @@ function netOnAuthoritativeMatchOver(winner) {
   });
 }
 
-function netKnownActor(value) {
-  return typeof value === 'string' && NET.actorManifest && NET.actorManifest.has(value);
+function netKnownActor(value, manifest) {
+  const known = manifest || NET.actorManifest;
+  return typeof value === 'string' && known && known.has(value);
 }
 
 function netEventPoint(value) {
@@ -1462,36 +1914,36 @@ function netValidShotSeq(value) {
   return value === null || value === undefined || netSafeCount(value);
 }
 
-function netValidEvent(e) {
+function netValidEvent(e, manifest) {
   if (!e || typeof e !== 'object' || Array.isArray(e) ||
       !Number.isSafeInteger(e.id) || e.id < 1 ||
       typeof e.kind !== 'string') return false;
   if (e.kind === 'shot') {
-    return netKnownActor(e.from) && !!WBY[e.weapon] &&
+    return netKnownActor(e.from, manifest) && !!WBY[e.weapon] &&
       Array.isArray(e.lines) && e.lines.length <= 16 &&
       e.lines.every(line => Array.isArray(line) && line.length === 6 &&
         line.every(component => netFiniteIn(component, -200, 200)));
   }
   if (e.kind === 'shield') {
-    return netKnownActor(e.target) &&
-      (e.from === null || netKnownActor(e.from)) && netEventPoint(e.at) &&
+    return netKnownActor(e.target, manifest) &&
+      (e.from === null || netKnownActor(e.from, manifest)) && netEventPoint(e.at) &&
       netValidShotSeq(e.seq);
   }
   if (e.kind === 'damage') {
-    return netKnownActor(e.target) &&
-      (e.from === null || netKnownActor(e.from)) &&
+    return netKnownActor(e.target, manifest) &&
+      (e.from === null || netKnownActor(e.from, manifest)) &&
       netFiniteIn(e.damage, 0, 500) && typeof e.head === 'boolean' &&
       netEventPoint(e.at) && netValidShotSeq(e.seq);
   }
   if (e.kind === 'kill') {
-    return netKnownActor(e.target) &&
-      (e.from === null || netKnownActor(e.from)) && netSafeCount(e.streak);
+    return netKnownActor(e.target, manifest) &&
+      (e.from === null || netKnownActor(e.from, manifest)) && netSafeCount(e.streak);
   }
   if (e.kind === 'respawn') {
-    return netKnownActor(e.actor) && netEventPoint(e.at) &&
+    return netKnownActor(e.actor, manifest) && netEventPoint(e.at) &&
       Number.isSafeInteger(e.color) && e.color >= 0 && e.color <= 0xffffff;
   }
-  return e.kind === 'match-over' && netKnownActor(e.winner);
+  return e.kind === 'match-over' && netKnownActor(e.winner, manifest);
 }
 
 function netShowRemoteMatchOver(winnerId) {
