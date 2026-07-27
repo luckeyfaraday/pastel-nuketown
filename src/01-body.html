@@ -34,6 +34,34 @@
 <div id="cross"><i class="dot"></i><i class="t" id="cU"></i><i class="t" id="cD"></i><i class="h" id="cL"></i><i class="h" id="cR"></i></div>
 <div id="hitmark"><span style="transform:rotate(45deg)"></span><span style="transform:rotate(-45deg)"></span></div>
 
+<!-- on-screen controls; only ever unhidden on a touch device -->
+<div id="touch" hidden>
+  <div id="tMove" class="tzone"></div>
+  <div id="tLook" class="tzone"></div>
+  <div id="tStick" hidden><i></i></div>
+  <div id="tWeps">
+    <button type="button" data-w="smg" aria-label="BUBBLEGUN">1</button>
+    <button type="button" data-w="shotgun" aria-label="MARSHMALLOW">2</button>
+    <button type="button" data-w="rifle" aria-label="LOLLIPOP">3</button>
+  </div>
+  <div id="tSys">
+    <button type="button" class="tbtn sys" id="tPause" aria-label="Pause">❚❚</button>
+    <button type="button" class="tbtn sys" id="tBoard" aria-label="Scoreboard">☰</button>
+  </div>
+  <button type="button" class="tbtn" id="tReload" aria-label="Reload">⟳</button>
+  <button type="button" class="tbtn" id="tJump" aria-label="Jump">⤒</button>
+  <button type="button" class="tbtn fire" id="tFire" aria-label="Fire">FIRE</button>
+</div>
+
+<div id="rotate" hidden>
+  <div class="panel">
+    <div class="ric">📱</div>
+    <strong>TURN YOUR PHONE SIDEWAYS</strong>
+    <p>Pastel Nuketown wants a wide screen — landscape leaves room for both thumbs.</p>
+    <button class="mini-btn" id="rotateOk" type="button">PLAY ANYWAY</button>
+  </div>
+</div>
+
 <div class="screen" id="title">
   <h1>PASTEL<em>NUKETOWN</em></h1>
   <div class="sub">Free&nbsp;For&nbsp;All</div>
@@ -80,6 +108,12 @@
     <span><b>WASD</b> move</span><span><b>SHIFT</b> sprint</span><span><b>SPACE</b> jump</span>
     <span><b>MOUSE</b> aim</span><span><b>CLICK</b> shoot</span><span><b>R</b> reload</span>
     <span><b>1 2 3</b> weapons</span><span><b>TAB</b> scores</span><span><b>ESC</b> pause</span>
+  </div>
+  <div class="keys touch-keys">
+    <span><b>LEFT THUMB</b> move</span><span><b>PUSH FORWARD</b> sprint</span>
+    <span><b>RIGHT THUMB</b> aim</span><span><b>FIRE</b> shoot</span>
+    <span><b>⤒</b> jump</span><span><b>⟳</b> reload</span>
+    <span><b>1 2 3</b> weapons</span><span><b>☰</b> scores</span><span><b>❚❚</b> pause</span>
   </div>
 </div>
 

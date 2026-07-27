@@ -1,7 +1,11 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#cfe8f5">
 <title>PASTEL NUKETOWN — Free-For-All</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🫧%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -270,6 +274,103 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 #loading.off{display:none}
 #fatal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:60;max-width:70vw;
   padding:18px 22px;font-family:var(--ui);font-size:14px;line-height:1.5;display:none;white-space:pre-wrap}
+
+/* =====================================================================
+   TOUCH CONTROLS
+   Everything below is inert until 78-touch.js puts `touch` on <body>, so
+   a desktop build renders exactly as it did before. Sits at z-index 20:
+   above the HUD (10) so buttons are tappable, below the title / death /
+   match-over cards (30) so those still cover it.
+   ===================================================================== */
+body.touch{touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;
+  -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
+#touch{position:fixed;inset:0;z-index:20;pointer-events:none;touch-action:none}
+#touch *{-webkit-tap-highlight-color:transparent}
+
+/* the two drag halves: movement left, look right */
+.tzone{position:absolute;top:0;bottom:0;z-index:1;pointer-events:auto;touch-action:none}
+#tMove{left:0;width:46%}
+#tLook{right:0;width:54%}
+
+/* the stick draws itself wherever the thumb landed, so JS owns left/top */
+#tStick{position:absolute;z-index:2;width:116px;height:116px;margin:0;border-radius:50%;
+  transform:translate(-50%,-50%);pointer-events:none;
+  border:3px solid var(--ink);background:rgba(255,248,240,.30);
+  box-shadow:inset 0 0 0 3px rgba(255,255,255,.22),0 4px 14px rgba(74,63,92,.25)}
+#tStick i{position:absolute;left:50%;top:50%;width:54px;height:54px;border-radius:50%;
+  border:3px solid var(--ink);background:linear-gradient(180deg,#fff6e2,#ffd9a8);
+  box-shadow:0 3px 0 var(--ink);transform:translate(-27px,-27px)}
+
+.tbtn{position:absolute;z-index:3;pointer-events:auto;touch-action:none;
+  display:flex;align-items:center;justify-content:center;
+  border:3px solid var(--ink);border-radius:50%;color:var(--ink);
+  background:linear-gradient(180deg,#fff8f0,#ffe4ee);
+  font-family:var(--disp);font-weight:800;letter-spacing:.06em;line-height:1;
+  box-shadow:0 4px 0 var(--ink),0 8px 18px rgba(74,63,92,.22);
+  transition:transform .06s,box-shadow .06s,filter .06s}
+.tbtn.down{transform:translateY(3px);box-shadow:0 1px 0 var(--ink);filter:brightness(.94)}
+
+#tFire{right:calc(18px + env(safe-area-inset-right));bottom:calc(18px + env(safe-area-inset-bottom));
+  width:104px;height:104px;font-size:18px;background:linear-gradient(180deg,#ffd9e2,#ff9aa2)}
+#tJump{right:calc(134px + env(safe-area-inset-right));bottom:calc(16px + env(safe-area-inset-bottom));
+  width:74px;height:74px;font-size:28px;background:linear-gradient(180deg,#e3f7ff,#a8dcf0)}
+#tReload{right:calc(32px + env(safe-area-inset-right));bottom:calc(136px + env(safe-area-inset-bottom));
+  width:70px;height:70px;font-size:28px;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+
+#tSys{position:absolute;z-index:3;display:flex;gap:8px;
+  left:calc(14px + env(safe-area-inset-left));top:calc(12px + env(safe-area-inset-top))}
+.tbtn.sys{position:static;width:46px;height:46px;border-radius:14px;font-size:14px;
+  background:var(--panel);box-shadow:0 3px 0 var(--ink)}
+
+/* weapon chips replace the passive #wslots readout on touch */
+#tWeps{position:absolute;z-index:3;left:50%;transform:translateX(-50%);display:flex;gap:9px;
+  bottom:calc(14px + env(safe-area-inset-bottom))}
+#tWeps button{pointer-events:auto;touch-action:none;width:52px;height:44px;
+  border:3px solid var(--ink);border-radius:13px;background:rgba(255,255,255,.72);color:var(--ink);
+  font-family:var(--disp);font-size:17px;font-weight:800;box-shadow:0 3px 0 var(--ink);
+  opacity:.5;transition:opacity .1s,transform .1s}
+#tWeps button.on{opacity:1;background:var(--butter);transform:translateY(-3px)}
+#tWeps button.down{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+
+/* ---------- HUD relayout for a phone held sideways ----------
+   The stick owns the bottom-left and the fire cluster owns the
+   bottom-right, so vitals and ammo both have to move out of the corners
+   they normally live in. */
+body.touch #vitals{left:calc(14px + env(safe-area-inset-left));top:calc(66px + env(safe-area-inset-top));
+  bottom:auto;min-width:176px;padding:6px 12px 8px}
+body.touch #vitals .lbl{font-size:9px}
+body.touch #hpwrap{margin-top:4px;height:16px;border-width:2.5px}
+body.touch #hpnum{font-size:12px}
+body.touch #ammo{right:auto;left:50%;transform:translateX(-50%);min-width:0;padding:5px 18px 7px;
+  text-align:center;bottom:calc(66px + env(safe-area-inset-bottom))}
+body.touch #wname{font-size:12px}
+body.touch #acount{font-size:29px}
+body.touch #acount small{font-size:14px}
+body.touch #reloading{font-size:10px;height:13px}
+body.touch #wslots{display:none}
+body.touch #top{top:calc(10px + env(safe-area-inset-top))}
+body.touch #top .box{padding:4px 12px 5px;min-width:64px}
+body.touch #top .k{font-size:9px}
+body.touch #top .v{font-size:18px}
+body.touch #feed{right:calc(12px + env(safe-area-inset-right));top:calc(10px + env(safe-area-inset-top))}
+body.touch .fitem{font-size:12px;padding:3px 10px 4px;border-width:2px}
+body.touch #hint{bottom:calc(148px + env(safe-area-inset-bottom))}
+body.touch #board{max-height:84vh;overflow:auto}
+
+/* control legend on the title card: one list or the other, never both */
+.touch-keys{display:none}
+body.touch .keys{display:none}
+body.touch .touch-keys{display:flex}
+
+/* ---------- portrait nudge ---------- */
+#rotate{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+  padding:20px;background:linear-gradient(180deg,#ffe9f0,#d8e8fb)}
+#rotate .panel{max-width:340px;padding:24px 26px 26px;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:12px}
+#rotate .ric{font-size:46px;line-height:1;animation:rturn 2.4s ease-in-out infinite}
+#rotate strong{font-family:var(--disp);font-size:19px;font-weight:800;letter-spacing:.05em}
+#rotate p{font-family:var(--disp);font-size:13px;font-weight:600;line-height:1.45;color:var(--ink-soft)}
+@keyframes rturn{0%,40%{transform:rotate(0)}60%,100%{transform:rotate(90deg)}}
 </style>
 <body>
 <div id="vig"></div><div id="dmg"></div><div id="heal"></div>
@@ -307,6 +408,34 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 
 <div id="cross"><i class="dot"></i><i class="t" id="cU"></i><i class="t" id="cD"></i><i class="h" id="cL"></i><i class="h" id="cR"></i></div>
 <div id="hitmark"><span style="transform:rotate(45deg)"></span><span style="transform:rotate(-45deg)"></span></div>
+
+<!-- on-screen controls; only ever unhidden on a touch device -->
+<div id="touch" hidden>
+  <div id="tMove" class="tzone"></div>
+  <div id="tLook" class="tzone"></div>
+  <div id="tStick" hidden><i></i></div>
+  <div id="tWeps">
+    <button type="button" data-w="smg" aria-label="BUBBLEGUN">1</button>
+    <button type="button" data-w="shotgun" aria-label="MARSHMALLOW">2</button>
+    <button type="button" data-w="rifle" aria-label="LOLLIPOP">3</button>
+  </div>
+  <div id="tSys">
+    <button type="button" class="tbtn sys" id="tPause" aria-label="Pause">❚❚</button>
+    <button type="button" class="tbtn sys" id="tBoard" aria-label="Scoreboard">☰</button>
+  </div>
+  <button type="button" class="tbtn" id="tReload" aria-label="Reload">⟳</button>
+  <button type="button" class="tbtn" id="tJump" aria-label="Jump">⤒</button>
+  <button type="button" class="tbtn fire" id="tFire" aria-label="Fire">FIRE</button>
+</div>
+
+<div id="rotate" hidden>
+  <div class="panel">
+    <div class="ric">📱</div>
+    <strong>TURN YOUR PHONE SIDEWAYS</strong>
+    <p>Pastel Nuketown wants a wide screen — landscape leaves room for both thumbs.</p>
+    <button class="mini-btn" id="rotateOk" type="button">PLAY ANYWAY</button>
+  </div>
+</div>
 
 <div class="screen" id="title">
   <h1>PASTEL<em>NUKETOWN</em></h1>
@@ -354,6 +483,12 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
     <span><b>WASD</b> move</span><span><b>SHIFT</b> sprint</span><span><b>SPACE</b> jump</span>
     <span><b>MOUSE</b> aim</span><span><b>CLICK</b> shoot</span><span><b>R</b> reload</span>
     <span><b>1 2 3</b> weapons</span><span><b>TAB</b> scores</span><span><b>ESC</b> pause</span>
+  </div>
+  <div class="keys touch-keys">
+    <span><b>LEFT THUMB</b> move</span><span><b>PUSH FORWARD</b> sprint</span>
+    <span><b>RIGHT THUMB</b> aim</span><span><b>FIRE</b> shoot</span>
+    <span><b>⤒</b> jump</span><span><b>⟳</b> reload</span>
+    <span><b>1 2 3</b> weapons</span><span><b>☰</b> scores</span><span><b>❚❚</b> pause</span>
   </div>
 </div>
 
@@ -5064,8 +5199,9 @@ function endMatch(winner) {
 const KEY = {};
 /* A second movement source, left at rest for keyboard play. Filled in by the
    touch layer; merged into intent by readLocalInput rather than by teaching
-   every consumer about it. */
-const TOUCH = { fwd: 0, strafe: 0, jump: false, sprint: false };
+   every consumer about it. `on` is the mode flag the touch layer raises once
+   it takes over — pointer lock in particular has to stand down when it does. */
+const TOUCH = { on: false, fwd: 0, strafe: 0, jump: false, sprint: false };
 const IN = {
   lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
   fireSeq: 0, fireRenderTime: 0, reloadSeq: 0
@@ -5109,6 +5245,15 @@ function readLocalInput(accepts) {
   };
 }
 
+/* Shared by mouse-look and touch-drag; they differ only in sensitivity. */
+function applyLook(dx, dy, sens) {
+  if (!G.player) return;
+  G.player.yaw -= dx * sens;
+  G.player.pitch = clamp(G.player.pitch - dy * sens, -1.45, 1.45);
+  IN.lookDX = clamp(IN.lookDX + dx * 0.006, -1, 1);
+  IN.lookDY = clamp(IN.lookDY + dy * 0.006, -1, 1);
+}
+
 function initInput() {
   addEventListener('keydown', e => {
     if (e.code === 'Tab') e.preventDefault();
@@ -5138,14 +5283,13 @@ function initInput() {
 
   addEventListener('mousemove', e => {
     if (!IN.locked) return;
-    const dx = e.movementX || 0, dy = e.movementY || 0;
-    G.player.yaw -= dx * mouseSens;
-    G.player.pitch = clamp(G.player.pitch - dy * mouseSens, -1.45, 1.45);
-    IN.lookDX = clamp(IN.lookDX + dx * 0.006, -1, 1);
-    IN.lookDY = clamp(IN.lookDY + dy * 0.006, -1, 1);
+    applyLook(e.movementX || 0, e.movementY || 0, mouseSens);
   });
 
   document.addEventListener('pointerlockchange', () => {
+    /* A phone never holds the lock, so on touch this would fire once on
+       the way in and pause the match permanently with no way back. */
+    if (TOUCH.on) return;
     IN.locked = document.pointerLockElement === canvas;
     if (!IN.locked && G.started && !G.over) setPaused(true);
     else if (IN.locked) setPaused(false);
@@ -5155,6 +5299,7 @@ function initInput() {
    That's not fatal — the match still runs, you just aren't mouse-looking. */
 function requestLock() {
   try {
+    if (TOUCH.on) return;                        // touch play never locks
     if (!canvas.requestPointerLock) return;
     const r = canvas.requestPointerLock();       // newer Chrome returns a Promise
     if (r && typeof r.catch === 'function') r.catch(() => {});
@@ -5501,6 +5646,7 @@ function startMatch() {
   again.disabled = false;
   again.textContent = 'REMATCH';
   showHint('FIRST TO ' + CFG.killsToWin + ' KILLS');
+  touchEnterImmersive();                  // no-op unless this is a phone
   requestLock();
 }
 </script>
@@ -6918,6 +7064,297 @@ function initNetworkUI() {
   });
 }
 </script>
+<script>/* ===== src/78-touch.js ===== */
+/* =====================================================================
+   PASTEL NUKETOWN — touch controls
+
+   A phone has no pointer lock and no keyboard, so every input this game
+   reads has to come from somewhere else. The screen is divided into two
+   invisible drag zones (left = movement stick, right = look) with a
+   cluster of held buttons on top of them.
+
+   Nothing here reaches into the simulation. The stick writes the four
+   movement fields of TOUCH and readLocalInput merges them, so local
+   movement, the guest input packet and the host's remote step all stay
+   unaware that a touchscreen exists. Firing is the one exception: it is
+   an edge rather than a level, so the FIRE button goes through the same
+   pressFire()/releaseFire() pair the mouse uses.
+
+   TOUCH itself lives in 70-game.js because it is an input contract. The
+   widget state below — which finger owns what, where the stick was
+   drawn — is nobody else's business and stays here.
+   ===================================================================== */
+
+const TUI = {
+  visible: false,            // controls currently on screen
+  sens: 0.0044,              // radians per CSS pixel of look drag
+  stickId: -1, lookId: -1,   // pointerIds we own, -1 when free
+  stickX: 0, stickY: 0,      // stick base, in client coords
+  lookX: 0, lookY: 0,        // last look sample, for deltas
+  radius: 54,                // stick throw, CSS px
+  bound: false,
+  rotateDismissed: false,
+  el: null, stick: null, nub: null, weps: [], rotate: null
+};
+
+/* Below this the thumb is resting, not steering. Rescaled past it so the
+   very first pixel of real input isn't a jump to 14% speed. */
+const TOUCH_DEADZONE = 0.14;
+/* Pushing the stick to the top of its throw means "run", so sprint costs
+   no screen space and no second thumb. Just under full so a slightly
+   off-centre push still sprints. */
+const TOUCH_SPRINT_AT = 0.86;
+const TOUCH_NUB_R = 27;      // half the nub, for centring its transform
+
+/* =====================================================================
+   DETECTION
+   ===================================================================== */
+/* maxTouchPoints alone is true for touchscreen laptops, and a coarse
+   pointer alone can be a TV remote, so require both — then sniff for a
+   real finger as the tiebreaker for anything that lies about either. */
+function touchWanted() {
+  const forced = QS.get('touch');
+  if (forced === '1') return true;
+  if (forced === '0') return false;
+  return (navigator.maxTouchPoints || 0) > 0 &&
+         !!(matchMedia && matchMedia('(pointer: coarse)').matches);
+}
+
+function initTouch() {
+  TUI.el = document.getElementById('touch');
+  TUI.stick = document.getElementById('tStick');
+  TUI.nub = TUI.stick ? TUI.stick.firstElementChild : null;
+  TUI.weps = Array.prototype.slice.call(document.querySelectorAll('#tWeps button'));
+  TUI.rotate = document.getElementById('rotate');
+
+  if (touchWanted()) { enableTouch(); return; }
+
+  /* A hybrid laptop reports a fine pointer right up until someone puts a
+     finger on the glass. Watch for exactly that, once. */
+  const sniff = e => {
+    if (e.pointerType !== 'touch') return;
+    removeEventListener('pointerdown', sniff, true);
+    enableTouch();
+  };
+  addEventListener('pointerdown', sniff, true);
+}
+
+function enableTouch() {
+  if (TOUCH.on || !TUI.el) return;
+  TOUCH.on = true;
+  document.body.classList.add('touch');
+  bindTouchControls();
+  touchSetVisible(false);
+  updateRotateNudge();
+}
+
+/* =====================================================================
+   BINDING
+   ===================================================================== */
+function bindTouchControls() {
+  if (TUI.bound) return;
+  TUI.bound = true;
+
+  document.getElementById('tMove').addEventListener('pointerdown', onStickDown);
+  document.getElementById('tLook').addEventListener('pointerdown', onLookDown);
+
+  /* Tracked on the window, not the zone: a thumb that slides out of its
+     half of the screen must keep steering, and a pointerup delivered
+     somewhere else must still release the control. */
+  addEventListener('pointermove', onTouchMove, { passive: false });
+  addEventListener('pointerup', onTouchUp);
+  addEventListener('pointercancel', onTouchUp);
+
+  touchButton('tFire', pressFire, releaseFire);
+  touchButton('tJump', () => { TOUCH.jump = true; }, () => { TOUCH.jump = false; });
+  touchButton('tReload', () => {
+    if (!G.player) return;
+    IN.reloadSeq++;
+    tryReload(G.player);
+  });
+  touchButton('tPause', () => { SFX.ui(); setPaused(true); });
+  touchButton('tBoard', () => { SFX.ui(); setBoard(!elBoard.classList.contains('on')); });
+  for (const b of TUI.weps) touchButton(b, () => switchWeapon(b.dataset.w));
+
+  const ok = document.getElementById('rotateOk');
+  if (ok) ok.addEventListener('click', () => {
+    TUI.rotateDismissed = true;
+    updateRotateNudge();
+  });
+
+  addEventListener('orientationchange', updateRotateNudge);
+}
+
+/* A held button, not a click: FIRE and JUMP have to report release, and a
+   click event would never arrive if the thumb slid off the button first.
+   Pointer capture keeps that thumb ours until it lifts. */
+function touchButton(target, onPress, onRelease) {
+  const el = typeof target === 'string' ? document.getElementById(target) : target;
+  if (!el) return;
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (el.classList.contains('down')) return;
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    el.classList.add('down');
+    onPress();
+  });
+  const up = () => {
+    if (!el.classList.contains('down')) return;
+    el.classList.remove('down');
+    if (onRelease) onRelease();
+  };
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+}
+
+/* =====================================================================
+   MOVEMENT STICK
+   ===================================================================== */
+function onStickDown(e) {
+  if (TUI.stickId !== -1) return;            // one thumb owns the stick
+  e.preventDefault();
+  TUI.stickId = e.pointerId;
+  TUI.stickX = e.clientX;
+  TUI.stickY = e.clientY;
+  placeStick();
+  TUI.stick.hidden = false;
+  trackStick(e.clientX, e.clientY);
+}
+
+function placeStick() {
+  TUI.stick.style.left = TUI.stickX + 'px';
+  TUI.stick.style.top = TUI.stickY + 'px';
+}
+
+function trackStick(x, y) {
+  let dx = x - TUI.stickX, dy = y - TUI.stickY;
+  const r = Math.hypot(dx, dy), R = TUI.radius;
+  /* Past the rim, drag the whole base along instead of pinning the nub.
+     Without this a thumb that wanders keeps reporting full deflection in
+     the original direction, which feels like the stick is stuck. */
+  if (r > R) {
+    const over = 1 - R / r;
+    TUI.stickX += dx * over;
+    TUI.stickY += dy * over;
+    dx *= R / r; dy *= R / r;
+    placeStick();
+  }
+
+  const nx = dx / R, ny = -dy / R;            // screen Y is down, forward is up
+  const m = Math.hypot(nx, ny);
+  if (m < TOUCH_DEADZONE) {
+    TOUCH.strafe = TOUCH.fwd = 0;
+  } else {
+    const scale = Math.min(1, (m - TOUCH_DEADZONE) / (1 - TOUCH_DEADZONE)) / m;
+    TOUCH.strafe = nx * scale;
+    TOUCH.fwd = ny * scale;
+  }
+  TOUCH.sprint = TOUCH.fwd > TOUCH_SPRINT_AT;
+  if (TUI.nub) TUI.nub.style.transform = 'translate(' +
+    (dx - TOUCH_NUB_R).toFixed(1) + 'px,' + (dy - TOUCH_NUB_R).toFixed(1) + 'px)';
+}
+
+function releaseStick() {
+  TUI.stickId = -1;
+  TOUCH.strafe = TOUCH.fwd = 0;
+  TOUCH.sprint = false;
+  if (TUI.stick) TUI.stick.hidden = true;
+  if (TUI.nub) TUI.nub.style.transform =
+    'translate(' + -TOUCH_NUB_R + 'px,' + -TOUCH_NUB_R + 'px)';
+}
+
+/* =====================================================================
+   LOOK
+   ===================================================================== */
+function onLookDown(e) {
+  if (TUI.lookId !== -1) return;
+  e.preventDefault();
+  TUI.lookId = e.pointerId;
+  TUI.lookX = e.clientX;
+  TUI.lookY = e.clientY;
+}
+
+function onTouchMove(e) {
+  if (e.pointerId === TUI.stickId) {
+    e.preventDefault();
+    trackStick(e.clientX, e.clientY);
+    return;
+  }
+  if (e.pointerId !== TUI.lookId) return;
+  e.preventDefault();
+  const dx = e.clientX - TUI.lookX, dy = e.clientY - TUI.lookY;
+  TUI.lookX = e.clientX;
+  TUI.lookY = e.clientY;
+  if (G.started && !G.paused && !G.over) applyLook(dx, dy, TUI.sens);
+}
+
+function onTouchUp(e) {
+  if (e.pointerId === TUI.stickId) releaseStick();
+  else if (e.pointerId === TUI.lookId) TUI.lookId = -1;
+}
+
+/* =====================================================================
+   VISIBILITY
+   ===================================================================== */
+function updateTouchUI() {
+  if (!TOUCH.on) return;
+  const show = G.started && !G.paused && !G.over;
+  if (show !== TUI.visible) touchSetVisible(show);
+  if (show && G.player) {
+    for (const b of TUI.weps) b.classList.toggle('on', b.dataset.w === G.player.weapon);
+  }
+  updateRotateNudge();
+}
+
+function touchSetVisible(on) {
+  TUI.visible = on;
+  TUI.el.hidden = !on;
+  if (!on) touchReleaseAll();
+}
+
+/* Hiding the controls has to drop whatever they were holding. Otherwise
+   opening the pause card mid-sprint resumes you sprinting into a wall
+   with the trigger still down. */
+function touchReleaseAll() {
+  releaseStick();
+  TUI.lookId = -1;
+  TOUCH.jump = false;
+  releaseFire();
+  if (!TUI.el) return;
+  for (const el of TUI.el.querySelectorAll('.tbtn.down')) el.classList.remove('down');
+}
+
+function updateRotateNudge() {
+  if (!TUI.rotate) return;
+  const portrait = innerHeight > innerWidth;
+  TUI.rotate.hidden = !(TOUCH.on && portrait && !TUI.rotateDismissed);
+}
+
+/* =====================================================================
+   IMMERSIVE MODE
+   Called from startMatch, which on a phone runs inside the SOLO tap, so
+   the user activation both of these need is still live. Both are polite
+   requests: iOS Safari has no element fullscreen and orientation lock is
+   desktop-optional, so failure is silent and the game plays on.
+   ===================================================================== */
+function touchEnterImmersive() {
+  if (!TOUCH.on) return;
+  try {
+    const el = document.documentElement;
+    if (!document.fullscreenElement && el.requestFullscreen) {
+      const r = el.requestFullscreen({ navigationUI: 'hide' });
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    }
+  } catch (e) {}
+  try {
+    const o = screen.orientation;
+    if (o && o.lock) {
+      const r = o.lock('landscape');
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    }
+  } catch (e) {}
+}
+</script>
 <script>/* ===== src/80-ui.js ===== */
 /* =====================================================================
    PASTEL NUKETOWN — HUD, killfeed, scoreboard, screens
@@ -7211,8 +7648,12 @@ function updateCamera(dt) {
     camera.position.y += rand(-s, s) * 0.16;
     camera.rotation.z += rand(-s, s) * 0.035;
   }
-  // slight roll when strafing reads as weight
-  const str = (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0);
+  /* Slight roll when strafing reads as weight. Read through the same
+     function the simulation uses — this used to be a third transcription
+     of "which way is the player leaning", and a stick would not have
+     rolled the camera at all. Anything past the guards above is started
+     and unpaused, so input is live by definition. */
+  const str = readLocalInput(true).strafe;
   camera.rotation.z += damp(camera.rotation.z, -str * 0.022, 8, dt) * 0 + (-str * 0.022);
 }
 
@@ -7321,6 +7762,7 @@ function frame(now) {
     updateDamageDirs(dt);
     updateDeadScreen();
     updateHUD();
+    updateTouchUI();
   }
   renderAll();
   PROF.frames++;
@@ -7339,7 +7781,8 @@ function boot() {
   buildWorld();    set(60);
   initViewmodel(); set(74);
   initFX();        set(82);
-  initInput();     set(88);
+  initInput();
+  initTouch();     set(88);
   initAI();        set(96);
   initNetworkUI();
 
