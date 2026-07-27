@@ -98,7 +98,7 @@ function bindTouchControls() {
   addEventListener('pointerup', onTouchUp);
   addEventListener('pointercancel', onTouchUp);
 
-  touchButton('tFire', pressFire, releaseFire);
+  touchButton('tFire', e => { claimLook(e); pressFire(); }, releaseFire);
   touchButton('tJump', () => { TOUCH.jump = true; }, () => { TOUCH.jump = false; });
   touchButton('tReload', () => {
     if (!G.player) return;
@@ -129,12 +129,12 @@ function touchButton(target, onPress, onRelease) {
     if (el.classList.contains('down')) return;
     try { el.setPointerCapture(e.pointerId); } catch (err) {}
     el.classList.add('down');
-    onPress();
+    onPress(e);
   });
-  const up = () => {
+  const up = e => {
     if (!el.classList.contains('down')) return;
     el.classList.remove('down');
-    if (onRelease) onRelease();
+    if (onRelease) onRelease(e);
   };
   el.addEventListener('pointerup', up);
   el.addEventListener('pointercancel', up);
@@ -200,6 +200,10 @@ function releaseStick() {
    LOOK
    ===================================================================== */
 function onLookDown(e) {
+  claimLook(e);
+}
+
+function claimLook(e) {
   if (TUI.lookId !== -1) return;
   e.preventDefault();
   TUI.lookId = e.pointerId;
