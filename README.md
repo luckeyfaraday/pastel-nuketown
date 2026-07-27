@@ -4,8 +4,6 @@ Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs enti
 
 ![Pastel Nuketown title screen showing the pastel-coloured arena map with two houses, a bus, and a truck](shots/title.png)
 
-![First-person gameplay screenshot showing the BUBBLEGUN SMG firing at an enemy in the Nuketown arena](shots/play/06-firing.png)
-
 ## Features
 
 - **Browser-based FPS** — runs in any modern browser (Chrome, Firefox, Edge, Safari) with no install
