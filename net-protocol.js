@@ -26,6 +26,23 @@
   var FIRE_INTENT_TTL = 0.2;
   var MAX_REWIND_SECONDS = 0.3;
 
+  /* How long a guest keeps an unmatched predicted hit before writing it off.
+     One round trip plus slack: long enough that the authoritative answer to a
+     shot has certainly arrived, short enough that a hit the host denied cannot
+     linger and swallow the marker for some later shot. */
+  var PREDICTED_HIT_TTL = 0.8;
+  var MAX_PREDICTED_SHOTS = 24;
+
+  /* Bounds on the guest's interpolation buffer, in snapshot intervals.
+
+     The floor is above 1 so there is always a bracketing pair to interpolate
+     between rather than a sample the renderer has to extrapolate past. The
+     ceiling stops a burst of jitter from parking the guest so far in the past
+     that it loses more from seeing late than it gains from a smooth replica. */
+  var MIN_INTERP_SNAPSHOTS = 1.15;
+  var MAX_INTERP_SNAPSHOTS = 3;
+  var JITTER_DECAY = 0.05;
+
   function result(ok, value, error) {
     return {
       ok: ok,
@@ -249,6 +266,82 @@
       alpha: 0,
       extrapolation: clamp(renderTime - last.time, 0, bound)
     };
+  }
+
+  /* Snapshots leave the host on a fixed clock but arrive on the network's, so
+     the guest sizes its interpolation buffer from how late they actually run.
+     Only lateness is tracked: a snapshot arriving early is already absorbed by
+     the buffer, while one arriving late is what leaves the renderer without a
+     sample to interpolate toward. */
+  function trackArrivalJitter(previous, gap, interval) {
+    var last = isFiniteNumber(previous) && previous > 0 ? previous : 0;
+    if (!isFiniteNumber(gap) || !isFiniteNumber(interval) || interval <= 0) {
+      return last;
+    }
+    var late = clamp(gap - interval, 0, interval * MAX_INTERP_SNAPSHOTS);
+    /* Grow to a spike at once and give the margin back slowly. Being one sample
+       short is a visible stutter; holding a few extra milliseconds is not, so
+       the two directions are deliberately not symmetric. */
+    return late > last ? late : last + (late - last) * JITTER_DECAY;
+  }
+
+  /* One snapshot interval is the minimum that guarantees a bracketing pair;
+     everything above it is margin bought against observed lateness. Doubling
+     the smoothed figure covers the tail without tracking a full distribution. */
+  function interpolationDelay(interval, jitter) {
+    if (!isFiniteNumber(interval) || interval <= 0) return 0;
+    var margin = isFiniteNumber(jitter) && jitter > 0 ? jitter : 0;
+    return clamp(
+      interval + margin * 2,
+      interval * MIN_INTERP_SNAPSHOTS,
+      interval * MAX_INTERP_SNAPSHOTS);
+  }
+
+  /* A guest shows its own hitmarker the moment its local hitscan lands, rather
+     than waiting a round trip for the host to agree. The host's damage event
+     still arrives, and would fire the same feedback a second time, so each
+     predicted hit is booked here and the matching event redeems it.
+
+     Keyed by fireSeq because a shotgun lands several pellets on one trigger
+     press and each becomes its own event: the count has to match, not just the
+     fact of a hit. Keying also contains a misprediction — a hit the host denied
+     expires against its own shot instead of eating some later shot's marker. */
+  function prunePredictedHits(ledger, now) {
+    for (var i = ledger.length - 1; i >= 0; i--) {
+      if (!(ledger[i].expires > now)) ledger.splice(i, 1);
+    }
+    if (ledger.length > MAX_PREDICTED_SHOTS) {
+      ledger.splice(0, ledger.length - MAX_PREDICTED_SHOTS);
+    }
+  }
+
+  function recordPredictedHit(ledger, fireSeq, now) {
+    if (!Array.isArray(ledger) || !isFiniteNumber(now) ||
+        !Number.isSafeInteger(fireSeq) || fireSeq < 0) return false;
+    prunePredictedHits(ledger, now);
+    for (var i = 0; i < ledger.length; i++) {
+      if (ledger[i].seq === fireSeq) {
+        ledger[i].count++;
+        ledger[i].expires = now + PREDICTED_HIT_TTL;
+        return true;
+      }
+    }
+    ledger.push({ seq: fireSeq, count: 1, expires: now + PREDICTED_HIT_TTL });
+    return true;
+  }
+
+  /* True when this authoritative hit was already shown locally, so the caller
+     should stay quiet rather than double up. */
+  function consumePredictedHit(ledger, fireSeq, now) {
+    if (!Array.isArray(ledger) || !isFiniteNumber(now) ||
+        !Number.isSafeInteger(fireSeq) || fireSeq < 0) return false;
+    prunePredictedHits(ledger, now);
+    for (var i = 0; i < ledger.length; i++) {
+      if (ledger[i].seq !== fireSeq) continue;
+      if (--ledger[i].count <= 0) ledger.splice(i, 1);
+      return true;
+    }
+    return false;
   }
 
   /* fireSeq alone is not enough to key a shot. It advances on a fresh trigger
@@ -497,6 +590,9 @@
     MAX_PITCH: MAX_PITCH,
     FIRE_INTENT_TTL: FIRE_INTENT_TTL,
     MAX_REWIND_SECONDS: MAX_REWIND_SECONDS,
+    PREDICTED_HIT_TTL: PREDICTED_HIT_TTL,
+    MIN_INTERP_SNAPSHOTS: MIN_INTERP_SNAPSHOTS,
+    MAX_INTERP_SNAPSHOTS: MAX_INTERP_SNAPSHOTS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
     isAuthorityEpoch: isAuthorityEpoch,
@@ -506,6 +602,10 @@
     classifyFireIntent: classifyFireIntent,
     clampRewindTime: clampRewindTime,
     selectTimedSamples: selectTimedSamples,
+    trackArrivalJitter: trackArrivalJitter,
+    interpolationDelay: interpolationDelay,
+    recordPredictedHit: recordPredictedHit,
+    consumePredictedHit: consumePredictedHit,
     shotSpreadSeed: shotSpreadSeed,
     cleanRoomSummaries: cleanRoomSummaries,
     createRoomCode: createRoomCode,

@@ -312,7 +312,16 @@ function fireWeapon(a, fireSeq, renderTime) {
     if (!hit) continue;
     if (hit.kind === 'actor') {
       const dmg = w.dmg * (hit.head ? w.headMul : 1);
-      if (!visualOnly) applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ);
+      /* A guest owns none of this damage, but it does own the feedback. Waiting
+         for the host to confirm costs a full round trip, which is the whole of
+         why shooting feels dead as a guest. Show the marker now against the
+         replicas the player actually aimed at -- the host rewinds to that same
+         instant, so the two nearly always agree -- and let the authoritative
+         event redeem the prediction instead of repeating it. */
+      if (visualOnly) {
+        if (typeof netPredictHit === 'function')
+          netPredictHit(hit.actor, dmg, hit.head, endX, endY, endZ, fireSeq);
+      } else applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ, fireSeq);
       fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'actor');
     } else if (hit.kind === 'mannequin') {
       hit.obj.userData.spin += rand(3, 7) * (rng() < 0.5 ? -1 : 1);
@@ -340,7 +349,10 @@ function fireWeapon(a, fireSeq, renderTime) {
   return true;
 }
 
-function applyDamage(target, dmg, from, head, hx, hy, hz) {
+/* `fireSeq` is carried only so the resulting event can name the shot that
+   caused it, letting a guest match the answer to the hit it already predicted.
+   It plays no part in resolving the damage itself. */
+function applyDamage(target, dmg, from, head, hx, hy, hz, fireSeq) {
   if (!target.alive) return;
   /* Spawn shield. Eight bots on a map this small means you can be dead
      within a second of appearing — playtesting gave three deaths in ~14s.
@@ -349,7 +361,7 @@ function applyDamage(target, dmg, from, head, hx, hy, hz) {
   if (target.shield > 0) {
     if (from) fxShieldHit(target, hx, hy, hz);
     if (typeof netOnAuthoritativeShieldHit === 'function')
-      netOnAuthoritativeShieldHit(target, from, hx, hy, hz);
+      netOnAuthoritativeShieldHit(target, from, hx, hy, hz, fireSeq);
     return;
   }
   target.health -= dmg;
@@ -371,7 +383,7 @@ function applyDamage(target, dmg, from, head, hx, hy, hz) {
     fxShake(0.18);
   }
   if (typeof netOnAuthoritativeDamage === 'function')
-    netOnAuthoritativeDamage(target, from, dmg, head, hx, hy, hz);
+    netOnAuthoritativeDamage(target, from, dmg, head, hx, hy, hz, fireSeq);
   if (target.health <= 0) killActor(target, from);
 }
 

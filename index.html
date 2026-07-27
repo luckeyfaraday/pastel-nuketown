@@ -1841,6 +1841,23 @@ if (typeof THREE === "undefined") {
   var FIRE_INTENT_TTL = 0.2;
   var MAX_REWIND_SECONDS = 0.3;
 
+  /* How long a guest keeps an unmatched predicted hit before writing it off.
+     One round trip plus slack: long enough that the authoritative answer to a
+     shot has certainly arrived, short enough that a hit the host denied cannot
+     linger and swallow the marker for some later shot. */
+  var PREDICTED_HIT_TTL = 0.8;
+  var MAX_PREDICTED_SHOTS = 24;
+
+  /* Bounds on the guest's interpolation buffer, in snapshot intervals.
+
+     The floor is above 1 so there is always a bracketing pair to interpolate
+     between rather than a sample the renderer has to extrapolate past. The
+     ceiling stops a burst of jitter from parking the guest so far in the past
+     that it loses more from seeing late than it gains from a smooth replica. */
+  var MIN_INTERP_SNAPSHOTS = 1.15;
+  var MAX_INTERP_SNAPSHOTS = 3;
+  var JITTER_DECAY = 0.05;
+
   function result(ok, value, error) {
     return {
       ok: ok,
@@ -2064,6 +2081,82 @@ if (typeof THREE === "undefined") {
       alpha: 0,
       extrapolation: clamp(renderTime - last.time, 0, bound)
     };
+  }
+
+  /* Snapshots leave the host on a fixed clock but arrive on the network's, so
+     the guest sizes its interpolation buffer from how late they actually run.
+     Only lateness is tracked: a snapshot arriving early is already absorbed by
+     the buffer, while one arriving late is what leaves the renderer without a
+     sample to interpolate toward. */
+  function trackArrivalJitter(previous, gap, interval) {
+    var last = isFiniteNumber(previous) && previous > 0 ? previous : 0;
+    if (!isFiniteNumber(gap) || !isFiniteNumber(interval) || interval <= 0) {
+      return last;
+    }
+    var late = clamp(gap - interval, 0, interval * MAX_INTERP_SNAPSHOTS);
+    /* Grow to a spike at once and give the margin back slowly. Being one sample
+       short is a visible stutter; holding a few extra milliseconds is not, so
+       the two directions are deliberately not symmetric. */
+    return late > last ? late : last + (late - last) * JITTER_DECAY;
+  }
+
+  /* One snapshot interval is the minimum that guarantees a bracketing pair;
+     everything above it is margin bought against observed lateness. Doubling
+     the smoothed figure covers the tail without tracking a full distribution. */
+  function interpolationDelay(interval, jitter) {
+    if (!isFiniteNumber(interval) || interval <= 0) return 0;
+    var margin = isFiniteNumber(jitter) && jitter > 0 ? jitter : 0;
+    return clamp(
+      interval + margin * 2,
+      interval * MIN_INTERP_SNAPSHOTS,
+      interval * MAX_INTERP_SNAPSHOTS);
+  }
+
+  /* A guest shows its own hitmarker the moment its local hitscan lands, rather
+     than waiting a round trip for the host to agree. The host's damage event
+     still arrives, and would fire the same feedback a second time, so each
+     predicted hit is booked here and the matching event redeems it.
+
+     Keyed by fireSeq because a shotgun lands several pellets on one trigger
+     press and each becomes its own event: the count has to match, not just the
+     fact of a hit. Keying also contains a misprediction — a hit the host denied
+     expires against its own shot instead of eating some later shot's marker. */
+  function prunePredictedHits(ledger, now) {
+    for (var i = ledger.length - 1; i >= 0; i--) {
+      if (!(ledger[i].expires > now)) ledger.splice(i, 1);
+    }
+    if (ledger.length > MAX_PREDICTED_SHOTS) {
+      ledger.splice(0, ledger.length - MAX_PREDICTED_SHOTS);
+    }
+  }
+
+  function recordPredictedHit(ledger, fireSeq, now) {
+    if (!Array.isArray(ledger) || !isFiniteNumber(now) ||
+        !Number.isSafeInteger(fireSeq) || fireSeq < 0) return false;
+    prunePredictedHits(ledger, now);
+    for (var i = 0; i < ledger.length; i++) {
+      if (ledger[i].seq === fireSeq) {
+        ledger[i].count++;
+        ledger[i].expires = now + PREDICTED_HIT_TTL;
+        return true;
+      }
+    }
+    ledger.push({ seq: fireSeq, count: 1, expires: now + PREDICTED_HIT_TTL });
+    return true;
+  }
+
+  /* True when this authoritative hit was already shown locally, so the caller
+     should stay quiet rather than double up. */
+  function consumePredictedHit(ledger, fireSeq, now) {
+    if (!Array.isArray(ledger) || !isFiniteNumber(now) ||
+        !Number.isSafeInteger(fireSeq) || fireSeq < 0) return false;
+    prunePredictedHits(ledger, now);
+    for (var i = 0; i < ledger.length; i++) {
+      if (ledger[i].seq !== fireSeq) continue;
+      if (--ledger[i].count <= 0) ledger.splice(i, 1);
+      return true;
+    }
+    return false;
   }
 
   /* fireSeq alone is not enough to key a shot. It advances on a fresh trigger
@@ -2312,6 +2405,9 @@ if (typeof THREE === "undefined") {
     MAX_PITCH: MAX_PITCH,
     FIRE_INTENT_TTL: FIRE_INTENT_TTL,
     MAX_REWIND_SECONDS: MAX_REWIND_SECONDS,
+    PREDICTED_HIT_TTL: PREDICTED_HIT_TTL,
+    MIN_INTERP_SNAPSHOTS: MIN_INTERP_SNAPSHOTS,
+    MAX_INTERP_SNAPSHOTS: MAX_INTERP_SNAPSHOTS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
     isAuthorityEpoch: isAuthorityEpoch,
@@ -2321,6 +2417,10 @@ if (typeof THREE === "undefined") {
     classifyFireIntent: classifyFireIntent,
     clampRewindTime: clampRewindTime,
     selectTimedSamples: selectTimedSamples,
+    trackArrivalJitter: trackArrivalJitter,
+    interpolationDelay: interpolationDelay,
+    recordPredictedHit: recordPredictedHit,
+    consumePredictedHit: consumePredictedHit,
     shotSpreadSeed: shotSpreadSeed,
     cleanRoomSummaries: cleanRoomSummaries,
     createRoomCode: createRoomCode,
@@ -5085,7 +5185,16 @@ function fireWeapon(a, fireSeq, renderTime) {
     if (!hit) continue;
     if (hit.kind === 'actor') {
       const dmg = w.dmg * (hit.head ? w.headMul : 1);
-      if (!visualOnly) applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ);
+      /* A guest owns none of this damage, but it does own the feedback. Waiting
+         for the host to confirm costs a full round trip, which is the whole of
+         why shooting feels dead as a guest. Show the marker now against the
+         replicas the player actually aimed at -- the host rewinds to that same
+         instant, so the two nearly always agree -- and let the authoritative
+         event redeem the prediction instead of repeating it. */
+      if (visualOnly) {
+        if (typeof netPredictHit === 'function')
+          netPredictHit(hit.actor, dmg, hit.head, endX, endY, endZ, fireSeq);
+      } else applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ, fireSeq);
       fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'actor');
     } else if (hit.kind === 'mannequin') {
       hit.obj.userData.spin += rand(3, 7) * (rng() < 0.5 ? -1 : 1);
@@ -5113,7 +5222,10 @@ function fireWeapon(a, fireSeq, renderTime) {
   return true;
 }
 
-function applyDamage(target, dmg, from, head, hx, hy, hz) {
+/* `fireSeq` is carried only so the resulting event can name the shot that
+   caused it, letting a guest match the answer to the hit it already predicted.
+   It plays no part in resolving the damage itself. */
+function applyDamage(target, dmg, from, head, hx, hy, hz, fireSeq) {
   if (!target.alive) return;
   /* Spawn shield. Eight bots on a map this small means you can be dead
      within a second of appearing — playtesting gave three deaths in ~14s.
@@ -5122,7 +5234,7 @@ function applyDamage(target, dmg, from, head, hx, hy, hz) {
   if (target.shield > 0) {
     if (from) fxShieldHit(target, hx, hy, hz);
     if (typeof netOnAuthoritativeShieldHit === 'function')
-      netOnAuthoritativeShieldHit(target, from, hx, hy, hz);
+      netOnAuthoritativeShieldHit(target, from, hx, hy, hz, fireSeq);
     return;
   }
   target.health -= dmg;
@@ -5144,7 +5256,7 @@ function applyDamage(target, dmg, from, head, hx, hy, hz) {
     fxShake(0.18);
   }
   if (typeof netOnAuthoritativeDamage === 'function')
-    netOnAuthoritativeDamage(target, from, dmg, head, hx, hy, hz);
+    netOnAuthoritativeDamage(target, from, dmg, head, hx, hy, hz, fireSeq);
   if (target.health <= 0) killActor(target, from);
 }
 
@@ -5682,7 +5794,11 @@ const NETP = globalThis.NUKETOWN_PROTOCOL;
    URL overrides it either way. */
 const NET_SERVER = 'relay.luckeysystems.com';
 const NET_SNAPSHOT_INTERVAL = 1 / 20;
-const NET_INTERP_SNAPSHOTS = 2;
+/* Events leave on their own clock so hit feedback does not wait for the next
+   snapshot. Faster than snapshots because they are small and latency-critical,
+   but not once per 60Hz tick: the relay closes a peer over 90 messages a
+   second, and snapshots already claim 20 of those. */
+const NET_EVENT_INTERVAL = 1 / 30;
 const NET_MAX_HISTORY_SAMPLES = 32;
 const NET_MAX_REPLICA_SAMPLES = 16;
 const NET = {
@@ -5703,6 +5819,7 @@ const NET = {
   weaponSeq: 0,
   lastInputAck: 0,
   snapshotAcc: 0,
+  eventAcc: 0,
   lastSnapshotTick: -1,
   lastSnapshotTime: -1,
   snapshotInterval: NET_SNAPSHOT_INTERVAL,
@@ -5714,6 +5831,9 @@ const NET = {
   eventSeq: 0,
   eventQueue: [],
   lastEventSeq: 0,
+  predictedHits: [],
+  arrivalJitter: 0,
+  lastSnapshotAt: 0,
   actorManifest: null,
   lastKillerId: null,
   scoreSignature: '',
@@ -6044,6 +6164,7 @@ function netResetTransport() {
   NET.weaponSeq = 0;
   NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
+  NET.eventAcc = 0;
   NET.lastSnapshotTick = -1;
   NET.lastSnapshotTime = -1;
   NET.snapshotInterval = NET_SNAPSHOT_INTERVAL;
@@ -6055,6 +6176,9 @@ function netResetTransport() {
   NET.eventSeq = 0;
   NET.eventQueue = [];
   NET.lastEventSeq = 0;
+  NET.predictedHits = [];
+  NET.arrivalJitter = 0;
+  NET.lastSnapshotAt = 0;
   NET.actorManifest = null;
   NET.lastKillerId = null;
   NET.scoreSignature = '';
@@ -6305,6 +6429,7 @@ function netBeginMatch() {
   NET.weaponSeq = 0;
   NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
+  NET.eventAcc = 0;
   NET.lastSnapshotTick = -1;
   NET.lastSnapshotTime = -1;
   NET.snapshotInterval = NET_SNAPSHOT_INTERVAL;
@@ -6316,6 +6441,9 @@ function netBeginMatch() {
   NET.eventSeq = 0;
   NET.eventQueue = [];
   NET.lastEventSeq = 0;
+  NET.predictedHits = [];
+  NET.arrivalJitter = 0;
+  NET.lastSnapshotAt = 0;
   NET.actorManifest = null;
   NET.lastKillerId = null;
   NET.scoreSignature = '';
@@ -6543,28 +6671,52 @@ function netAfterSimulation(dt, force) {
   if (netIsHost() && NET.phase === 'playing') netRecordActorHistory();
   if (!netIsHost() || NET.phase !== 'playing' || !netSocketOpen()) return;
   NET.snapshotAcc += dt;
-  if (!force && NET.snapshotAcc < NET_SNAPSHOT_INTERVAL) return;
-  NET.snapshotAcc = force ? 0 : NET.snapshotAcc % NET_SNAPSHOT_INTERVAL;
-  netSend({
-    t: 'snapshot',
-    v: NETP.VERSION,
-    authorityEpoch: NET.authorityEpoch,
-    round: NET.round,
-    tick: G.tick,
-    time: netRound(G.time),
-    actors: G.actors.map(netPackActor),
-    over: !!G.over,
-    winner: G.winner ? netActorId(G.winner) : null
-  }, !force);
-  netFlushEvents();
+  NET.eventAcc += dt;
+
+  if (force || NET.snapshotAcc >= NET_SNAPSHOT_INTERVAL) {
+    NET.snapshotAcc = force ? 0 : NET.snapshotAcc % NET_SNAPSHOT_INTERVAL;
+    netSend({
+      t: 'snapshot',
+      v: NETP.VERSION,
+      authorityEpoch: NET.authorityEpoch,
+      round: NET.round,
+      tick: G.tick,
+      time: netRound(G.time),
+      actors: G.actors.map(netPackActor),
+      over: !!G.over,
+      winner: G.winner ? netActorId(G.winner) : null
+    }, !force);
+  }
+
+  /* Events used to leave only when a snapshot did, which put up to a whole
+     snapshot interval between a guest's shot landing and its owner being told.
+     They carry the hit feedback, so that wait was pure dead air on top of the
+     round trip. Flushing them on their own clock spends a few more messages to
+     get it back -- but not one per 60Hz tick: the relay closes a peer that
+     exceeds 90 messages a second and snapshots already claim 20 of those. */
+  if (force || NET.eventAcc >= NET_EVENT_INTERVAL) {
+    NET.eventAcc = force ? 0 : NET.eventAcc % NET_EVENT_INTERVAL;
+    netFlushEvents();
+  }
+}
+
+/* How far behind the host's clock the guest renders everybody else.
+
+   This used to be a flat two snapshot intervals -- 100ms at 20Hz, paid in full
+   whether the connection needed it or not. It is not free: it is 100ms of
+   extra reaction time handed to the host in every fight, on top of the
+   latency, and lag compensation does nothing about it because the guest is
+   still seeing the enemy late. The buffer only has to cover one interval plus
+   however unevenly snapshots are actually arriving, so that is what it now
+   costs. On a steady connection this is roughly 58ms instead of 100ms. */
+function netInterpDelay() {
+  return NETP.interpolationDelay(NET.snapshotInterval, NET.arrivalJitter);
 }
 
 function netGuestRenderTime(nowSeconds) {
   if (!NET.hostClockAt) return 0;
   const hostClock = NET.hostClock + Math.max(0, nowSeconds - NET.hostClockAt);
-  /* Two snapshots leave a bracketing pair at the normal 20 Hz send rate,
-     while adapting automatically if that cadence is changed later. */
-  return Math.max(0, hostClock - NET.snapshotInterval * NET_INTERP_SNAPSHOTS);
+  return Math.max(0, hostClock - netInterpDelay());
 }
 
 function netObserveInputAck(ack) {
@@ -6816,6 +6968,18 @@ function netApplySnapshot(msg) {
     if (interval >= NET_SNAPSHOT_INTERVAL * 0.5 && interval <= NET_SNAPSHOT_INTERVAL * 4)
       NET.snapshotInterval = lerp(NET.snapshotInterval, interval, 0.2);
   }
+  /* Sized off arrival, not off send: the host's cadence is regular by
+     construction, and what the buffer has to absorb is the network making it
+     irregular. Measured on the wall clock for that reason -- msg.time is the
+     host's schedule and would report a steady stream however late it landed. */
+  {
+    const arrivedAt = performance.now() / 1000;
+    if (NET.lastSnapshotAt > 0) {
+      NET.arrivalJitter = NETP.trackArrivalJitter(
+        NET.arrivalJitter, arrivedAt - NET.lastSnapshotAt, NET.snapshotInterval);
+    }
+    NET.lastSnapshotAt = arrivedAt;
+  }
   NET.lastSnapshotTime = msg.time;
   G.time = lerp(G.time, msg.time, 0.16);
 
@@ -6847,7 +7011,7 @@ function netApplySnapshot(msg) {
 function netStepReplica(a, dt) {
   const samples = a.netSamples;
   const selected = NETP.selectTimedSamples(
-    samples, NET.renderTime, NET.snapshotInterval * NET_INTERP_SNAPSHOTS);
+    samples, NET.renderTime, netInterpDelay());
   if (!selected) return;
   const from = samples[selected.from], to = samples[selected.to];
   const alpha = selected.alpha, extra = selected.extrapolation;
@@ -6880,18 +7044,49 @@ function netSendEvent(kind, data) {
 function netOnAuthoritativeShot(a, w, lines) {
   netSendEvent('shot', { from: netActorId(a), weapon: w.id, lines: lines });
 }
-function netOnAuthoritativeShieldHit(target, from, x, y, z) {
+/* The shot sequence rides along so the guest that fired can tell which of its
+   predicted hits this answers. Only a remote shooter's own shots are keyed;
+   anything else sends null and is simply shown on arrival. */
+function netShotSeq(fireSeq) {
+  return Number.isSafeInteger(fireSeq) && fireSeq >= 0 ? fireSeq : null;
+}
+function netOnAuthoritativeShieldHit(target, from, x, y, z, fireSeq) {
   netSendEvent('shield', {
     target: netActorId(target), from: from ? netActorId(from) : null,
-    at: [x, y, z]
+    at: [x, y, z], seq: netShotSeq(fireSeq)
   });
 }
-function netOnAuthoritativeDamage(target, from, damage, head, x, y, z) {
+function netOnAuthoritativeDamage(target, from, damage, head, x, y, z, fireSeq) {
   netSendEvent('damage', {
     target: netActorId(target), from: from ? netActorId(from) : null,
-    damage: netRound(damage), head: !!head, at: [x, y, z]
+    damage: netRound(damage), head: !!head, at: [x, y, z], seq: netShotSeq(fireSeq)
   });
 }
+/* Guest-side, display only. Nothing here touches health, kills or death --
+   those stay the host's to decide and arrive by snapshot. All this buys is the
+   round trip the player would otherwise spend staring at an unanswered shot. */
+function netPredictHit(target, dmg, head, x, y, z, fireSeq) {
+  if (!netIsGuest() || NET.phase !== 'playing' || !target) return;
+  /* A shielded target answers with a `shield` event and no damage, so
+     predicting a marker there would be a promise the host does not keep. The
+     shield is replicated and ticks down locally, so this is usually right; when
+     it is not, the shield event redeems the booking without showing anything. */
+  if (target.shield > 0) return;
+  if (!NETP.recordPredictedHit(NET.predictedHits, fireSeq, performance.now() / 1000)) return;
+  SFX.hit(!!head);
+  showHitmarker(!!head);
+  addFloater(head ? Math.round(dmg) + '!' : String(Math.round(dmg)),
+    x, y, z, head ? '#fff0a8' : '#ffffff', !!head);
+}
+
+/* True when the guest already showed this hit locally and the caller should
+   stay quiet. Unpredicted hits -- a shot the guest scored without knowing, or
+   any hit at all before this shipped -- still report normally. */
+function netHitAlreadyShown(e) {
+  return e.from === NET.id && e.seq !== null && e.seq !== undefined &&
+    NETP.consumePredictedHit(NET.predictedHits, e.seq, performance.now() / 1000);
+}
+
 function netOnAuthoritativeKill(target, from) {
   netSendEvent('kill', {
     target: netActorId(target), from: from ? netActorId(from) : null,
@@ -6929,6 +7124,15 @@ function netEventPoint(value) {
     value.every(component => netFiniteIn(component, -200, 200));
 }
 
+/* Absent is as valid as null. `seq` is additive, and tolerating its absence is
+   what keeps it from needing a protocol version of its own: a host that never
+   sends it still produces events this guest accepts, at the cost of the
+   deduplication only -- the feedback still arrives, it is just not matched to a
+   prediction. See the note on netHitAlreadyShown for what that costs. */
+function netValidShotSeq(value) {
+  return value === null || value === undefined || netSafeCount(value);
+}
+
 function netValidEvent(e) {
   if (!e || typeof e !== 'object' || Array.isArray(e) ||
       !Number.isSafeInteger(e.id) || e.id < 1 ||
@@ -6941,13 +7145,14 @@ function netValidEvent(e) {
   }
   if (e.kind === 'shield') {
     return netKnownActor(e.target) &&
-      (e.from === null || netKnownActor(e.from)) && netEventPoint(e.at);
+      (e.from === null || netKnownActor(e.from)) && netEventPoint(e.at) &&
+      netValidShotSeq(e.seq);
   }
   if (e.kind === 'damage') {
     return netKnownActor(e.target) &&
       (e.from === null || netKnownActor(e.from)) &&
       netFiniteIn(e.damage, 0, 500) && typeof e.head === 'boolean' &&
-      netEventPoint(e.at);
+      netEventPoint(e.at) && netValidShotSeq(e.seq);
   }
   if (e.kind === 'kill') {
     return netKnownActor(e.target) &&
@@ -7000,9 +7205,13 @@ function netApplyEvent(e) {
     }
     if (from) SFX.shoot(w.id, from.pos.x, from.pos.y + 1.3, from.pos.z);
   } else if (e.kind === 'shield') {
+    /* Redeem the booking even though nothing is drawn for it: the guest
+       predicted a hit the host turned into a shield ping, and leaving the
+       credit outstanding would let it swallow a later marker for this shot. */
+    netHitAlreadyShown(e);
     if (target && Array.isArray(e.at)) fxShieldHit(target, e.at[0], e.at[1], e.at[2]);
   } else if (e.kind === 'damage') {
-    if (e.from === NET.id && Array.isArray(e.at)) {
+    if (e.from === NET.id && Array.isArray(e.at) && !netHitAlreadyShown(e)) {
       SFX.hit(!!e.head);
       showHitmarker(!!e.head);
       addFloater(e.head ? Math.round(e.damage) + '!' : String(Math.round(e.damage)),
