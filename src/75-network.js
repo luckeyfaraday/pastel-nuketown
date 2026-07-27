@@ -20,7 +20,11 @@ const NETP = globalThis.NUKETOWN_PROTOCOL;
    URL overrides it either way. */
 const NET_SERVER = 'relay.luckeysystems.com';
 const NET_SNAPSHOT_INTERVAL = 1 / 20;
-const NET_INTERP_SNAPSHOTS = 2;
+/* Events leave on their own clock so hit feedback does not wait for the next
+   snapshot. Faster than snapshots because they are small and latency-critical,
+   but not once per 60Hz tick: the relay closes a peer over 90 messages a
+   second, and snapshots already claim 20 of those. */
+const NET_EVENT_INTERVAL = 1 / 30;
 const NET_MAX_HISTORY_SAMPLES = 32;
 const NET_MAX_REPLICA_SAMPLES = 16;
 const NET = {
@@ -41,6 +45,7 @@ const NET = {
   weaponSeq: 0,
   lastInputAck: 0,
   snapshotAcc: 0,
+  eventAcc: 0,
   lastSnapshotTick: -1,
   lastSnapshotTime: -1,
   snapshotInterval: NET_SNAPSHOT_INTERVAL,
@@ -52,6 +57,9 @@ const NET = {
   eventSeq: 0,
   eventQueue: [],
   lastEventSeq: 0,
+  predictedHits: [],
+  arrivalJitter: 0,
+  lastSnapshotAt: 0,
   actorManifest: null,
   lastKillerId: null,
   scoreSignature: '',
@@ -382,6 +390,7 @@ function netResetTransport() {
   NET.weaponSeq = 0;
   NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
+  NET.eventAcc = 0;
   NET.lastSnapshotTick = -1;
   NET.lastSnapshotTime = -1;
   NET.snapshotInterval = NET_SNAPSHOT_INTERVAL;
@@ -393,6 +402,9 @@ function netResetTransport() {
   NET.eventSeq = 0;
   NET.eventQueue = [];
   NET.lastEventSeq = 0;
+  NET.predictedHits = [];
+  NET.arrivalJitter = 0;
+  NET.lastSnapshotAt = 0;
   NET.actorManifest = null;
   NET.lastKillerId = null;
   NET.scoreSignature = '';
@@ -643,6 +655,7 @@ function netBeginMatch() {
   NET.weaponSeq = 0;
   NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
+  NET.eventAcc = 0;
   NET.lastSnapshotTick = -1;
   NET.lastSnapshotTime = -1;
   NET.snapshotInterval = NET_SNAPSHOT_INTERVAL;
@@ -654,6 +667,9 @@ function netBeginMatch() {
   NET.eventSeq = 0;
   NET.eventQueue = [];
   NET.lastEventSeq = 0;
+  NET.predictedHits = [];
+  NET.arrivalJitter = 0;
+  NET.lastSnapshotAt = 0;
   NET.actorManifest = null;
   NET.lastKillerId = null;
   NET.scoreSignature = '';
@@ -881,28 +897,52 @@ function netAfterSimulation(dt, force) {
   if (netIsHost() && NET.phase === 'playing') netRecordActorHistory();
   if (!netIsHost() || NET.phase !== 'playing' || !netSocketOpen()) return;
   NET.snapshotAcc += dt;
-  if (!force && NET.snapshotAcc < NET_SNAPSHOT_INTERVAL) return;
-  NET.snapshotAcc = force ? 0 : NET.snapshotAcc % NET_SNAPSHOT_INTERVAL;
-  netSend({
-    t: 'snapshot',
-    v: NETP.VERSION,
-    authorityEpoch: NET.authorityEpoch,
-    round: NET.round,
-    tick: G.tick,
-    time: netRound(G.time),
-    actors: G.actors.map(netPackActor),
-    over: !!G.over,
-    winner: G.winner ? netActorId(G.winner) : null
-  }, !force);
-  netFlushEvents();
+  NET.eventAcc += dt;
+
+  if (force || NET.snapshotAcc >= NET_SNAPSHOT_INTERVAL) {
+    NET.snapshotAcc = force ? 0 : NET.snapshotAcc % NET_SNAPSHOT_INTERVAL;
+    netSend({
+      t: 'snapshot',
+      v: NETP.VERSION,
+      authorityEpoch: NET.authorityEpoch,
+      round: NET.round,
+      tick: G.tick,
+      time: netRound(G.time),
+      actors: G.actors.map(netPackActor),
+      over: !!G.over,
+      winner: G.winner ? netActorId(G.winner) : null
+    }, !force);
+  }
+
+  /* Events used to leave only when a snapshot did, which put up to a whole
+     snapshot interval between a guest's shot landing and its owner being told.
+     They carry the hit feedback, so that wait was pure dead air on top of the
+     round trip. Flushing them on their own clock spends a few more messages to
+     get it back -- but not one per 60Hz tick: the relay closes a peer that
+     exceeds 90 messages a second and snapshots already claim 20 of those. */
+  if (force || NET.eventAcc >= NET_EVENT_INTERVAL) {
+    NET.eventAcc = force ? 0 : NET.eventAcc % NET_EVENT_INTERVAL;
+    netFlushEvents();
+  }
+}
+
+/* How far behind the host's clock the guest renders everybody else.
+
+   This used to be a flat two snapshot intervals -- 100ms at 20Hz, paid in full
+   whether the connection needed it or not. It is not free: it is 100ms of
+   extra reaction time handed to the host in every fight, on top of the
+   latency, and lag compensation does nothing about it because the guest is
+   still seeing the enemy late. The buffer only has to cover one interval plus
+   however unevenly snapshots are actually arriving, so that is what it now
+   costs. On a steady connection this is roughly 58ms instead of 100ms. */
+function netInterpDelay() {
+  return NETP.interpolationDelay(NET.snapshotInterval, NET.arrivalJitter);
 }
 
 function netGuestRenderTime(nowSeconds) {
   if (!NET.hostClockAt) return 0;
   const hostClock = NET.hostClock + Math.max(0, nowSeconds - NET.hostClockAt);
-  /* Two snapshots leave a bracketing pair at the normal 20 Hz send rate,
-     while adapting automatically if that cadence is changed later. */
-  return Math.max(0, hostClock - NET.snapshotInterval * NET_INTERP_SNAPSHOTS);
+  return Math.max(0, hostClock - netInterpDelay());
 }
 
 function netObserveInputAck(ack) {
@@ -1154,6 +1194,18 @@ function netApplySnapshot(msg) {
     if (interval >= NET_SNAPSHOT_INTERVAL * 0.5 && interval <= NET_SNAPSHOT_INTERVAL * 4)
       NET.snapshotInterval = lerp(NET.snapshotInterval, interval, 0.2);
   }
+  /* Sized off arrival, not off send: the host's cadence is regular by
+     construction, and what the buffer has to absorb is the network making it
+     irregular. Measured on the wall clock for that reason -- msg.time is the
+     host's schedule and would report a steady stream however late it landed. */
+  {
+    const arrivedAt = performance.now() / 1000;
+    if (NET.lastSnapshotAt > 0) {
+      NET.arrivalJitter = NETP.trackArrivalJitter(
+        NET.arrivalJitter, arrivedAt - NET.lastSnapshotAt, NET.snapshotInterval);
+    }
+    NET.lastSnapshotAt = arrivedAt;
+  }
   NET.lastSnapshotTime = msg.time;
   G.time = lerp(G.time, msg.time, 0.16);
 
@@ -1185,7 +1237,7 @@ function netApplySnapshot(msg) {
 function netStepReplica(a, dt) {
   const samples = a.netSamples;
   const selected = NETP.selectTimedSamples(
-    samples, NET.renderTime, NET.snapshotInterval * NET_INTERP_SNAPSHOTS);
+    samples, NET.renderTime, netInterpDelay());
   if (!selected) return;
   const from = samples[selected.from], to = samples[selected.to];
   const alpha = selected.alpha, extra = selected.extrapolation;
@@ -1218,18 +1270,49 @@ function netSendEvent(kind, data) {
 function netOnAuthoritativeShot(a, w, lines) {
   netSendEvent('shot', { from: netActorId(a), weapon: w.id, lines: lines });
 }
-function netOnAuthoritativeShieldHit(target, from, x, y, z) {
+/* The shot sequence rides along so the guest that fired can tell which of its
+   predicted hits this answers. Only a remote shooter's own shots are keyed;
+   anything else sends null and is simply shown on arrival. */
+function netShotSeq(fireSeq) {
+  return Number.isSafeInteger(fireSeq) && fireSeq >= 0 ? fireSeq : null;
+}
+function netOnAuthoritativeShieldHit(target, from, x, y, z, fireSeq) {
   netSendEvent('shield', {
     target: netActorId(target), from: from ? netActorId(from) : null,
-    at: [x, y, z]
+    at: [x, y, z], seq: netShotSeq(fireSeq)
   });
 }
-function netOnAuthoritativeDamage(target, from, damage, head, x, y, z) {
+function netOnAuthoritativeDamage(target, from, damage, head, x, y, z, fireSeq) {
   netSendEvent('damage', {
     target: netActorId(target), from: from ? netActorId(from) : null,
-    damage: netRound(damage), head: !!head, at: [x, y, z]
+    damage: netRound(damage), head: !!head, at: [x, y, z], seq: netShotSeq(fireSeq)
   });
 }
+/* Guest-side, display only. Nothing here touches health, kills or death --
+   those stay the host's to decide and arrive by snapshot. All this buys is the
+   round trip the player would otherwise spend staring at an unanswered shot. */
+function netPredictHit(target, dmg, head, x, y, z, fireSeq) {
+  if (!netIsGuest() || NET.phase !== 'playing' || !target) return;
+  /* A shielded target answers with a `shield` event and no damage, so
+     predicting a marker there would be a promise the host does not keep. The
+     shield is replicated and ticks down locally, so this is usually right; when
+     it is not, the shield event redeems the booking without showing anything. */
+  if (target.shield > 0) return;
+  if (!NETP.recordPredictedHit(NET.predictedHits, fireSeq, performance.now() / 1000)) return;
+  SFX.hit(!!head);
+  showHitmarker(!!head);
+  addFloater(head ? Math.round(dmg) + '!' : String(Math.round(dmg)),
+    x, y, z, head ? '#fff0a8' : '#ffffff', !!head);
+}
+
+/* True when the guest already showed this hit locally and the caller should
+   stay quiet. Unpredicted hits -- a shot the guest scored without knowing, or
+   any hit at all before this shipped -- still report normally. */
+function netHitAlreadyShown(e) {
+  return e.from === NET.id && e.seq !== null && e.seq !== undefined &&
+    NETP.consumePredictedHit(NET.predictedHits, e.seq, performance.now() / 1000);
+}
+
 function netOnAuthoritativeKill(target, from) {
   netSendEvent('kill', {
     target: netActorId(target), from: from ? netActorId(from) : null,
@@ -1267,6 +1350,15 @@ function netEventPoint(value) {
     value.every(component => netFiniteIn(component, -200, 200));
 }
 
+/* Absent is as valid as null. `seq` is additive, and tolerating its absence is
+   what keeps it from needing a protocol version of its own: a host that never
+   sends it still produces events this guest accepts, at the cost of the
+   deduplication only -- the feedback still arrives, it is just not matched to a
+   prediction. See the note on netHitAlreadyShown for what that costs. */
+function netValidShotSeq(value) {
+  return value === null || value === undefined || netSafeCount(value);
+}
+
 function netValidEvent(e) {
   if (!e || typeof e !== 'object' || Array.isArray(e) ||
       !Number.isSafeInteger(e.id) || e.id < 1 ||
@@ -1279,13 +1371,14 @@ function netValidEvent(e) {
   }
   if (e.kind === 'shield') {
     return netKnownActor(e.target) &&
-      (e.from === null || netKnownActor(e.from)) && netEventPoint(e.at);
+      (e.from === null || netKnownActor(e.from)) && netEventPoint(e.at) &&
+      netValidShotSeq(e.seq);
   }
   if (e.kind === 'damage') {
     return netKnownActor(e.target) &&
       (e.from === null || netKnownActor(e.from)) &&
       netFiniteIn(e.damage, 0, 500) && typeof e.head === 'boolean' &&
-      netEventPoint(e.at);
+      netEventPoint(e.at) && netValidShotSeq(e.seq);
   }
   if (e.kind === 'kill') {
     return netKnownActor(e.target) &&
@@ -1338,9 +1431,13 @@ function netApplyEvent(e) {
     }
     if (from) SFX.shoot(w.id, from.pos.x, from.pos.y + 1.3, from.pos.z);
   } else if (e.kind === 'shield') {
+    /* Redeem the booking even though nothing is drawn for it: the guest
+       predicted a hit the host turned into a shield ping, and leaving the
+       credit outstanding would let it swallow a later marker for this shot. */
+    netHitAlreadyShown(e);
     if (target && Array.isArray(e.at)) fxShieldHit(target, e.at[0], e.at[1], e.at[2]);
   } else if (e.kind === 'damage') {
-    if (e.from === NET.id && Array.isArray(e.at)) {
+    if (e.from === NET.id && Array.isArray(e.at) && !netHitAlreadyShown(e)) {
       SFX.hit(!!e.head);
       showHitmarker(!!e.head);
       addFloater(e.head ? Math.round(e.damage) + '!' : String(Math.round(e.damage)),
