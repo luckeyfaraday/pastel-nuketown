@@ -14,6 +14,16 @@ function closeEnough(actual, expected, epsilon = 1e-12) {
   );
 }
 
+function mulberry32(seed) {
+  return function () {
+    seed |= 0;
+    seed = seed + 0x6D2B79F5 | 0;
+    let value = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    value = value + Math.imul(value ^ value >>> 7, 61 | value) ^ value;
+    return ((value ^ value >>> 14) >>> 0) / 4294967296;
+  };
+}
+
 function validInput(overrides) {
   return Object.assign({
     t: 'input',
@@ -28,7 +38,9 @@ function validInput(overrides) {
     fireSeq: 0,
     yaw: 0.75,
     pitch: -0.2,
+    renderTime: 12.5,
     weapon: 'smg',
+    weaponSeq: 0,
     reloadSeq: 0
   }, overrides);
 }
@@ -115,7 +127,7 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 1);
+  assert.equal(Protocol.VERSION, 3);
   assert.equal(Protocol.MAX_PLAYERS, 4);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
@@ -175,6 +187,119 @@ test('angle helpers stay finite and interpolate across the wrap boundary', () =>
   closeEnough(Protocol.lerpAngle(1, 2, 2), 2);
 });
 
+test('recognizes loopback, private, link-local, and mDNS hosts', () => {
+  const privateHosts = [
+    'localhost',
+    '127.0.0.1',
+    '127.42.0.9',
+    '10.0.0.1',
+    '172.16.0.1',
+    '172.31.255.255',
+    '192.168.1.20',
+    '169.254.4.2',
+    '::1',
+    '[::1]',
+    'fc00::1',
+    '[fd12:3456::1]',
+    'fe80::1',
+    '[febf::9]',
+    'nuketown.local',
+    'NUKETOWN.LOCAL.'
+  ];
+  for (const hostname of privateHosts) {
+    assert.equal(Protocol.isPrivateHost(hostname), true, hostname);
+  }
+
+  const publicHosts = [
+    '172.15.255.255',
+    '172.32.0.0',
+    '192.167.1.1',
+    '169.253.1.1',
+    '8.8.8.8',
+    'fbff::1',
+    'fec0::1',
+    'nuketown.example',
+    '256.1.1.1',
+    null
+  ];
+  for (const hostname of publicHosts) {
+    assert.equal(Protocol.isPrivateHost(hostname), false, String(hostname));
+  }
+});
+
+test('classifies weapon reconciliation and retained fire intent', () => {
+  assert.equal(Protocol.isWeaponStateAcknowledged(3, 2), false);
+  assert.equal(Protocol.isWeaponStateAcknowledged(3, 3), true);
+  assert.equal(Protocol.isWeaponStateAcknowledged(3, 4), true);
+
+  assert.equal(Protocol.FIRE_INTENT_TTL, 0.2);
+  assert.equal(Protocol.classifyFireIntent(true, false, 0, 0, 1), 'fire');
+  assert.equal(Protocol.classifyFireIntent(true, false, 0.01, 0, 1), 'retain');
+  assert.equal(Protocol.classifyFireIntent(true, false, 0, 0.01, 0), 'retain');
+  assert.equal(Protocol.classifyFireIntent(true, false, 0, 0, 0), 'drop');
+  assert.equal(Protocol.classifyFireIntent(true, false, 0.01, 0, 0), 'drop');
+  assert.equal(Protocol.classifyFireIntent(true, true, 0.01, 0, 1), 'drop');
+  assert.equal(Protocol.classifyFireIntent(false, false, 0.01, 0, 1), 'drop');
+});
+
+test('clamps client render time to a bounded host-history window', () => {
+  assert.equal(Protocol.MAX_REWIND_SECONDS, 0.3);
+  closeEnough(Protocol.clampRewindTime(9.82, 10, 9.7), 9.82);
+  closeEnough(
+    Protocol.clampRewindTime(9.72, 10, 9.78),
+    9.78,
+    1e-12
+  );
+  assert.equal(Protocol.clampRewindTime(10.001, 10, 9.7), null);
+  assert.equal(Protocol.clampRewindTime(9.699, 10, 9.6), null);
+  assert.equal(Protocol.clampRewindTime(NaN, 10, 9.7), null);
+});
+
+test('selects interpolation brackets and bounds starved-buffer extrapolation', () => {
+  const samples = [{ time: 1 }, { time: 1.05 }, { time: 1.1 }];
+  const bracket = Protocol.selectTimedSamples(samples, 1.075, 0.1);
+  assert.equal(bracket.from, 1);
+  assert.equal(bracket.to, 2);
+  closeEnough(bracket.alpha, 0.5);
+  assert.equal(bracket.extrapolation, 0);
+  assert.deepEqual(Protocol.selectTimedSamples(samples, 0.9, 0.1), {
+    from: 0,
+    to: 0,
+    alpha: 0,
+    extrapolation: 0
+  });
+  assert.deepEqual(Protocol.selectTimedSamples([{ time: 2 }], 2.15, 0.1), {
+    from: 0,
+    to: 0,
+    alpha: 0,
+    extrapolation: 0.1
+  });
+  assert.equal(Protocol.selectTimedSamples([], 1, 0.1), null);
+});
+
+test('derives repeatable, shooter-specific spread sequences from fireSeq', () => {
+  const spread = (shooter, fireSeq, shotNo) => {
+    const random = mulberry32(Protocol.shotSpreadSeed(shooter, fireSeq, shotNo));
+    return Array.from({ length: 6 }, () => random());
+  };
+
+  assert.deepEqual(spread('guest-2', 9), spread('guest-2', 9));
+  assert.notDeepEqual(spread('guest-2', 9), spread('guest-2', 10));
+  assert.notDeepEqual(spread('guest-2', 9), spread('guest-3', 9));
+
+  /* Both sides must derive the same seed for the same shot... */
+  assert.deepEqual(spread('guest-2', 9, 24), spread('guest-2', 9, 24));
+
+  /* ...but a held burst keeps one fireSeq throughout, so without a per-shot
+     component every bullet in it would land on the same offset and the cone
+     would collapse. Remaining ammo is what separates them. */
+  const burst = [27, 26, 25, 24].map(ammo => spread('guest-2', 9, ammo));
+  for (let i = 1; i < burst.length; i++) {
+    assert.notDeepEqual(burst[i], burst[i - 1]);
+  }
+  assert.notDeepEqual(spread('guest-2', 9, 24), spread('guest-3', 9, 24));
+});
+
 test('sanitizes valid input into a bounded, canonical payload', () => {
   const sanitized = Protocol.sanitizeInput(validInput({
     seq: 9,
@@ -185,7 +310,9 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
     fireSeq: 7,
     yaw: Math.PI * 3,
     pitch: 99,
+    renderTime: 42.125,
     weapon: 'rifle',
+    weaponSeq: 3,
     reloadSeq: 5,
     ignored: 'not relayed',
     from: 'spoofed'
@@ -195,7 +322,7 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
   assert.equal(sanitized.error, null);
   assert.deepEqual(sanitized.value, {
     t: 'input',
-    v: 1,
+    v: 3,
     round: 1,
     seq: 9,
     fwd: 1,
@@ -206,7 +333,9 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
     fireSeq: 7,
     yaw: -Math.PI,
     pitch: Protocol.MAX_PITCH,
+    renderTime: 42.125,
     weapon: 'rifle',
+    weaponSeq: 3,
     reloadSeq: 5
   });
 });
@@ -215,7 +344,7 @@ test('rejects stale sequences, malformed controls, and unknown weapons', () => {
   const cases = [
     [null, 'object'],
     [validInput({ t: 'snapshot' }), 'type'],
-    [validInput({ v: 2 }), 'version'],
+    [validInput({ v: Protocol.VERSION + 1 }), 'version'],
     [validInput({ round: 0 }), 'round'],
     [validInput({ round: 1.5 }), 'round'],
     [validInput({ seq: -1 }), 'seq'],
@@ -224,6 +353,10 @@ test('rejects stale sequences, malformed controls, and unknown weapons', () => {
     [validInput({ fwd: Infinity }), 'finite'],
     [validInput({ strafe: '1' }), 'finite'],
     [validInput({ yaw: NaN }), 'finite'],
+    [validInput({ renderTime: undefined }), 'renderTime'],
+    [validInput({ renderTime: NaN }), 'renderTime'],
+    [validInput({ renderTime: -0.01 }), 'renderTime'],
+    [validInput({ renderTime: 100000001 }), 'renderTime'],
     [validInput({ jump: 1 }), 'booleans'],
     [validInput({ sprint: null }), 'booleans'],
     [validInput({ fire: 'yes' }), 'booleans'],
@@ -231,19 +364,30 @@ test('rejects stale sequences, malformed controls, and unknown weapons', () => {
     [validInput({ fireSeq: -1 }), 'counters'],
     [validInput({ fireSeq: 0.5 }), 'counters'],
     [validInput({ reloadSeq: -1 }), 'counters'],
-    [validInput({ reloadSeq: Number.MAX_SAFE_INTEGER + 1 }), 'counters']
+    [validInput({ reloadSeq: Number.MAX_SAFE_INTEGER + 1 }), 'counters'],
+    [validInput({ weaponSeq: undefined }), 'counters'],
+    [validInput({ weaponSeq: -1 }), 'counters'],
+    [validInput({ weaponSeq: 0.5 }), 'counters'],
+    [validInput({ weaponSeq: Number.MAX_SAFE_INTEGER + 1 }), 'counters'],
+    [validInput({ weaponSeq: 3 }), 'decrease', 0, 4]
   ];
 
-  for (const [message, errorFragment, lastSeq] of cases) {
-    const parsed = Protocol.sanitizeInput(message, lastSeq);
+  for (const [message, errorFragment, lastSeq, lastWeaponSeq] of cases) {
+    const parsed = Protocol.sanitizeInput(message, lastSeq, lastWeaponSeq);
     assert.equal(parsed.ok, false);
     assert.equal(parsed.value, null);
     assert.match(parsed.error, new RegExp(errorFragment));
   }
+
+  assert.equal(
+    Protocol.sanitizeInput(validInput({ seq: 2, weaponSeq: 4 }), 1, 4).ok,
+    true,
+    'weaponSeq may stay unchanged between inputs'
+  );
 });
 
 test('parses JSON strings, Buffers, ArrayBuffers, and sliced byte views', () => {
-  const message = { t: 'event', v: 1, text: 'café' };
+  const message = { t: 'event', v: Protocol.VERSION, text: 'café' };
   const json = JSON.stringify(message);
 
   assert.deepEqual(Protocol.parseWireMessage(json).value, message);
@@ -323,11 +467,11 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await Promise.all([host.opened, guest.opened]);
 
-  host.send({ t: 'create', v: 1, name: ' Host ' });
+  host.send({ t: 'create', v: Protocol.VERSION, name: ' Host ' });
   const hostRoom = await host.next('room');
   assert.deepEqual(hostRoom, {
     t: 'room',
-    v: 1,
+    v: Protocol.VERSION,
     room: 'AAAAAA',
     id: 'peer-1',
     role: 'host',
@@ -336,7 +480,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   });
   await host.next('members');
 
-  guest.send({ t: 'join', v: 1, room: 'aaa-aaa', name: 'Guest' });
+  guest.send({ t: 'join', v: Protocol.VERSION, room: 'aaa-aaa', name: 'Guest' });
   const guestRoom = await guest.next('room');
   assert.equal(guestRoom.role, 'guest');
   assert.equal(guestRoom.id, 'peer-2');
@@ -347,13 +491,13 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   guest.send(validInput({ round: 1, seq: 1 }));
   await expectNoMessage(host, 'input');
 
-  guest.send({ t: 'snapshot', v: 1, round: 1, tick: 1, actors: [] });
+  guest.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 1, actors: [] });
   assert.equal((await guest.next('error')).code, 'host-only');
 
-  host.send({ t: 'start', v: 1, seed: 42 });
+  host.send({ t: 'start', v: Protocol.VERSION, seed: 42 });
   const expectedStart = {
     t: 'start',
-    v: 1,
+    v: Protocol.VERSION,
     round: 1,
     members: [
       { id: 'peer-1', name: 'Host', role: 'host' },
@@ -367,7 +511,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   assert.deepEqual(hostStart, expectedStart);
   assert.deepEqual(guestStart, expectedStart);
 
-  host.send({ t: 'start', v: 1 });
+  host.send({ t: 'start', v: Protocol.VERSION });
   assert.equal((await host.next('error')).code, 'already-started');
   await expectNoMessage(guest, 'start');
 
@@ -376,6 +520,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     seq: 4,
     fwd: 10,
     fireSeq: 2,
+    weaponSeq: 0,
     reloadSeq: 1,
     from: 'forged'
   }));
@@ -383,6 +528,8 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   assert.equal(relayedInput.from, 'peer-2');
   assert.equal(relayedInput.fwd, 1);
   assert.equal(relayedInput.fireSeq, 2);
+  assert.equal(relayedInput.renderTime, 12.5);
+  assert.equal(relayedInput.weaponSeq, 0);
   assert.equal(relayedInput.reloadSeq, 1);
 
   guest.send(validInput({ seq: 4 }));
@@ -393,48 +540,48 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   guest.send(validInput({ round: 1, seq: 5 }));
   assert.equal((await host.next('input')).seq, 5);
 
-  host.send({ t: 'snapshot', v: 1, round: 0, tick: 6, actors: [] });
+  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 0, tick: 6, actors: [] });
   await expectNoMessage(guest, 'snapshot');
-  host.send({ t: 'snapshot', v: 1, round: 1, tick: 7, actors: [] });
+  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 7, actors: [] });
   assert.deepEqual(await guest.next('snapshot'), {
     t: 'snapshot',
-    v: 1,
+    v: Protocol.VERSION,
     round: 1,
     tick: 7,
     actors: []
   });
 
-  host.send({ t: 'event', v: 1, round: 0, events: [{ id: 1, kind: 'shot' }] });
+  host.send({ t: 'event', v: Protocol.VERSION, round: 0, events: [{ id: 1, kind: 'shot' }] });
   await expectNoMessage(guest, 'event');
-  host.send({ t: 'event', v: 1, round: 1, events: [{ id: 1, kind: 'shot' }] });
+  host.send({ t: 'event', v: Protocol.VERSION, round: 1, events: [{ id: 1, kind: 'shot' }] });
   assert.deepEqual(await guest.next('event'), {
     t: 'event',
-    v: 1,
+    v: Protocol.VERSION,
     round: 1,
     events: [{ id: 1, kind: 'shot' }]
   });
 
-  host.send({ t: 'lobby', v: 1, round: 0, winner: 'peer-1' });
+  host.send({ t: 'lobby', v: Protocol.VERSION, round: 0, winner: 'peer-1' });
   await expectNoMessage(guest, 'lobby');
-  host.send({ t: 'snapshot', v: 1, round: 1, tick: 8, actors: [] });
+  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 8, actors: [] });
   assert.equal((await guest.next('snapshot')).tick, 8);
 
-  host.send({ t: 'lobby', v: 1, round: 1, winner: 'peer-1' });
+  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: 'peer-1' });
   assert.deepEqual(await guest.next('lobby'), {
     t: 'lobby',
-    v: 1,
+    v: Protocol.VERSION,
     round: 1,
     winner: 'peer-1'
   });
 
-  host.send({ t: 'lobby', v: 1, round: 1, winner: 'peer-1' });
+  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: 'peer-1' });
   await expectNoMessage(guest, 'lobby');
-  host.send({ t: 'snapshot', v: 1, round: 1, tick: 9, actors: [] });
+  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 9, actors: [] });
   await expectNoMessage(guest, 'snapshot');
   guest.send(validInput({ round: 1, seq: 6 }));
   await expectNoMessage(host, 'input');
 
-  host.send({ t: 'start', v: 1 });
+  host.send({ t: 'start', v: Protocol.VERSION });
   const [hostRematch, guestRematch] = await Promise.all([
     host.next('start'),
     guest.next('start')
@@ -449,18 +596,18 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   assert.equal(firstRematchInput.round, 2);
   assert.equal(firstRematchInput.seq, 1);
 
-  host.send({ t: 'snapshot', v: 1, round: 1, tick: 10, actors: [] });
+  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 1, tick: 10, actors: [] });
   await expectNoMessage(guest, 'snapshot');
-  host.send({ t: 'snapshot', v: 1, round: 2, tick: 1, actors: [] });
+  host.send({ t: 'snapshot', v: Protocol.VERSION, round: 2, tick: 1, actors: [] });
   assert.equal((await guest.next('snapshot')).round, 2);
 
-  host.send({ t: 'event', v: 1, round: 1, events: [{ id: 2, kind: 'shot' }] });
+  host.send({ t: 'event', v: Protocol.VERSION, round: 1, events: [{ id: 2, kind: 'shot' }] });
   await expectNoMessage(guest, 'event');
-  host.send({ t: 'event', v: 1, round: 2, events: [{ id: 1, kind: 'respawn' }] });
+  host.send({ t: 'event', v: Protocol.VERSION, round: 2, events: [{ id: 1, kind: 'respawn' }] });
   assert.equal((await guest.next('event')).round, 2);
 
   host.ws.close();
-  assert.equal((await guest.next('room-closed')).v, 1);
+  assert.equal((await guest.next('room-closed')).v, Protocol.VERSION);
 });
 
 test('started rooms reject late joins, round-scoped lobby reopens them, and capacity is four', async (t) => {
@@ -472,18 +619,18 @@ test('started rooms reject late joins, round-scoped lobby reopens them, and capa
 
   const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await host.opened;
-  host.send({ t: 'create', v: 1, name: 'Host' });
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
   const room = await host.next('room');
   await host.next('members');
 
   const first = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await first.opened;
-  first.send({ t: 'join', v: 1, room: room.room, name: 'One' });
+  first.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'One' });
   await first.next('room');
   await first.next('members');
   await host.next('members');
 
-  host.send({ t: 'start', v: 1 });
+  host.send({ t: 'start', v: Protocol.VERSION });
   const [hostStart, firstStart] = await Promise.all([
     host.next('start'),
     first.next('start')
@@ -493,26 +640,26 @@ test('started rooms reject late joins, round-scoped lobby reopens them, and capa
 
   const late = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await late.opened;
-  late.send({ t: 'join', v: 1, room: room.room, name: 'Late' });
+  late.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Late' });
   assert.equal((await late.next('error')).code, 'match-started');
 
-  host.send({ t: 'lobby', v: 1, round: 1 });
+  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1 });
   assert.equal((await first.next('lobby')).round, 1);
-  late.send({ t: 'join', v: 1, room: room.room, name: 'Two' });
+  late.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Two' });
   await late.next('room');
   await late.next('members');
   await host.next('members');
 
   const third = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await third.opened;
-  third.send({ t: 'join', v: 1, room: room.room, name: 'Three' });
+  third.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Three' });
   await third.next('room');
   await third.next('members');
   await host.next('members');
 
   const fifth = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await fifth.opened;
-  fifth.send({ t: 'join', v: 1, room: room.room, name: 'Four' });
+  fifth.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Four' });
   assert.equal((await fifth.next('error')).code, 'room-full');
 
   first.ws.close();
@@ -530,36 +677,36 @@ test('hostile nesting and non-string fields are rejected without killing usable 
   const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await host.opened;
 
-  host.send({ t: 'create', v: 1, name: { text: 'Host' } });
+  host.send({ t: 'create', v: Protocol.VERSION, name: { text: 'Host' } });
   assert.equal((await host.next('error')).code, 'invalid-name');
 
   let nested = { leaf: true };
   for (let i = 0; i < 12; i++) nested = { child: nested };
-  host.send({ t: 'create', v: 1, name: 'Host', nested });
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host', nested });
   assert.equal((await host.next('error')).code, 'invalid-shape');
 
-  host.send({ t: 'create', v: 1, name: 'Host' });
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
   const room = await host.next('room');
   await host.next('members');
 
   const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await guest.opened;
-  guest.send({ t: 'join', v: 1, room: { code: room.room }, name: 'Guest' });
+  guest.send({ t: 'join', v: Protocol.VERSION, room: { code: room.room }, name: 'Guest' });
   assert.equal((await guest.next('error')).code, 'room-not-found');
-  guest.send({ t: 'join', v: 1, room: room.room, name: ['Guest'] });
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: ['Guest'] });
   assert.equal((await guest.next('error')).code, 'invalid-name');
 
-  guest.send({ t: 'join', v: 1, room: room.room, name: 'Guest' });
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest' });
   await guest.next('room');
   await guest.next('members');
   await host.next('members');
 
-  host.send({ t: 'start', v: 1 });
+  host.send({ t: 'start', v: Protocol.VERSION });
   await Promise.all([host.next('start'), guest.next('start')]);
 
   host.send({
     t: 'event',
-    v: 1,
+    v: Protocol.VERSION,
     round: 1,
     events: [{ id: 1, kind: 'shot', nested }]
   });
@@ -568,21 +715,21 @@ test('hostile nesting and non-string fields are rejected without killing usable 
 
   host.send({
     t: 'event',
-    v: 1,
+    v: Protocol.VERSION,
     round: 1,
     events: [{ id: 1, kind: 'shot' }]
   });
   assert.deepEqual(await guest.next('event'), {
     t: 'event',
-    v: 1,
+    v: Protocol.VERSION,
     round: 1,
     events: [{ id: 1, kind: 'shot' }]
   });
 
-  host.send({ t: 'lobby', v: 1, round: 1, winner: { id: 'safe-1' } });
+  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: { id: 'safe-1' } });
   assert.deepEqual(await guest.next('lobby'), {
     t: 'lobby',
-    v: 1,
+    v: Protocol.VERSION,
     round: 1,
     winner: null
   });
@@ -597,23 +744,23 @@ test('the room handshake carries the round so a player who joins between rounds 
 
   const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await host.opened;
-  host.send({ t: 'create', v: 1, name: 'Host' });
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
   const created = await host.next('room');
   assert.equal(created.round, 0, 'a brand new room starts before round 1');
 
-  host.send({ t: 'start', v: 1 });
+  host.send({ t: 'start', v: Protocol.VERSION });
   assert.equal((await host.next('start')).round, 1);
-  host.send({ t: 'lobby', v: 1, round: 1, winner: null });
+  host.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: null });
 
   /* Joining is only possible between rounds, which is exactly the case that
      used to hand the newcomer a round baseline of 0 against a room on 1. */
   const late = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await late.opened;
-  late.send({ t: 'join', v: 1, room: 'AAAAAA', name: 'Late' });
+  late.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Late' });
   const joined = await late.next('room');
   assert.equal(joined.round, 1, 'the newcomer inherits the round already played');
 
-  host.send({ t: 'start', v: 1 });
+  host.send({ t: 'start', v: Protocol.VERSION });
   const started = await late.next('start');
   assert.equal(started.round, 2);
   assert.ok(started.round > joined.round,
@@ -650,7 +797,7 @@ test('the room browser lists only rooms you could actually join', async (t) => {
 
   const open = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await open.opened;
-  open.send({ t: 'create', v: 1, name: ' Open Host ' });
+  open.send({ t: 'create', v: Protocol.VERSION, name: ' Open Host ' });
   await open.next('room');
 
   assert.deepEqual(await fetchRooms(), [
@@ -659,22 +806,22 @@ test('the room browser lists only rooms you could actually join', async (t) => {
 
   const secret = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await secret.opened;
-  secret.send({ t: 'create', v: 1, name: 'Secret Host', listed: false });
+  secret.send({ t: 'create', v: Protocol.VERSION, name: 'Secret Host', listed: false });
   await secret.next('room');
   assert.deepEqual((await fetchRooms()).map((room) => room.code), ['AAAAAA'],
     'a room that opted out of listing stays hidden');
 
   const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await guest.opened;
-  guest.send({ t: 'join', v: 1, room: 'AAAAAA', name: 'Guest' });
+  guest.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Guest' });
   await guest.next('room');
   assert.equal((await fetchRooms())[0].players, 2, 'the seat count tracks the roster');
 
-  open.send({ t: 'start', v: 1 });
+  open.send({ t: 'start', v: Protocol.VERSION });
   await open.next('start');
   assert.deepEqual(await fetchRooms(), [], 'a room in a live match is not joinable');
 
-  open.send({ t: 'lobby', v: 1, round: 1, winner: null });
+  open.send({ t: 'lobby', v: Protocol.VERSION, round: 1, winner: null });
   await guest.next('lobby');
   assert.deepEqual((await fetchRooms()).map((room) => room.code), ['AAAAAA'],
     'it comes back once the round ends');

@@ -1694,7 +1694,7 @@ if (typeof THREE === "undefined") {
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = 1;
+  var VERSION = 3;
   var MAX_PLAYERS = 4;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
@@ -1703,6 +1703,8 @@ if (typeof THREE === "undefined") {
   var MAX_ROOM_LIST = 50;
   var ALLOWED_WEAPONS = Object.freeze(['smg', 'shotgun', 'rifle']);
   var MAX_PITCH = 1.45;
+  var FIRE_INTENT_TTL = 0.2;
+  var MAX_REWIND_SECONDS = 0.3;
 
   function result(ok, value, error) {
     return {
@@ -1755,6 +1757,128 @@ if (typeof THREE === "undefined") {
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
   }
 
+  function isPrivateHost(hostname) {
+    if (typeof hostname !== 'string') return false;
+    var host = hostname.trim().toLowerCase();
+    if (host.charAt(host.length - 1) === '.') host = host.slice(0, -1);
+    if (host.charAt(0) === '[' && host.charAt(host.length - 1) === ']') {
+      host = host.slice(1, -1);
+    }
+    host = host.split('%')[0];
+
+    if (host === 'localhost' || host === '::1' || /\.local$/.test(host)) return true;
+
+    var ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4) {
+      var octets = ipv4.slice(1).map(Number);
+      if (octets.some(function (octet) { return octet > 255; })) return false;
+      return octets[0] === 127 ||
+        octets[0] === 10 ||
+        (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] === 192 && octets[1] === 168) ||
+        (octets[0] === 169 && octets[1] === 254);
+    }
+
+    if (host.indexOf(':') !== -1) {
+      var firstText = host.split(':', 1)[0];
+      if (!/^[0-9a-f]{1,4}$/.test(firstText)) return false;
+      var first = parseInt(firstText, 16);
+      return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+    }
+
+    return false;
+  }
+
+  function isWeaponStateAcknowledged(localWeaponSeq, echoedWeaponSeq) {
+    return Number.isSafeInteger(localWeaponSeq) && localWeaponSeq >= 0 &&
+      Number.isSafeInteger(echoedWeaponSeq) && echoedWeaponSeq >= localWeaponSeq;
+  }
+
+  function classifyFireIntent(alive, sprinting, fireCd, reloadT, ammo) {
+    if (!alive || sprinting) return 'drop';
+    if (reloadT > 0) return 'retain';
+    if (ammo <= 0) return 'drop';
+    if (fireCd > 0) return 'retain';
+    return 'fire';
+  }
+
+  function clampRewindTime(renderTime, hostTime, historyStart, maxAge) {
+    var limit = isFiniteNumber(maxAge) && maxAge > 0
+      ? maxAge
+      : MAX_REWIND_SECONDS;
+    if (!isFiniteNumber(renderTime) || !isFiniteNumber(hostTime) ||
+        !isFiniteNumber(historyStart) || renderTime > hostTime ||
+        renderTime < hostTime - limit) return null;
+
+    return clamp(renderTime, Math.max(historyStart, hostTime - limit), hostTime);
+  }
+
+  function selectTimedSamples(samples, renderTime, maxExtrapolation) {
+    if (!Array.isArray(samples) || !samples.length || !isFiniteNumber(renderTime)) {
+      return null;
+    }
+
+    var first = samples[0];
+    if (!first || !isFiniteNumber(first.time)) return null;
+    if (renderTime <= first.time) {
+      return { from: 0, to: 0, alpha: 0, extrapolation: 0 };
+    }
+
+    for (var i = 1; i < samples.length; i++) {
+      var before = samples[i - 1];
+      var after = samples[i];
+      if (!before || !after ||
+          !isFiniteNumber(before.time) || !isFiniteNumber(after.time) ||
+          after.time < before.time) return null;
+      if (renderTime <= after.time) {
+        var span = after.time - before.time;
+        return {
+          from: i - 1,
+          to: i,
+          alpha: span > 0 ? clamp((renderTime - before.time) / span, 0, 1) : 1,
+          extrapolation: 0
+        };
+      }
+    }
+
+    var last = samples[samples.length - 1];
+    var bound = isFiniteNumber(maxExtrapolation) && maxExtrapolation > 0
+      ? maxExtrapolation
+      : 0;
+    return {
+      from: samples.length - 1,
+      to: samples.length - 1,
+      alpha: 0,
+      extrapolation: clamp(renderTime - last.time, 0, bound)
+    };
+  }
+
+  /* fireSeq alone is not enough to key a shot. It advances on a fresh trigger
+     press, so every shot in a held automatic burst would reseed identically and
+     the spread cone would collapse to one fixed offset. `shotNo` separates the
+     shots inside a burst: pass the firing actor's remaining ammo, which counts
+     down once per shot and is both locally predicted and host-authoritative, so
+     the two sides still derive the same seed. */
+  function shotSpreadSeed(shooter, fireSeq, shotNo) {
+    if ((typeof shooter !== 'string' && typeof shooter !== 'number') ||
+        !Number.isSafeInteger(fireSeq) || fireSeq < 0) return 0;
+
+    var text = String(shooter);
+    var hash = 2166136261;
+    for (var i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    hash ^= fireSeq >>> 0;
+    hash = Math.imul(hash, 16777619);
+    hash ^= Math.floor(fireSeq / 4294967296) >>> 0;
+    if (Number.isSafeInteger(shotNo) && shotNo >= 0) {
+      hash = Math.imul(hash, 16777619);
+      hash ^= shotNo >>> 0;
+    }
+    return hash >>> 0;
+  }
+
   function createRoomCode(randomFn) {
     var random = typeof randomFn === 'function' ? randomFn : Math.random;
     var code = '';
@@ -1803,7 +1927,7 @@ if (typeof THREE === "undefined") {
     return out;
   }
 
-  function sanitizeInput(message, lastSeq) {
+  function sanitizeInput(message, lastSeq, lastWeaponSeq) {
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       return result(false, null, 'input must be an object');
     }
@@ -1831,6 +1955,10 @@ if (typeof THREE === "undefined") {
     if (!isFiniteNumber(message.yaw) || !isFiniteNumber(message.pitch)) {
       return result(false, null, 'look angles must be finite numbers');
     }
+    if (!isFiniteNumber(message.renderTime) ||
+        message.renderTime < 0 || message.renderTime > 100000000) {
+      return result(false, null, 'renderTime must be a plausible host timestamp');
+    }
     if (typeof message.jump !== 'boolean' ||
         typeof message.sprint !== 'boolean' ||
         typeof message.fire !== 'boolean') {
@@ -1840,8 +1968,13 @@ if (typeof THREE === "undefined") {
       return result(false, null, 'unknown weapon');
     }
     if (!Number.isSafeInteger(message.fireSeq) || message.fireSeq < 0 ||
-        !Number.isSafeInteger(message.reloadSeq) || message.reloadSeq < 0) {
+        !Number.isSafeInteger(message.reloadSeq) || message.reloadSeq < 0 ||
+        !Number.isSafeInteger(message.weaponSeq) || message.weaponSeq < 0) {
       return result(false, null, 'action counters must be non-negative safe integers');
+    }
+    var previousWeapon = Number.isSafeInteger(lastWeaponSeq) ? lastWeaponSeq : -1;
+    if (message.weaponSeq < previousWeapon) {
+      return result(false, null, 'weaponSeq must not decrease');
     }
 
     return result(true, {
@@ -1857,7 +1990,9 @@ if (typeof THREE === "undefined") {
       fireSeq: message.fireSeq,
       yaw: wrapAngle(message.yaw),
       pitch: clamp(message.pitch, -MAX_PITCH, MAX_PITCH),
+      renderTime: message.renderTime,
       weapon: message.weapon,
+      weaponSeq: message.weaponSeq,
       reloadSeq: message.reloadSeq
     }, null);
   }
@@ -1958,8 +2093,16 @@ if (typeof THREE === "undefined") {
     MAX_ROOM_LIST: MAX_ROOM_LIST,
     ALLOWED_WEAPONS: ALLOWED_WEAPONS,
     MAX_PITCH: MAX_PITCH,
+    FIRE_INTENT_TTL: FIRE_INTENT_TTL,
+    MAX_REWIND_SECONDS: MAX_REWIND_SECONDS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    isPrivateHost: isPrivateHost,
+    isWeaponStateAcknowledged: isWeaponStateAcknowledged,
+    classifyFireIntent: classifyFireIntent,
+    clampRewindTime: clampRewindTime,
+    selectTimedSamples: selectTimedSamples,
+    shotSpreadSeed: shotSpreadSeed,
     cleanRoomSummaries: cleanRoomSummaries,
     createRoomCode: createRoomCode,
     isFiniteNumber: isFiniteNumber,
@@ -4459,8 +4602,10 @@ function makeActor(opts) {
     onGround: false, stepPhase: 0,
     lastHitBy: null, lastHitT: -99, shield: 0,
     brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
-    netInput: null, netTarget: null, lastInputSeq: -1,
-    lastFireSeq: 0, lastReloadSeq: 0
+    netInput: null, netTarget: null, lastInputSeq: -1, lastWeaponSeq: -1,
+    inputAck: 0, weaponAck: 0,
+    lastFireSeq: 0, lastReloadSeq: 0, pendingFireUntil: 0,
+    pendingFireSeq: 0, pendingRenderTime: 0
   };
   const w = WBY[a.weapon];
   a.ammo = w.mag; a.reserve = w.reserve;
@@ -4659,7 +4804,7 @@ function finishReload(a) {
   if (a.isPlayer) SFX.reloadDone(); else SFX.reloadDone(a.pos.x, a.pos.y + 1.2, a.pos.z);
 }
 
-function fireWeapon(a) {
+function fireWeapon(a, fireSeq, renderTime) {
   const w = WBY[a.weapon];
   const visualOnly = a.isPlayer && typeof netIsGuest === 'function' && netIsGuest();
   if (a.fireCd > 0 || a.reloadT > 0 || !a.alive) return false;
@@ -4677,6 +4822,10 @@ function fireWeapon(a) {
   const ex = a.pos.x, ey = actorEye(a), ez = a.pos.z;
   const moving = Math.hypot(a.vel.x, a.vel.z) > 1.6;
   const spread = moving ? w.spreadMove : w.spread;
+  const spreadRng = Number.isSafeInteger(fireSeq) && fireSeq >= 0
+    ? mulberry32(NETP.shotSpreadSeed(a.netId || a.id, fireSeq, a.ammo))
+    : rng;
+  const spreadRand = (lo, hi) => lo + (hi - lo) * spreadRng();
 
   // muzzle origin for tracers: bots use their gun, the player uses the viewmodel
   let mx = ex, my = ey, mz = ez;
@@ -4686,18 +4835,31 @@ function fireWeapon(a) {
     mx = p.x; my = p.y; mz = p.z;
   }
 
-  const shotLines = [];
-  for (let p = 0; p < w.pellets; p++) {
-    const yaw = a.aimYaw + rand(-spread, spread) * (p ? 1.6 : 0.35);
-    const pit = a.aimPitch + rand(-spread, spread) * (p ? 1.6 : 0.35);
-    const cp = Math.cos(pit);
-    const dx = Math.sin(yaw) * cp, dy = Math.sin(pit), dz = Math.cos(yaw) * cp;
-    const hit = hitscan(ex, ey, ez, dx, dy, dz, w.range, G.actors, a.id);
-    const endX = hit ? hit.px : ex + dx * w.range;
-    const endY = hit ? hit.py : ey + dy * w.range;
-    const endZ = hit ? hit.pz : ez + dz * w.range;
-    shotLines.push([mx, my, mz, endX, endY, endZ]);
+  const shotLines = [], shotHits = [];
+  const restoreActors = !visualOnly && a.controller === 'remote' &&
+    typeof netBeginLagCompensation === 'function'
+    ? netBeginLagCompensation(a, renderTime)
+    : null;
+  try {
+    for (let p = 0; p < w.pellets; p++) {
+      const yaw = a.aimYaw + spreadRand(-spread, spread) * (p ? 1.6 : 0.35);
+      const pit = a.aimPitch + spreadRand(-spread, spread) * (p ? 1.6 : 0.35);
+      const cp = Math.cos(pit);
+      const dx = Math.sin(yaw) * cp, dy = Math.sin(pit), dz = Math.cos(yaw) * cp;
+      const hit = hitscan(ex, ey, ez, dx, dy, dz, w.range, G.actors, a.id);
+      const endX = hit ? hit.px : ex + dx * w.range;
+      const endY = hit ? hit.py : ey + dy * w.range;
+      const endZ = hit ? hit.pz : ez + dz * w.range;
+      shotHits.push(hit);
+      shotLines.push([mx, my, mz, endX, endY, endZ]);
+    }
+  } finally {
+    if (restoreActors) restoreActors();
+  }
 
+  for (let p = 0; p < shotLines.length; p++) {
+    const hit = shotHits[p];
+    const endX = shotLines[p][3], endY = shotLines[p][4], endZ = shotLines[p][5];
     if (p === 0 || w.pellets <= 3 || p % 3 === 0)
       fxTracer(mx, my, mz, endX, endY, endZ, C(a.isPlayer ? (w.tracer || 0xfff0c0) : a.colors.trim));
 
@@ -4818,7 +4980,7 @@ function endMatch(winner) {
 const KEY = {};
 const IN = {
   lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
-  fireSeq: 0, reloadSeq: 0
+  fireSeq: 0, fireRenderTime: 0, reloadSeq: 0
 };
 let mouseSens = 0.0021;
 
@@ -4840,7 +5002,11 @@ function initInput() {
   });
   addEventListener('mousedown', e => {
     if (IN.locked && e.button === 0) {
-      if (!IN.firing) IN.fireSeq++;
+      if (!IN.firing) {
+        IN.fireSeq++;
+        if (typeof netDisplayedRenderTime === 'function')
+          IN.fireRenderTime = netDisplayedRenderTime();
+      }
       IN.firing = true;
     }
   });
@@ -4880,6 +5046,7 @@ function exitPointerLock() { try { if (document.exitPointerLock) document.exitPo
 
 function switchWeapon(id) {
   if (!WBY[id] || G.player.weapon === id) return;
+  if (typeof netOnLocalWeaponChanged === 'function') netOnLocalWeaponChanged();
   G.player.weapon = id;
   const w = WBY[id];
   if (G.player.ammo > w.mag) G.player.ammo = w.mag;
@@ -4953,8 +5120,8 @@ function stepPlayer(a, dt) {
 
   if (firing && !sprinting) {
     const w2 = WBY[a.weapon];
-    if (w2.auto) fireWeapon(a);
-    else if (!IN._heldSemi) { if (fireWeapon(a)) IN._heldSemi = true; }
+    if (w2.auto) fireWeapon(a, IN.fireSeq);
+    else if (!IN._heldSemi) { if (fireWeapon(a, IN.fireSeq)) IN._heldSemi = true; }
   }
   if (!firing) IN._heldSemi = false;
   syncPlayerAmmoStore();
@@ -4975,7 +5142,27 @@ function switchRemoteWeapon(a, id) {
 /* The host simulates remote humans from their latest sequenced input.
    This intentionally mirrors local movement, but omits camera/viewmodel UI. */
 function stepRemotePlayer(a, dt) {
+  const fresh = a.netInput && G.time - (a.netInputAt || 0) <= 0.45;
+  const it = fresh ? a.netInput : {
+    fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
+    fireSeq: a.lastFireSeq, reloadSeq: a.lastReloadSeq,
+    yaw: a.yaw, pitch: a.pitch, weapon: a.weapon,
+    seq: a.inputAck, weaponSeq: a.weaponAck, renderTime: G.time
+  };
+  if (fresh) {
+    a.inputAck = it.seq;
+    if (it.weaponSeq > a.weaponAck) switchRemoteWeapon(a, it.weapon);
+    a.weaponAck = it.weaponSeq;
+  }
+
+  const fireEdge = it.fireSeq > a.lastFireSeq;
+  /* Death is a permanent blocker for this life. Consume its edges before
+     returning so a late tap cannot turn into a shot immediately on respawn. */
   if (!a.alive) {
+    if (fireEdge) a.lastFireSeq = it.fireSeq;
+    a.pendingFireUntil = 0;
+    a.pendingFireSeq = 0;
+    a.pendingRenderTime = 0;
     a.respawnT -= dt;
     if (a.respawnT <= 0) {
       respawnActor(a);
@@ -4984,16 +5171,9 @@ function stepRemotePlayer(a, dt) {
     return;
   }
 
-  const fresh = a.netInput && G.time - (a.netInputAt || 0) <= 0.45;
-  const it = fresh ? a.netInput : {
-    fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
-    fireSeq: a.lastFireSeq, reloadSeq: a.lastReloadSeq,
-    yaw: a.yaw, pitch: a.pitch, weapon: a.weapon
-  };
   a.yaw = Number.isFinite(it.yaw) ? it.yaw : a.yaw;
   a.pitch = Number.isFinite(it.pitch) ? clamp(it.pitch, -1.45, 1.45) : a.pitch;
   a.aimYaw = a.yaw; a.aimPitch = a.pitch;
-  switchRemoteWeapon(a, it.weapon);
 
   if (it.reloadSeq > a.lastReloadSeq) {
     a.lastReloadSeq = it.reloadSeq;
@@ -5028,11 +5208,43 @@ function stepRemotePlayer(a, dt) {
      ends inside one packet never appears as a held `fire`. The fireSeq edge is
      what carries a fast tap across the wire — auto weapons need to honour it
      too, or the SMG silently eats quick taps. */
-  const fireEdge = it.fireSeq > a.lastFireSeq;
-  if (!sprinting && (fireEdge || (w.auto && it.fire))) fireWeapon(a);
   /* Acknowledge the tap even when sprinting swallowed it. Leaving it unacked
      buffers the shot, which then goes off by itself the instant sprint ends. */
-  if (fireEdge) a.lastFireSeq = it.fireSeq;
+  if (fireEdge) {
+    a.lastFireSeq = it.fireSeq;
+    const decision = NETP.classifyFireIntent(
+      a.alive, sprinting, a.fireCd, a.reloadT, a.ammo);
+    if (decision === 'retain') {
+      a.pendingFireUntil = G.time + NETP.FIRE_INTENT_TTL;
+      a.pendingFireSeq = it.fireSeq;
+      a.pendingRenderTime = it.renderTime;
+    } else {
+      a.pendingFireUntil = 0;
+      a.pendingFireSeq = 0;
+      a.pendingRenderTime = 0;
+      /* Empty-magazine taps still start the normal automatic reload, but the
+         tap itself is not kept waiting for that reload to finish. */
+      if (!sprinting) fireWeapon(a, it.fireSeq, it.renderTime);
+    }
+  }
+
+  if (a.pendingFireUntil > 0) {
+    const decision = NETP.classifyFireIntent(
+      a.alive, sprinting, a.fireCd, a.reloadT, a.ammo);
+    if (G.time > a.pendingFireUntil || decision === 'drop') {
+      a.pendingFireUntil = 0;
+      a.pendingFireSeq = 0;
+      a.pendingRenderTime = 0;
+    } else if (decision === 'fire') {
+      a.pendingFireUntil = 0;
+      const pendingSeq = a.pendingFireSeq;
+      const pendingTime = a.pendingRenderTime;
+      a.pendingFireSeq = 0;
+      a.pendingRenderTime = 0;
+      fireWeapon(a, pendingSeq, pendingTime);
+    }
+  }
+  if (!sprinting && w.auto && it.fire) fireWeapon(a, it.fireSeq, it.renderTime);
 
   if (!a._ammoBy) a._ammoBy = {};
   a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };
@@ -5185,6 +5397,10 @@ const NETP = globalThis.NUKETOWN_PROTOCOL;
    right answer when the relay is also serving the game. A ?server= in the
    URL overrides it either way. */
 const NET_SERVER = 'relay.luckeysystems.com';
+const NET_SNAPSHOT_INTERVAL = 1 / 20;
+const NET_INTERP_SNAPSHOTS = 2;
+const NET_MAX_HISTORY_SAMPLES = 32;
+const NET_MAX_REPLICA_SAMPLES = 16;
 const NET = {
   mode: 'solo',                 // solo | connecting | host | guest
   phase: 'idle',                // idle | connecting | lobby | playing
@@ -5197,8 +5413,18 @@ const NET = {
   manualClose: false,
   starting: false,
   inputSeq: 0,
+  lastFireSeqSent: 0,
+  inputSentTimes: new Map(),
+  weaponSeq: 0,
+  lastInputAck: 0,
   snapshotAcc: 0,
   lastSnapshotTick: -1,
+  lastSnapshotTime: -1,
+  snapshotInterval: NET_SNAPSHOT_INTERVAL,
+  hostClock: 0,
+  hostClockAt: 0,
+  oneWay: 0,
+  renderTime: 0,
   lastInputSentAt: 0,
   eventSeq: 0,
   eventQueue: [],
@@ -5281,8 +5507,7 @@ function netSameOriginURL() {
 }
 
 function netIsDevOrigin() {
-  const h = location.hostname;
-  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+  return NETP.isPrivateHost(location.hostname);
 }
 
 function netWsURL() {
@@ -5292,8 +5517,8 @@ function netWsURL() {
   if (requested) return netNormalizeServer(requested);
 
   if (location.protocol === 'file:') return 'ws://localhost:8080/ws';
-  /* Serving from localhost means you are running the relay yourself; stay
-     on this machine instead of dialling the public one. */
+  /* Private origins are serving the game from a relay on this LAN; stay on
+     that origin instead of sending players in the same room through public. */
   if (netIsDevOrigin()) return netSameOriginURL();
 
   return netNormalizeServer(NET_SERVER) || netSameOriginURL();
@@ -5528,8 +5753,18 @@ function netResetTransport() {
   NET.wanted = null;
   NET.starting = false;
   NET.inputSeq = 0;
+  NET.lastFireSeqSent = 0;
+  NET.inputSentTimes.clear();
+  NET.weaponSeq = 0;
+  NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
   NET.lastSnapshotTick = -1;
+  NET.lastSnapshotTime = -1;
+  NET.snapshotInterval = NET_SNAPSHOT_INTERVAL;
+  NET.hostClock = 0;
+  NET.hostClockAt = 0;
+  NET.oneWay = 0;
+  NET.renderTime = 0;
   NET.lastInputSentAt = 0;
   NET.eventSeq = 0;
   NET.eventQueue = [];
@@ -5684,10 +5919,11 @@ function netHandleWire(raw) {
       msg.round === NET.round && typeof msg.from === 'string') {
     const a = G.actors.find(x => x.controller === 'remote' && x.netId === msg.from);
     if (!a) return;
-    const checked = NETP.sanitizeInput(msg, a.lastInputSeq);
+    const checked = NETP.sanitizeInput(msg, a.lastInputSeq, a.lastWeaponSeq);
     if (!checked.ok) return;
     a.netInput = checked.value;
     a.lastInputSeq = checked.value.seq;
+    a.lastWeaponSeq = checked.value.weaponSeq;
     a.netInputAt = G.time;
     return;
   }
@@ -5754,8 +5990,18 @@ function netBeginMatch() {
   NET.phase = 'playing';
   NET.starting = false;
   NET.inputSeq = 0;
+  NET.lastFireSeqSent = 0;
+  NET.inputSentTimes.clear();
+  NET.weaponSeq = 0;
+  NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
   NET.lastSnapshotTick = -1;
+  NET.lastSnapshotTime = -1;
+  NET.snapshotInterval = NET_SNAPSHOT_INTERVAL;
+  NET.hostClock = 0;
+  NET.hostClockAt = 0;
+  NET.oneWay = 0;
+  NET.renderTime = 0;
   NET.lastInputSentAt = 0;
   NET.eventSeq = 0;
   NET.eventQueue = [];
@@ -5766,6 +6012,7 @@ function netBeginMatch() {
   IN.firing = false;
   IN._heldSemi = false;
   IN.fireSeq = 0;
+  IN.fireRenderTime = 0;
   IN.reloadSeq = 0;
   startMatch();
   if (netIsHost()) {
@@ -5820,8 +6067,13 @@ function netActorId(a) {
   return a && (a.netId || ('actor-' + a.id));
 }
 
+function netOnLocalWeaponChanged() {
+  if (netIsGuest()) NET.weaponSeq++;
+}
+
 function netRound(v) { return Math.round(v * 1000) / 1000; }
 function netPackActor(a) {
+  const remote = a.controller === 'remote';
   return {
     id: a.id,
     netId: netActorId(a),
@@ -5847,6 +6099,8 @@ function netPackActor(a) {
     ammo: a.ammo,
     reserve: a.reserve,
     reloadT: netRound(a.reloadT),
+    ack: remote ? a.inputAck : 0,
+    weaponSeq: remote ? a.weaponAck : 0,
     kills: a.kills,
     deaths: a.deaths,
     streak: a.streak,
@@ -5866,11 +6120,95 @@ function netFlushEvents() {
   });
 }
 
+function netRecordActorHistory() {
+  const cutoff = G.time - NETP.MAX_REWIND_SECONDS;
+  for (const a of G.actors) {
+    if (!a.netHistory) a.netHistory = [];
+    const history = a.netHistory;
+    const sample = {
+      time: G.time,
+      pos: [a.pos.x, a.pos.y, a.pos.z],
+      alive: !!a.alive
+    };
+    if (history.length && history[history.length - 1].time === G.time)
+      history[history.length - 1] = sample;
+    else
+      history.push(sample);
+
+    /* Keep the sample just before the cutoff so interpolation at the edge is
+       still defined, then impose a hard cap in case simulation cadence changes. */
+    while (history.length > 2 && history[1].time < cutoff) history.shift();
+    if (history.length > NET_MAX_HISTORY_SAMPLES)
+      history.splice(0, history.length - NET_MAX_HISTORY_SAMPLES);
+  }
+}
+
+function netHistoryStateAt(history, time) {
+  if (!history || !history.length || time < history[0].time) return null;
+  const selected = NETP.selectTimedSamples(history, time, 0);
+  if (!selected) return null;
+  const from = history[selected.from], to = history[selected.to];
+  const alpha = selected.alpha;
+  return {
+    pos: [
+      lerp(from.pos[0], to.pos[0], alpha),
+      lerp(from.pos[1], to.pos[1], alpha),
+      lerp(from.pos[2], to.pos[2], alpha)
+    ],
+    alive: alpha >= 1 ? to.alive : from.alive
+  };
+}
+
+function netBeginLagCompensation(shooter, renderTime) {
+  if (!netIsHost() || shooter.controller !== 'remote' ||
+      !shooter.netHistory || !shooter.netHistory.length) return null;
+  /* The client chooses this timestamp, so malformed, future, and older-than-
+     history requests get no rewind at all; a guest never gets an arbitrary
+     trip through match history. */
+  const rewindTime = NETP.clampRewindTime(
+    renderTime, G.time, shooter.netHistory[0].time, NETP.MAX_REWIND_SECONDS);
+  if (rewindTime === null) return null;
+
+  const saved = [];
+  const restore = () => {
+    for (const state of saved) {
+      state.actor.pos.x = state.x;
+      state.actor.pos.y = state.y;
+      state.actor.pos.z = state.z;
+      state.actor.alive = state.alive;
+    }
+    saved.length = 0;
+  };
+
+  try {
+    for (const actor of G.actors) {
+      if (actor === shooter) continue;
+      const past = netHistoryStateAt(actor.netHistory, rewindTime);
+      if (!past) continue;
+      saved.push({
+        actor: actor,
+        x: actor.pos.x, y: actor.pos.y, z: actor.pos.z,
+        alive: actor.alive
+      });
+      actor.pos.x = past.pos[0];
+      actor.pos.y = past.pos[1];
+      actor.pos.z = past.pos[2];
+      actor.alive = past.alive;
+    }
+  } catch (error) {
+    restore();
+    throw error;
+  }
+
+  return saved.length ? restore : null;
+}
+
 function netAfterSimulation(dt, force) {
+  if (netIsHost() && NET.phase === 'playing') netRecordActorHistory();
   if (!netIsHost() || NET.phase !== 'playing' || !netSocketOpen()) return;
   NET.snapshotAcc += dt;
-  if (!force && NET.snapshotAcc < 0.05) return;
-  NET.snapshotAcc = force ? 0 : NET.snapshotAcc % 0.05;
+  if (!force && NET.snapshotAcc < NET_SNAPSHOT_INTERVAL) return;
+  NET.snapshotAcc = force ? 0 : NET.snapshotAcc % NET_SNAPSHOT_INTERVAL;
   netSend({
     t: 'snapshot',
     v: NETP.VERSION,
@@ -5884,28 +6222,72 @@ function netAfterSimulation(dt, force) {
   netFlushEvents();
 }
 
+function netGuestRenderTime(nowSeconds) {
+  if (!NET.hostClockAt) return 0;
+  const hostClock = NET.hostClock + Math.max(0, nowSeconds - NET.hostClockAt);
+  /* Two snapshots leave a bracketing pair at the normal 20 Hz send rate,
+     while adapting automatically if that cadence is changed later. */
+  return Math.max(0, hostClock - NET.snapshotInterval * NET_INTERP_SNAPSHOTS);
+}
+
+function netObserveInputAck(ack) {
+  if (!Number.isSafeInteger(ack) || ack <= NET.lastInputAck) return;
+  const sentAt = NET.inputSentTimes.get(ack);
+  if (Number.isFinite(sentAt)) {
+    const roundTrip = performance.now() / 1000 - sentAt;
+    if (roundTrip >= 0 && roundTrip <= 2) {
+      const sample = roundTrip * 0.5;
+      NET.oneWay = NET.oneWay > 0 ? lerp(NET.oneWay, sample, 0.2) : sample;
+    }
+  }
+  NET.lastInputAck = ack;
+  for (const seq of NET.inputSentTimes.keys()) {
+    if (seq <= ack) NET.inputSentTimes.delete(seq);
+  }
+}
+
+function netDisplayedRenderTime() {
+  return NET.renderTime;
+}
+
 function netFrame(now) {
   if (!netIsGuest() || NET.phase !== 'playing' || !G.player || !netSocketOpen()) return;
+  const nextRenderTime = netGuestRenderTime(now / 1000);
+  const displayedRenderTime = NET.renderTime || nextRenderTime;
+  NET.renderTime = nextRenderTime;
   if (now - NET.lastInputSentAt < 33) return;
   NET.lastInputSentAt = now;
   const active = G.started && !G.paused && !G.over && G.player.alive;
   const p = G.player;
-  netSend({
+  const edgePending = IN.fireSeq > NET.lastFireSeqSent;
+  const inputRenderTime = edgePending && Number.isFinite(IN.fireRenderTime)
+    ? IN.fireRenderTime
+    : displayedRenderTime;
+  const seq = ++NET.inputSeq;
+  const message = {
     t: 'input',
     v: NETP.VERSION,
     round: NET.round,
-    seq: ++NET.inputSeq,
+    seq: seq,
     fwd: active ? (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0) : 0,
     strafe: active ? (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0) : 0,
     jump: active && !!KEY.Space,
     sprint: active && (!!KEY.ShiftLeft || !!KEY.ShiftRight),
     fire: active && !!IN.firing,
     fireSeq: IN.fireSeq,
+    weaponSeq: NET.weaponSeq,
     reloadSeq: IN.reloadSeq,
     yaw: p.yaw,
     pitch: p.pitch,
+    renderTime: inputRenderTime,
     weapon: p.weapon
-  });
+  };
+  if (netSend(message)) {
+    NET.lastFireSeqSent = IN.fireSeq;
+    NET.inputSentTimes.set(seq, now / 1000);
+    if (NET.inputSentTimes.size > 64)
+      NET.inputSentTimes.delete(NET.inputSentTimes.keys().next().value);
+  }
 }
 
 function netFiniteIn(value, min, max) {
@@ -5943,6 +6325,8 @@ function netValidActorState(s) {
     netFiniteIn(s.shield, 0, 60) && !!WBY[s.weapon] &&
     netSafeCount(s.ammo) && netSafeCount(s.reserve) &&
     netFiniteIn(s.reloadT, 0, 60) &&
+    Number.isSafeInteger(s.ack) && s.ack >= 0 &&
+    Number.isSafeInteger(s.weaponSeq) && s.weaponSeq >= 0 &&
     netSafeCount(s.kills) && netSafeCount(s.deaths) &&
     netSafeCount(s.streak) && netSafeCount(s.bestStreak));
 }
@@ -5961,12 +6345,50 @@ function netCreateReplica(s) {
   a.pos.x = s.pos[0]; a.pos.y = s.pos[1]; a.pos.z = s.pos[2];
   a.vel.x = s.vel[0]; a.vel.y = s.vel[1]; a.vel.z = s.vel[2];
   a.yaw = s.yaw; a.aimYaw = s.aimYaw; a.aimPitch = s.aimPitch; a.bodyYaw = s.bodyYaw;
+  a.netSamples = [];
   attachCharacter(a);
   G.actors.push(a);
   return a;
 }
 
-function netApplyActorState(a, s, local) {
+function netPushReplicaSample(a, s, sampleTime) {
+  if (!Number.isFinite(sampleTime)) return;
+  if (!a.netSamples) a.netSamples = [];
+  const samples = a.netSamples;
+  const previous = samples[samples.length - 1];
+  const sample = {
+    time: sampleTime,
+    pos: s.pos.slice(),
+    vel: s.vel.slice(),
+    yaw: s.yaw,
+    pitch: s.pitch,
+    aimYaw: s.aimYaw,
+    aimPitch: s.aimPitch,
+    bodyYaw: s.bodyYaw
+  };
+
+  if (previous) {
+    const jump = Math.hypot(
+      sample.pos[0] - previous.pos[0],
+      sample.pos[1] - previous.pos[1],
+      sample.pos[2] - previous.pos[2]);
+    /* A teleport is not motion to smooth. Throw away the old timeline so it
+       cannot drag a respawn or rejoin across the map for several frames. */
+    if (jump > 6) {
+      samples.length = 0;
+      a.pos.x = sample.pos[0]; a.pos.y = sample.pos[1]; a.pos.z = sample.pos[2];
+    }
+  }
+
+  if (samples.length && samples[samples.length - 1].time === sampleTime)
+    samples[samples.length - 1] = sample;
+  else
+    samples.push(sample);
+  if (samples.length > NET_MAX_REPLICA_SAMPLES)
+    samples.splice(0, samples.length - NET_MAX_REPLICA_SAMPLES);
+}
+
+function netApplyActorState(a, s, local, sampleTime) {
   const wasAlive = a.alive;
   const oldHp = a.health;
   const oldWeapon = a.weapon;
@@ -5978,16 +6400,21 @@ function netApplyActorState(a, s, local) {
   a.shield = Math.max(0, s.shield || 0);
   a.onGround = !!s.onGround;
   a.aiming = !!s.aiming;
-  a.weapon = WBY[s.weapon] ? s.weapon : a.weapon;
-  a.ammo = Math.max(0, Math.floor(s.ammo || 0));
-  a.reserve = Math.max(0, Math.floor(s.reserve || 0));
-  a.reloadT = Math.max(0, s.reloadT || 0);
+  const applyWeaponState = !local ||
+    NETP.isWeaponStateAcknowledged(NET.weaponSeq, s.weaponSeq);
+  if (applyWeaponState) {
+    a.weapon = WBY[s.weapon] ? s.weapon : a.weapon;
+    a.ammo = Math.max(0, Math.floor(s.ammo || 0));
+    a.reserve = Math.max(0, Math.floor(s.reserve || 0));
+    a.reloadT = Math.max(0, s.reloadT || 0);
+  }
   a.kills = Math.max(0, Math.floor(s.kills || 0));
   a.deaths = Math.max(0, Math.floor(s.deaths || 0));
   a.streak = Math.max(0, Math.floor(s.streak || 0));
   a.bestStreak = Math.max(0, Math.floor(s.bestStreak || 0));
 
   if (local) {
+    netObserveInputAck(s.ack);
     if (Number.isInteger(s.id)) a.id = s.id;
     const dx = s.pos[0] - a.pos.x, dy = s.pos[1] - a.pos.y, dz = s.pos[2] - a.pos.z;
     const err = Math.hypot(dx, dy, dz);
@@ -6006,11 +6433,7 @@ function netApplyActorState(a, s, local) {
       setDamageDirsCleared();
     }
   } else {
-    a.netTarget = {
-      pos: s.pos.slice(), vel: s.vel.slice(),
-      yaw: s.yaw, pitch: s.pitch, aimYaw: s.aimYaw,
-      aimPitch: s.aimPitch, bodyYaw: s.bodyYaw
-    };
+    netPushReplicaSample(a, s, sampleTime);
     if (wasAlive && !a.alive) {
       a.deathT = 0; a.deathDir = rng() < 0.5 ? -1 : 1;
       if (a.plate) a.plate.sprite.visible = false;
@@ -6044,6 +6467,12 @@ function netApplySnapshot(msg) {
       (typeof msg.winner !== 'string' || !NET.actorManifest.has(msg.winner))) return;
 
   NET.lastSnapshotTick = msg.tick;
+  if (NET.lastSnapshotTime >= 0) {
+    const interval = msg.time - NET.lastSnapshotTime;
+    if (interval >= NET_SNAPSHOT_INTERVAL * 0.5 && interval <= NET_SNAPSHOT_INTERVAL * 4)
+      NET.snapshotInterval = lerp(NET.snapshotInterval, interval, 0.2);
+  }
+  NET.lastSnapshotTime = msg.time;
   G.time = lerp(G.time, msg.time, 0.16);
 
   for (const s of msg.actors) {
@@ -6055,8 +6484,10 @@ function netApplySnapshot(msg) {
       a = G.actors.find(x => x.netId === s.netId);
       if (!a) a = netCreateReplica(s);
     }
-    netApplyActorState(a, s, a === G.player);
+    netApplyActorState(a, s, a === G.player, msg.time);
   }
+  NET.hostClock = msg.time + NET.oneWay;
+  NET.hostClockAt = performance.now() / 1000;
   for (const a of G.actors.slice()) {
     if (!a.isPlayer && !seen.has(a.netId)) detachActor(a);
   }
@@ -6070,23 +6501,26 @@ function netApplySnapshot(msg) {
 }
 
 function netStepReplica(a, dt) {
-  const t = a.netTarget;
-  if (!t) return;
-  const dx = t.pos[0] - a.pos.x, dy = t.pos[1] - a.pos.y, dz = t.pos[2] - a.pos.z;
-  if (Math.hypot(dx, dy, dz) > 6) {
-    a.pos.x = t.pos[0]; a.pos.y = t.pos[1]; a.pos.z = t.pos[2];
-  } else {
-    a.pos.x = damp(a.pos.x, t.pos[0], 15, dt);
-    a.pos.y = damp(a.pos.y, t.pos[1], 15, dt);
-    a.pos.z = damp(a.pos.z, t.pos[2], 15, dt);
-  }
-  a.vel.x = damp(a.vel.x, t.vel[0], 12, dt);
-  a.vel.y = damp(a.vel.y, t.vel[1], 12, dt);
-  a.vel.z = damp(a.vel.z, t.vel[2], 12, dt);
-  a.yaw = approachAngle(a.yaw, t.yaw, dt * 14);
-  a.pitch = damp(a.pitch, t.pitch, 14, dt);
-  a.aimYaw = approachAngle(a.aimYaw, t.aimYaw, dt * 18);
-  a.aimPitch = damp(a.aimPitch, t.aimPitch, 18, dt);
+  const samples = a.netSamples;
+  const selected = NETP.selectTimedSamples(
+    samples, NET.renderTime, NET.snapshotInterval * NET_INTERP_SNAPSHOTS);
+  if (!selected) return;
+  const from = samples[selected.from], to = samples[selected.to];
+  const alpha = selected.alpha, extra = selected.extrapolation;
+  const targetPos = [
+    lerp(from.pos[0], to.pos[0], alpha) + to.vel[0] * extra,
+    lerp(from.pos[1], to.pos[1], alpha) + to.vel[1] * extra,
+    lerp(from.pos[2], to.pos[2], alpha) + to.vel[2] * extra
+  ];
+  a.pos.x = targetPos[0]; a.pos.y = targetPos[1]; a.pos.z = targetPos[2];
+  a.vel.x = lerp(from.vel[0], to.vel[0], alpha);
+  a.vel.y = lerp(from.vel[1], to.vel[1], alpha);
+  a.vel.z = lerp(from.vel[2], to.vel[2], alpha);
+  a.yaw = NETP.lerpAngle(from.yaw, to.yaw, alpha);
+  a.pitch = lerp(from.pitch, to.pitch, alpha);
+  a.aimYaw = NETP.lerpAngle(from.aimYaw, to.aimYaw, alpha);
+  a.aimPitch = lerp(from.aimPitch, to.aimPitch, alpha);
+  a.bodyYaw = NETP.lerpAngle(from.bodyYaw, to.bodyYaw, alpha);
 }
 
 function netSendEvent(kind, data) {
@@ -6205,6 +6639,9 @@ function netApplyEvent(e) {
   const target = e.target ? G.actors.find(a => a.netId === e.target) : null;
 
   if (e.kind === 'shot') {
+    /* The guest already drew this shot from the same fireSeq-seeded spread.
+       Replaying its authoritative event would duplicate an identical tracer;
+       damage feedback still arrives only through the host's damage event. */
     if (e.from === NET.id) return;
     if (from) { from.recoil = 1; from.aiming = true; }
     const w = WBY[e.weapon] || WBY.smg;
