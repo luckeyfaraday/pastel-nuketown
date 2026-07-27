@@ -886,16 +886,22 @@ function netFrame(now) {
     ? IN.fireRenderTime
     : displayedRenderTime;
   const seq = ++NET.inputSeq;
+  /* Read through the same function the local simulation uses. These two used
+     to read KEY/IN separately, so what the guest predicted and what it told
+     the host it did were two hand-maintained transcriptions of one intent --
+     and any drift between them showed up as the local player being corrected
+     for input it thought it had sent. */
+  const inp = readLocalInput(active);
   const message = {
     t: 'input',
     v: NETP.VERSION,
     round: NET.round,
     seq: seq,
-    fwd: active ? (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0) : 0,
-    strafe: active ? (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0) : 0,
-    jump: active && !!KEY.Space,
-    sprint: active && (!!KEY.ShiftLeft || !!KEY.ShiftRight),
-    fire: active && !!IN.firing,
+    fwd: inp.fwd,
+    strafe: inp.strafe,
+    jump: inp.jump,
+    sprint: inp.sprint,
+    fire: inp.fire,
     fireSeq: IN.fireSeq,
     weaponSeq: NET.weaponSeq,
     reloadSeq: IN.reloadSeq,

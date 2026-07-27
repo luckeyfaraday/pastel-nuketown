@@ -4978,11 +4978,52 @@ function endMatch(winner) {
    PLAYER INPUT
    ===================================================================== */
 const KEY = {};
+/* A second movement source, left at rest for keyboard play. Filled in by the
+   touch layer; merged into intent by readLocalInput rather than by teaching
+   every consumer about it. */
+const TOUCH = { fwd: 0, strafe: 0, jump: false, sprint: false };
 const IN = {
   lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
   fireSeq: 0, fireRenderTime: 0, reloadSeq: 0
 };
 let mouseSens = 0.0021;
+
+/* Firing is an edge, not a level: `fireSeq` is how the host names a shot and
+   how a guest matches the answer back to it. So pressing has to go through a
+   call that owns the increment, not a flag another input source can set behind
+   the game's back and skip the sequence. */
+function pressFire() {
+  if (!IN.firing) {
+    IN.fireSeq++;
+    if (typeof netDisplayedRenderTime === 'function')
+      IN.fireRenderTime = netDisplayedRenderTime();
+  }
+  IN.firing = true;
+}
+
+function releaseFire() { IN.firing = false; }
+
+/* The one place player intent is read. It used to be read straight off KEY/IN
+   at each use site, which meant the local simulation and the guest's input
+   packet each had their own copy of what "moving forward" means -- two copies
+   that had to be kept in agreement by hand.
+
+   The movement fields are floats, not -1/0/1, because a thumbstick can push
+   part way. A key cannot: it is either down or not, and down means full
+   deflection. So a held key wins and touch fills in underneath it, which keeps
+   a hybrid laptop from cancelling one source against the other. */
+function readLocalInput(accepts) {
+  if (!accepts) return { fwd: 0, strafe: 0, jump: false, sprint: false, fire: false };
+  const kFwd = (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0);
+  const kStrafe = (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0);
+  return {
+    fwd: kFwd || TOUCH.fwd,
+    strafe: kStrafe || TOUCH.strafe,
+    jump: !!KEY.Space || TOUCH.jump,
+    sprint: !!KEY.ShiftLeft || !!KEY.ShiftRight || TOUCH.sprint,
+    fire: !!IN.firing
+  };
+}
 
 function initInput() {
   addEventListener('keydown', e => {
@@ -5001,16 +5042,9 @@ function initInput() {
     if (e.code === 'Tab') setBoard(false);
   });
   addEventListener('mousedown', e => {
-    if (IN.locked && e.button === 0) {
-      if (!IN.firing) {
-        IN.fireSeq++;
-        if (typeof netDisplayedRenderTime === 'function')
-          IN.fireRenderTime = netDisplayedRenderTime();
-      }
-      IN.firing = true;
-    }
+    if (IN.locked && e.button === 0) pressFire();
   });
-  addEventListener('mouseup', e => { if (e.button === 0) IN.firing = false; });
+  addEventListener('mouseup', e => { if (e.button === 0) releaseFire(); });
   addEventListener('wheel', e => {
     if (!IN.locked) return;
     const order = ['smg', 'shotgun', 'rifle'];
@@ -5077,11 +5111,11 @@ function stepPlayer(a, dt) {
     if (a.respawnT <= 0) { respawnActor(a); hideDeadScreen(); }
     return;
   }
-  const acceptsInput = !G.paused;
-  const fwd = acceptsInput ? (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0) : 0;
-  const str = acceptsInput ? (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0) : 0;
-  const firing = acceptsInput && IN.firing;
-  IN.sprinting = acceptsInput && (!!KEY.ShiftLeft || !!KEY.ShiftRight);
+  const inp = readLocalInput(!G.paused);
+  const fwd = inp.fwd;
+  const str = inp.strafe;
+  const firing = inp.fire;
+  IN.sprinting = inp.sprint;
 
   const w = WBY[a.weapon];
   let speed = CFG.playerSpeed * w.speed;
@@ -5095,12 +5129,18 @@ function stepPlayer(a, dt) {
   let mx = sy * fwd - cy * str;
   let mz = cy * fwd + sy * str;
   const ml = Math.hypot(mx, mz);
-  if (ml > 1e-4) { mx = mx / ml * speed; mz = mz / ml * speed; }
+  /* Clamp rather than normalize. Normalizing scaled every non-zero push up to
+     full speed, which is identical for keys -- straight is 1, diagonal is
+     sqrt(2), both meant "go" -- but flattened a half-pushed thumbstick into a
+     sprint. Dividing only when the vector is longer than unit leaves keyboard
+     movement bit-for-bit unchanged and lets an analog push mean what it says. */
+  if (ml > 1) { mx /= ml; mz /= ml; }
+  mx *= speed; mz *= speed;
 
   const acc = a.onGround ? CFG.accelGround : CFG.accelAir;
   a.vel.x = damp(a.vel.x, mx, acc, dt);
   a.vel.z = damp(a.vel.z, mz, acc, dt);
-  if (acceptsInput && KEY.Space && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
+  if (inp.jump && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
 
   const res = moveActor(a.pos, a.vel, dt, {});
   const wasGround = a.onGround;
@@ -5191,7 +5231,12 @@ function stepRemotePlayer(a, dt) {
   let mx = sy * fwd - cy * str;
   let mz = cy * fwd + sy * str;
   const ml = Math.hypot(mx, mz);
-  if (ml > 1e-4) { mx = mx / ml * speed; mz = mz / ml * speed; }
+  /* Same clamp as stepPlayer, and it has to be the same: the wire already
+     carries fwd/strafe as floats in [-1,1], so if the authority normalized
+     while the sender clamped, a guest pushing its stick half way would predict
+     a walk and be corrected into a run on every snapshot. */
+  if (ml > 1) { mx /= ml; mz /= ml; }
+  mx *= speed; mz *= speed;
   const acc = a.onGround ? CFG.accelGround : CFG.accelAir;
   a.vel.x = damp(a.vel.x, mx, acc, dt);
   a.vel.z = damp(a.vel.z, mz, acc, dt);
@@ -6264,16 +6309,22 @@ function netFrame(now) {
     ? IN.fireRenderTime
     : displayedRenderTime;
   const seq = ++NET.inputSeq;
+  /* Read through the same function the local simulation uses. These two used
+     to read KEY/IN separately, so what the guest predicted and what it told
+     the host it did were two hand-maintained transcriptions of one intent --
+     and any drift between them showed up as the local player being corrected
+     for input it thought it had sent. */
+  const inp = readLocalInput(active);
   const message = {
     t: 'input',
     v: NETP.VERSION,
     round: NET.round,
     seq: seq,
-    fwd: active ? (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0) : 0,
-    strafe: active ? (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0) : 0,
-    jump: active && !!KEY.Space,
-    sprint: active && (!!KEY.ShiftLeft || !!KEY.ShiftRight),
-    fire: active && !!IN.firing,
+    fwd: inp.fwd,
+    strafe: inp.strafe,
+    jump: inp.jump,
+    sprint: inp.sprint,
+    fire: inp.fire,
     fireSeq: IN.fireSeq,
     weaponSeq: NET.weaponSeq,
     reloadSeq: IN.reloadSeq,
