@@ -439,8 +439,8 @@ test('quick play offers the busiest room with a seat free', () => {
     { code: 'AAAAAA', host: 'A', players: 3, max: 4, inProgress: true },
     { code: 'BBBBBB', host: 'B', players: 4, max: 4, inProgress: true },
     { code: 'CCCCCC', host: 'C', players: 1, max: 4, inProgress: false }
-  ]), ['CCCCCC'],
-  'a running room is scenery: listed for its population, never dialled');
+  ]), ['AAAAAA', 'CCCCCC'],
+  'a running room with a seat is the better answer to PLAY, not the worse one');
 
   assert.deepEqual(pick([]), [], 'nothing to join is answered by hosting');
   assert.deepEqual(pick(null), [], 'an unreachable browser is not a crash');
@@ -524,4 +524,80 @@ test('a guest never runs the host\'s countdown', () => {
   assert.strictEqual(client.get('NET.countdownTimer'), 0,
     'only the authority may start a round, so only it counts down');
   assert.strictEqual(client.get('SIM_STARTS'), 0);
+});
+
+/* ---------------------------------------------------------------------
+   Drop-in
+
+   The claim worth testing is that seating a player mid-round needs no new
+   message: the host adds an actor and bumps the manifest, and the existing
+   snapshot stream carries it to everyone. These run against the real client
+   in a real host/guest match rather than a stub of one.
+   --------------------------------------------------------------------- */
+
+const LATE_ID = 'late-0001';
+const ARRIVE = `
+  NET.members.push({ id: '${LATE_ID}', name: 'Latecomer', role: 'guest' });
+  netAdmitArrivals();
+`;
+
+test('a player who drops in takes a bot\'s slot rather than a spare one', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5, combatants: 9 });
+  match.run(1.0);
+
+  const bots = () => match.host.get("G.actors.filter(a => a.controller === 'bot').length");
+  const before = {
+    actors: match.host.get('G.actors.length'),
+    bots: bots(),
+    manifest: match.host.get('NET.manifestVersion')
+  };
+  assert.ok(before.bots > 0, 'the fixture needs a bot to give up');
+
+  match.host.run(ARRIVE);
+
+  assert.strictEqual(match.host.get('G.actors.length'), before.actors,
+    'a match people are already playing does not quietly get busier');
+  assert.strictEqual(bots(), before.bots - 1, 'a bot paid for the seat');
+  assert.ok(match.host.get('NET.manifestVersion') > before.manifest,
+    'and the roster change is versioned, which is what guests key off');
+
+  const seated = (field) =>
+    match.host.get(`G.actors.find(a => a.netId === '${LATE_ID}').${field}`);
+  assert.strictEqual(seated('controller'), 'remote');
+  assert.strictEqual(seated('isHuman'), true);
+  assert.ok(seated('shield') > 0,
+    'walking into a live firefight with no shield is the one way this is worse than waiting');
+  assert.strictEqual(seated('alive'), true);
+});
+
+test('the arrival reaches a guest on the ordinary snapshot stream', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5, combatants: 9 });
+  match.run(1.0);
+
+  assert.strictEqual(match.guest.get(`!!G.actors.find(a => a.netId === '${LATE_ID}')`), false);
+  match.host.run(ARRIVE);
+  match.run(0.6);
+
+  assert.strictEqual(match.guest.get(`!!G.actors.find(a => a.netId === '${LATE_ID}')`), true,
+    'no new message type was needed — the manifest bump carried it');
+  /* Everything a guest does not drive is a 'replica'; `isHuman` is what says
+     there is a person behind it, and it is what the killfeed reads. */
+  assert.strictEqual(
+    match.guest.get(`G.actors.find(a => a.netId === '${LATE_ID}').isHuman`), true,
+    'and the guest knows it is a person, not a bot');
+  assert.strictEqual(match.link.stats.staleEpoch, 0);
+});
+
+test('a decided round seats nobody', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5, combatants: 9 });
+  match.run(1.0);
+
+  /* Scores are final and the host is about to put the room back in the
+     lobby; dropping someone into that is a worse welcome than the wait. */
+  match.host.run('G.over = true;');
+  const before = match.host.get('G.actors.length');
+  match.host.run(ARRIVE);
+
+  assert.strictEqual(match.host.get('G.actors.length'), before);
+  assert.strictEqual(match.host.get(`!!G.actors.find(a => a.netId === '${LATE_ID}')`), false);
 });

@@ -49,10 +49,10 @@ const NET_AUTOSTART_SECONDS = 15;
 /* Nobody else is arriving into a full room, so stop pretending to wait. */
 const NET_AUTOSTART_FULL_SECONDS = 5;
 /* Errors that mean "not that room" rather than "not this game". A quick-play
-   candidate can fill, close or start in the moment between the poll that
-   offered it and the socket that dials it; that is the next candidate's turn,
-   not a failure to report. */
-const NET_QUICK_RETRY_ERRORS = ['room-not-found', 'room-full', 'match-started'];
+   candidate can fill, close, or start changing host in the moment between the
+   poll that offered it and the socket that dials it; that is the next
+   candidate's turn, not a failure to report. */
+const NET_QUICK_RETRY_ERRORS = ['room-not-found', 'room-full', 'room-migrating'];
 const NET = {
   mode: 'solo',                 // solo | connecting | host | guest
   phase: 'idle',                // idle | connecting | lobby | playing
@@ -258,25 +258,19 @@ function netRenderRooms(rooms, message) {
     seats.textContent = room.players + '/' + room.max;
     li.appendChild(seats);
 
-    /* A running room is shown for the population it proves, not the seat it
-       cannot offer, so it gets a label where the others get a button. */
-    if (room.inProgress) {
-      const tag = document.createElement('b');
-      tag.className = 'tag';
-      tag.textContent = 'IN PROGRESS';
-      li.appendChild(tag);
-    } else {
-      const join = document.createElement('button');
-      join.className = 'mini-btn';
-      join.type = 'button';
-      join.textContent = 'JOIN';
-      join.addEventListener('click', () => {
-        const input = document.getElementById('roomCode');
-        if (input) input.value = room.code;
-        netConnect('join', room.code);
-      });
-      li.appendChild(join);
-    }
+    /* A running room is joinable too — the wording is the only difference,
+       and it is worth keeping: DROP IN promises a firefight already in
+       progress rather than a lobby to wait in. */
+    const join = document.createElement('button');
+    join.className = 'mini-btn';
+    join.type = 'button';
+    join.textContent = room.inProgress ? 'DROP IN' : 'JOIN';
+    join.addEventListener('click', () => {
+      const input = document.getElementById('roomCode');
+      if (input) input.value = room.code;
+      netConnect('join', room.code);
+    });
+    li.appendChild(join);
 
     list.appendChild(li);
   }
@@ -361,9 +355,13 @@ function netQuickPlay() {
     });
 }
 
+/* Every room with a seat, running or not — a match already underway is the
+   better answer to PLAY, not the worse one, because it is the one that starts
+   shooting immediately. Fullest first regardless, so a thin population lands
+   in one match rather than scattered across four rooms of one. */
 function netQuickCandidates(rooms) {
   return (rooms || [])
-    .filter(room => !room.inProgress && room.players < room.max)
+    .filter(room => room.players < room.max)
     .sort((a, b) => b.players - a.players)
     .map(room => room.code);
 }
@@ -788,6 +786,14 @@ function netHandleWire(raw) {
        needs to hear, and the plan is finished either way. */
     const opened = !!NET.quick && !!NET.quick.creating;
     NET.quick = null;
+    /* A room that is already running has no lobby worth showing — the round
+       this player joined is happening now. Walk in. The world arrives on the
+       first snapshot that contains us, which is the host's answer to the
+       roster change the relay is broadcasting right about now. */
+    if (msg.started === true && netIsGuest()) {
+      netBeginMatch();
+      return;
+    }
     netShowLobby();
     netStatus(netIsHost()
       ? (opened
@@ -842,7 +848,12 @@ function netHandleWire(raw) {
       netPruneDepartedPlayers();
       netMaybeAuthorityReady();
     }
-    if (netIsHost() && NET.phase === 'playing') netPruneDepartedPlayers();
+    if (netIsHost() && NET.phase === 'playing') {
+      /* Prune first: someone leaving in the same breath as someone arriving
+         frees the seat the arrival is about to want. */
+      netPruneDepartedPlayers();
+      netAdmitArrivals();
+    }
     return;
   }
   if (msg.t === 'start') {
@@ -1370,6 +1381,72 @@ function netEndSession(message) {
   }
   netResetTransport();
   netShowMainMenu(message);
+}
+
+/* ---- drop-in ------------------------------------------------------------
+   Seating a player in a round already underway is netPruneDepartedPlayers run
+   backwards, and it works for the same reason: the actor manifest is versioned
+   and guests already accept it changing without a round boundary. The arrival
+   needs no world handed to it — the next snapshot is the world, and until the
+   host has seated them their client ignores snapshots it is not in. */
+
+/* Which bot pays for the seat. A dead one is already off the map, so taking
+   it costs nobody a target mid-duel; failing that the one doing least, which
+   is the closest thing to "nobody will miss this". Kept to CFG.combatants so
+   a match that people are already playing does not quietly get busier. */
+function netEvictBotForArrival() {
+  if (G.actors.length < CFG.combatants) return;
+  const bots = G.actors.filter(a => a.controller === 'bot');
+  if (!bots.length) return;
+
+  const dead = bots.filter(b => !b.alive);
+  const pool = dead.length ? dead : bots;
+  let spare = pool[0];
+  for (const b of pool) if (b.kills < spare.kills) spare = b;
+  detachActor(spare);
+}
+
+function netSeatArrival(member, index) {
+  netEvictBotForArrival();
+  const info = netMemberWithColor(member, index);
+  const actor = makeActor({
+    name: info.name,
+    netId: info.id,
+    isHuman: true,
+    controller: 'remote',
+    colors: info.colors,
+    weapon: 'smg'
+  });
+  attachCharacter(actor);
+  G.actors.push(actor);
+  /* Straight onto a spawn point with the usual shield rather than wherever
+     the actor happened to be constructed. Walking into a live firefight with
+     no cover is the one way drop-in could be worse than waiting. */
+  respawnActor(actor, true);
+  showHint(actor.name + ' DROPPED IN');
+}
+
+function netAdmitArrivals() {
+  /* Not while the round is decided: the over card is up, scores are final,
+     and the host is about to put the room back in the lobby anyway. */
+  if (!netIsHost() || NET.phase !== 'playing' || G.over) return;
+
+  const seated = new Set(G.actors.map(a => a.netId));
+  let added = 0;
+  for (let i = 0; i < NET.members.length; i++) {
+    const member = NET.members[i];
+    if (member.id === NET.id || seated.has(member.id)) continue;
+    netSeatArrival(member, i);
+    added++;
+  }
+  if (!added) return;
+
+  NET.manifestVersion++;
+  NET.checkpointDirty = true;
+  refreshBoard();
+  /* Publish now rather than on the next 20Hz beat: until a snapshot carries
+     them, the arrival is staring at an empty map. */
+  netAfterSimulation(0, true);
 }
 
 function netPruneDepartedPlayers() {
@@ -1973,6 +2050,9 @@ function netApplySnapshot(msg) {
     seen.add(state.netId);
   }
   if (!seen.has(NET.id)) return;
+  /* Read before the manifest is adopted below: on the first snapshot every
+     actor is new, and only afterwards does a new one mean somebody arrived. */
+  const firstSnapshot = !NET.actorManifest;
   if (NET.actorManifest) {
     if (msg.manifestVersion < NET.manifestVersion) return;
     if (msg.manifestVersion === NET.manifestVersion) {
@@ -2018,7 +2098,12 @@ function netApplySnapshot(msg) {
       a.netId = NET.id;
     } else {
       a = G.actors.find(x => x.netId === s.netId);
-      if (!a) a = netCreateReplica(s);
+      if (!a) {
+        a = netCreateReplica(s);
+        /* A body appearing out of nowhere reads as a bug unless it is named.
+           Bots only ever arrive with the first snapshot, so this is a person. */
+        if (!firstSnapshot && s.human) showHint(a.name + ' DROPPED IN');
+      }
     }
     netApplyActorState(a, s, a === G.player, msg.time);
   }

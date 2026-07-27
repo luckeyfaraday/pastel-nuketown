@@ -8,6 +8,7 @@ Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs enti
 
 - **Browser-based FPS** — runs in any modern browser (Chrome, Firefox, Edge, Safari) with no install
 - **One-button matchmaking** — PLAY joins the busiest room with a seat free, opens one when there is nothing to join, and starts the match on a countdown instead of waiting for someone to click
+- **Drop-in join** — walk into a round already in progress; you spawn shielded and a bot gives up its slot, so nobody waits out somebody else's match
 - **Plays on a phone** — on-screen thumbstick, look-drag and button cluster appear automatically on touch devices, with an analog stick the netcode carries as-is
 - **Multiplayer rooms** — host-authoritative relay server supports up to 4 players per room with client-side interpolation and prediction
 - **AI bots** — three difficulty levels (easy, normal, hard) with navigation mesh pathfinding, burst-fire combat, and retreat behaviour
@@ -52,7 +53,9 @@ Once a room holds two people the host's lobby counts down and starts on its own 
 
 ![The room lobby showing a two-player roster, a COPY INVITE button, and a countdown reading "Starting in 11…" next to a HOLD button](shots/lobby.png)
 
-The browser lists rooms in a live match as well as open ones, greyed out and marked `IN PROGRESS`. They cannot be joined until the round ends — that comes with drop-in, which needs a protocol change — but hiding them is what used to make a busy relay read "no open rooms" at exactly the times the game had the most people in it.
+The browser lists rooms in a live match as well as open ones, marked `IN PROGRESS` with a dashed edge and a **DROP IN** button. You can walk straight into a round already underway: the host seats you on a spawn point with the usual shield, a bot gives up its slot so the match does not quietly get busier, and the world arrives on the next snapshot. No waiting out somebody else's 25 kills.
+
+Drop-in needs no message of its own. The actor manifest is versioned and guests already accept it changing mid-round — the same machinery host migration uses — so seating an arrival is `netPruneDepartedPlayers` run backwards. The relay hands over no world state; it tells the arrival the round is live and tells the host the roster changed, and the host's next snapshot does the rest.
 
 An invite link (`?room=CODE`, produced by **COPY INVITE**) joins that room on arrival rather than typing the code into the box for you. **ROOM OPTIONS** holds the manual controls: join by code, create a room, and whether that room is listed publicly.
 
@@ -165,7 +168,7 @@ Up to 4 players per room. The server enforces this limit in the protocol (`MAX_P
 Press PLAY. It picks the busiest room with a seat free and opens one for you if there is nothing to join, then the match starts on a countdown. You never have to know what a room code is unless a friend sends you one.
 
 **Can I join a match that has already started?**
-Not yet. Running rooms appear in the browser marked `IN PROGRESS` so you can see the game is alive, but joining one mid-round needs a protocol change and is tracked separately.
+Yes. Running rooms appear in the browser marked `IN PROGRESS` with a DROP IN button, and PLAY will pick one. You spawn with a shield and a bot gives up its slot, so the match keeps its nine combatants.
 
 **Can I play without other people?**
 Yes. Solo mode fills the arena with 8 AI bots across three difficulty levels. Bots use A* pathfinding on a navigation mesh and exhibit patrol, hunt, engage, reposition, and retreat behaviours.

@@ -14,7 +14,12 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = 5;
+  /* 6: a room admits players mid-round. The handshake gained `started`, but
+     the reason this is a bump rather than an additive field is the host: a
+     version 5 host receiving a mid-round roster change seats nobody, and the
+     arrival becomes a ghost sending input no authority ever applies. Refusing
+     the handshake is the only honest outcome, so old and new must not mix. */
+  var VERSION = 6;
   var MAX_PLAYERS = 4;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;

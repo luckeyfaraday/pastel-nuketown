@@ -148,7 +148,7 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 5);
+  assert.equal(Protocol.VERSION, 6);
   assert.equal(Protocol.MAX_PLAYERS, 4);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
@@ -396,7 +396,7 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
   assert.equal(sanitized.error, null);
   assert.deepEqual(sanitized.value, {
     t: 'input',
-    v: 5,
+    v: 6,
     authorityEpoch: 1,
     round: 1,
     seq: 9,
@@ -554,6 +554,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     role: 'host',
     authorityEpoch: 1,
     round: 0,
+    started: false,
     members: [{ id: 'peer-1', name: 'Host', role: 'host' }]
   });
   await host.next('members');
@@ -758,7 +759,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   assert.equal(restarted.round, 4);
 });
 
-test('started rooms reject late joins, host migration reopens them, and capacity is four', async (t) => {
+test('started rooms admit late joins, host migration survives them, and capacity is four', async (t) => {
   let nextId = 0;
   const { port } = await startRelay(t, {
     idFactory: () => `id-${++nextId}`,
@@ -786,31 +787,43 @@ test('started rooms reject late joins, host migration reopens them, and capacity
   assert.equal(hostStart.round, 1);
   assert.equal(firstStart.round, 1);
 
+  /* Drop-in. The relay hands over no world state: it tells the arrival the
+     round is live and tells the host the roster changed, and the host's next
+     snapshot is what actually seats them. */
   const late = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await late.opened;
   late.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Late' });
-  assert.equal((await late.next('error')).code, 'match-started');
+  const lateRoom = await late.next('room');
+  assert.equal(lateRoom.started, true,
+    'a peer walking into a live round is told so rather than sat in a lobby');
+  assert.equal(lateRoom.round, 1, 'and inherits the round it walked into');
+  assert.equal(lateRoom.authorityEpoch, 1);
+  await late.next('members');
+  const seated = await host.next('members');
+  assert.deepEqual(seated.members.map((member) => member.name), ['Host', 'One', 'Late'],
+    'the host hears about the arrival on the ordinary roster broadcast');
+  await first.next('members');
 
   host.ws.close();
   const promoted = await first.next('host-changed');
+  await late.next('host-changed');
   assert.equal(promoted.host, 'id-2');
   assert.equal(promoted.authorityEpoch, 2);
   assert.equal(promoted.round, 2);
   assert.deepEqual(promoted.members, [
-    { id: 'id-2', name: 'One', role: 'host' }
-  ]);
-
-  late.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Two' });
-  await late.next('room');
-  await late.next('members');
-  await first.next('members');
+    { id: 'id-2', name: 'One', role: 'host' },
+    { id: 'id-3', name: 'Late', role: 'guest' }
+  ], 'a player who dropped in is a member like any other when the host goes');
 
   const third = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await third.opened;
   third.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Three' });
-  await third.next('room');
+  const thirdRoom = await third.next('room');
+  assert.equal(thirdRoom.started, false,
+    'the restart migration put the room back between rounds');
   await third.next('members');
   await first.next('members');
+  await late.next('members');
 
   const fourth = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await fourth.opened;
@@ -818,11 +831,14 @@ test('started rooms reject late joins, host migration reopens them, and capacity
   await fourth.next('room');
   await fourth.next('members');
   await first.next('members');
+  await late.next('members');
+  await third.next('members');
 
   const overflow = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await overflow.opened;
   overflow.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Five' });
-  assert.equal((await overflow.next('error')).code, 'room-full');
+  assert.equal((await overflow.next('error')).code, 'room-full',
+    'drop-in does not raise the ceiling');
 
   first.ws.close();
   const [secondPromotion, observedByThird, observedByFourth] = await Promise.all([
