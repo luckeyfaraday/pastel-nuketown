@@ -2,7 +2,7 @@
 
 Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs entirely in the browser. Built with Three.js and vanilla JavaScript, it features a pastel-styled Nuketown-inspired arena with host-authoritative multiplayer over WebSockets. Play solo against AI bots or create a room for up to 4 players. No downloads, no plugins, no accounts — open the page and play.
 
-![Pastel Nuketown title screen showing the pastel-coloured arena map with two houses, a bus, and a truck](shots/title.png)
+![Pastel Nuketown title screen: a PLAY button over the pastel arena, with a room browser listing two joinable rooms and one marked IN PROGRESS](shots/title.png)
 
 ## Features
 
@@ -49,6 +49,8 @@ The WebSocket relay accepts any origin by default. Players on your local network
 **PLAY** is the whole flow for anyone who does not want to think about rooms. It reads the room browser, joins the room with the most players and a seat still free, and opens a room of its own only when there is nothing to join. Fullest-first on purpose: a thin population belongs in one match rather than scattered across four rooms of one.
 
 Once a room holds two people the host's lobby counts down and starts on its own — 15 seconds, or 5 once the room is full. A host saving a seat for a friend presses **HOLD** to stop the clock; **START MATCH** is still there for the impatient. Nobody is left staring at a roster waiting for a person who wandered off.
+
+![The room lobby showing a two-player roster, a COPY INVITE button, and a countdown reading "Starting in 11…" next to a HOLD button](shots/lobby.png)
 
 The browser lists rooms in a live match as well as open ones, greyed out and marked `IN PROGRESS`. They cannot be joined until the round ends — that comes with drop-in, which needs a protocol change — but hiding them is what used to make a busy relay read "no open rooms" at exactly the times the game had the most people in it.
 
