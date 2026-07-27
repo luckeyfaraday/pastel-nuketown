@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a new feature or gameplay change.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! We are selective about scope — the game is a small FFA arena shooter, and staying small is a feature. Make your case for why this belongs.
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Gameplay rationale
+      description: |
+        Why is this fun? What moment does it create? Describe the player experience,
+        not the implementation. "Add a jetpack" is a solution; "vertical flanking
+        feels impossible right now" is the problem.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: What does this touch?
+      description: Your best guess is fine.
+      options:
+        - Client only (visuals, UI, effects)
+        - Client + game logic (weapons, movement, bots)
+        - Server / relay
+        - Wire protocol (net-protocol.js)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Is there a simpler way to get the same feeling? What did you reject and why?
+
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Scope check
+      description: |
+        The following are out of scope without prior maintainer discussion.
+        Check this box to confirm your idea does not require any of them,
+        or that you have already discussed it with a maintainer.
+      options:
+        - label: This does not add team modes, new weapons, persistence/accounts, or a database — or I have discussed it with a maintainer first.
+          required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: References, mockups, clips from other games that show the feeling you want.

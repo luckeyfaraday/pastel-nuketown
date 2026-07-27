@@ -1,0 +1,84 @@
+name: Bug report
+description: Something is broken. Tell us what happened and how to reproduce it.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Fill in as much detail as you can so we can reproduce it.
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      description: e.g. Chrome 137 / Ubuntu 24.04, Firefox 139 / Windows 11
+      placeholder: Chrome 137 / macOS 15
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Where did this happen?
+      options:
+        - Solo (bots only)
+        - Multiplayer — as host
+        - Multiplayer — as client
+        - Both / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Start from the title screen. Be specific about inputs and timing.
+      placeholder: |
+        1. Start a solo match
+        2. Pick up the LOLLIPOP (press 3)
+        3. Sprint into the bus at the west end
+        4. Jump and fire at the rooftop
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console output
+      description: Open DevTools (F12) > Console. Paste any errors or warnings verbatim.
+      render: shell
+
+  - type: textarea
+    id: netcode
+    attributes:
+      label: Multiplayer context (if applicable)
+      description: |
+        Room size, number of players, approximate latency, whether it reproduces with bots.
+        Leave blank if this is a solo-only bug.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, clips, how often it reproduces, workarounds you found.
