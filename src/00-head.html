@@ -339,8 +339,16 @@ body.touch #vitals{left:calc(14px + env(safe-area-inset-left));top:calc(66px + e
 body.touch #vitals .lbl{font-size:9px}
 body.touch #hpwrap{margin-top:4px;height:16px;border-width:2.5px}
 body.touch #hpnum{font-size:12px}
-body.touch #ammo{right:auto;left:50%;transform:translateX(-50%);min-width:0;padding:5px 18px 7px;
-  text-align:center;bottom:calc(66px + env(safe-area-inset-bottom))}
+/* Ammo joins vitality in a left column rather than sitting bottom-centre.
+   Centred, it covered the ground directly under the crosshair -- the part of
+   the screen you are looking at while you shoot. Bottom-left would be worse
+   than centre, not better: the movement stick is a floating base that spawns
+   wherever the left thumb lands, so anything low on that side ends up under
+   a hand. Stacked beneath vitality it is clear of both the sightline and the
+   thumb. */
+body.touch #ammo{right:auto;left:calc(14px + env(safe-area-inset-left));transform:none;
+  min-width:0;padding:5px 16px 7px;text-align:left;bottom:auto;
+  top:calc(124px + env(safe-area-inset-top))}
 body.touch #wname{font-size:12px}
 body.touch #acount{font-size:29px}
 body.touch #acount small{font-size:14px}
