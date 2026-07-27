@@ -46,6 +46,26 @@ function validInput(overrides) {
   }, overrides);
 }
 
+function validCheckpoint(actorIds, overrides) {
+  return Object.assign({
+    t: 'checkpoint',
+    v: Protocol.VERSION,
+    authorityEpoch: 1,
+    round: 1,
+    tick: 60,
+    time: 1,
+    manifestVersion: 1,
+    actors: actorIds.map((netId, index) => ({
+      netId,
+      controller: index === 0 ? 'local' : 'remote',
+      human: true,
+      skill: 'normal',
+      ammoBy: { smg: [17, 120] }
+    })),
+    events: []
+  }, overrides);
+}
+
 function websocketClient(url) {
   const ws = new WebSocket(url);
   const queued = [];
@@ -128,7 +148,7 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 4);
+  assert.equal(Protocol.VERSION, 5);
   assert.equal(Protocol.MAX_PLAYERS, 4);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
@@ -376,7 +396,7 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
   assert.equal(sanitized.error, null);
   assert.deepEqual(sanitized.value, {
     t: 'input',
-    v: 4,
+    v: 5,
     authorityEpoch: 1,
     round: 1,
     seq: 9,
@@ -555,6 +575,9 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     authorityEpoch: 1,
     round: 1,
     tick: 1,
+    time: 1 / 60,
+    eventSeq: 0,
+    manifestVersion: 1,
     actors: []
   });
   assert.equal((await guest.next('error')).code, 'host-only');
@@ -608,12 +631,12 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
 
   host.send({
     t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
-    round: 0, tick: 6, actors: []
+    round: 0, tick: 6, time: 0.1, eventSeq: 0, manifestVersion: 1, actors: []
   });
   await expectNoMessage(guest, 'snapshot');
   host.send({
     t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
-    round: 1, tick: 7, actors: []
+    round: 1, tick: 7, time: 0.12, eventSeq: 0, manifestVersion: 1, actors: []
   });
   assert.deepEqual(await guest.next('snapshot'), {
     t: 'snapshot',
@@ -621,6 +644,9 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     authorityEpoch: 1,
     round: 1,
     tick: 7,
+    time: 0.12,
+    eventSeq: 0,
+    manifestVersion: 1,
     actors: []
   });
 
@@ -648,7 +674,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   await expectNoMessage(guest, 'lobby');
   host.send({
     t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
-    round: 1, tick: 8, actors: []
+    round: 1, tick: 8, time: 0.14, eventSeq: 0, manifestVersion: 1, actors: []
   });
   assert.equal((await guest.next('snapshot')).tick, 8);
 
@@ -671,7 +697,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   await expectNoMessage(guest, 'lobby');
   host.send({
     t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
-    round: 1, tick: 9, actors: []
+    round: 1, tick: 9, time: 0.16, eventSeq: 0, manifestVersion: 1, actors: []
   });
   await expectNoMessage(guest, 'snapshot');
   guest.send(validInput({ round: 1, seq: 6 }));
@@ -694,12 +720,12 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
 
   host.send({
     t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
-    round: 1, tick: 10, actors: []
+    round: 1, tick: 10, time: 0.18, eventSeq: 0, manifestVersion: 1, actors: []
   });
   await expectNoMessage(guest, 'snapshot');
   host.send({
     t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
-    round: 2, tick: 1, actors: []
+    round: 2, tick: 1, time: 0.02, eventSeq: 0, manifestVersion: 1, actors: []
   });
   assert.equal((await guest.next('snapshot')).round, 2);
 
@@ -810,6 +836,230 @@ test('started rooms reject late joins, host migration reopens them, and capacity
   assert.equal(secondPromotion.round, 3);
   assert.deepEqual(observedByThird, secondPromotion);
   assert.deepEqual(observedByFourth, secondPromotion);
+});
+
+test('relay promotes from independently fresh snapshot and checkpoint caches without restarting', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `migrate-${++nextId}`,
+    roomRandom: () => 0,
+    promotionTimeoutMs: 500
+  });
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const promoted = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const observer = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, promoted.opened, observer.opened]);
+
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+  promoted.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Next' });
+  await promoted.next('room'); await promoted.next('members'); await host.next('members');
+  observer.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Observer' });
+  await observer.next('room'); await observer.next('members');
+  await promoted.next('members'); await host.next('members');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), promoted.next('start'), observer.next('start')]);
+  const ids = ['migrate-1', 'migrate-2', 'migrate-3'];
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1, round: 1,
+    tick: 100, time: 5 / 3, eventSeq: 12, manifestVersion: 1,
+    actors: ids.map(netId => ({ netId })), over: false, winner: null
+  });
+  await Promise.all([promoted.next('snapshot'), observer.next('snapshot')]);
+
+  /* A weapon switch can force slow state after the last pose snapshot. The
+     newer checkpoint remains useful and must not disqualify migration. */
+  host.send(validCheckpoint(ids, {
+    tick: 101,
+    time: 1.7,
+    actors: [
+      { netId: ids[0], controller: 'local', human: true, skill: 'normal',
+        ammoBy: { smg: [7, 40], rifle: [9, 22] } },
+      { netId: ids[1], controller: 'remote', human: true, skill: 'normal',
+        ammoBy: { smg: [5, 31] } },
+      { netId: ids[2], controller: 'remote', human: true, skill: 'normal',
+        ammoBy: { smg: [11, 77] } }
+    ]
+  }));
+  await Promise.all([promoted.next('checkpoint'), observer.next('checkpoint')]);
+
+  host.ws.close();
+  const [changeForHost, changeForObserver] = await Promise.all([
+    promoted.next('host-changed'),
+    observer.next('host-changed')
+  ]);
+  assert.equal(changeForHost.seamless, true);
+  assert.equal(changeForHost.round, 1, 'the live round must not advance');
+  assert.equal(changeForHost.authorityEpoch, 2);
+  assert.equal(changeForHost.snapshot.tick, 100);
+  assert.equal(changeForHost.checkpoint.tick, 101,
+    'newer slow state should be combined with the latest pose');
+  assert.deepEqual(changeForObserver, changeForHost);
+
+  observer.send({
+    t: 'authority-state', v: Protocol.VERSION,
+    authorityEpoch: 2, round: 1,
+    inputSeq: 50, fireSeq: 4, reloadSeq: 2, weaponSeq: 1, weapon: 'rifle'
+  });
+  const peerState = await promoted.next('authority-state');
+  assert.equal(peerState.from, 'migrate-3');
+  assert.equal(peerState.inputSeq, 50);
+
+  promoted.send({
+    t: 'authority-ready', v: Protocol.VERSION,
+    authorityEpoch: 2, round: 1, tick: 100
+  });
+  const [readyHost, readyObserver] = await Promise.all([
+    promoted.next('authority-ready'),
+    observer.next('authority-ready')
+  ]);
+  assert.deepEqual(readyHost, readyObserver);
+  assert.equal(readyHost.round, 1);
+
+  observer.send(validInput({
+    authorityEpoch: 2, round: 1, seq: 51,
+    fireSeq: 4, reloadSeq: 2, weaponSeq: 1, weapon: 'rifle'
+  }));
+  assert.equal((await promoted.next('input')).seq, 51,
+    'input must resume against the new authority only after ready');
+});
+
+test('relay rejects poisoned checkpoint fields and remains usable', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `poison-${++nextId}`,
+    roomRandom: () => 0
+  });
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room'); await host.next('members');
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest' });
+  await guest.next('room'); await guest.next('members'); await host.next('members');
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), guest.next('start')]);
+
+  const ids = ['poison-1', 'poison-2'];
+  const badKey = validCheckpoint(ids);
+  badKey.actors[0].ammoBy.__proto_pollution = [1, 2];
+  host.send(badKey);
+  assert.equal((await host.next('error')).code, 'invalid-checkpoint');
+  await expectNoMessage(guest, 'checkpoint');
+
+  const badType = validCheckpoint(ids);
+  badType.actors[1].ammoBy.smg = ['17', 120];
+  host.send(badType);
+  assert.equal((await host.next('error')).code, 'invalid-checkpoint');
+
+  const tooManyKeys = validCheckpoint(ids);
+  tooManyKeys.actors[0].ammoBy = {
+    smg: [1, 2], rifle: [1, 2], shotgun: [1, 2], extra: [1, 2]
+  };
+  host.send(tooManyKeys);
+  assert.equal((await host.next('error')).code, 'invalid-checkpoint');
+
+  let nested = { leaf: true };
+  for (let i = 0; i < 12; i++) nested = { child: nested };
+  host.send(Object.assign(validCheckpoint(ids), { nested }));
+  assert.equal((await host.next('error')).code, 'invalid-shape');
+
+  const usable = validCheckpoint(ids);
+  host.send(usable);
+  assert.deepEqual(await guest.next('checkpoint'), usable,
+    'rejected poison must not kill an otherwise usable connection');
+});
+
+test('failed promotion tries the next guest before falling back to a restarted round', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `retry-${++nextId}`,
+    roomRandom: () => 0,
+    promotionTimeoutMs: 40
+  });
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const first = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const second = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, first.opened, second.opened]);
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room'); await host.next('members');
+  first.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'First' });
+  await first.next('room'); await first.next('members'); await host.next('members');
+  second.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Second' });
+  await second.next('room'); await second.next('members');
+  await first.next('members'); await host.next('members');
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), first.next('start'), second.next('start')]);
+  const ids = ['retry-1', 'retry-2', 'retry-3'];
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1, round: 1,
+    tick: 30, time: 0.5, eventSeq: 0, manifestVersion: 1,
+    actors: ids.map(netId => ({ netId })), over: false, winner: null
+  });
+  await Promise.all([first.next('snapshot'), second.next('snapshot')]);
+  host.send(validCheckpoint(ids, { tick: 30, time: 0.5 }));
+  await Promise.all([first.next('checkpoint'), second.next('checkpoint')]);
+  host.ws.close();
+
+  const firstAttempt = await first.next('host-changed');
+  await second.next(message =>
+    message.t === 'host-changed' && message.authorityEpoch === 2);
+  assert.equal(firstAttempt.host, 'retry-2');
+  assert.equal(firstAttempt.seamless, true);
+
+  const [retryForFirst, retryForSecond] = await Promise.all([
+    first.next(message => message.t === 'host-changed' && message.authorityEpoch === 3),
+    second.next(message => message.t === 'host-changed' && message.authorityEpoch === 3)
+  ]);
+  assert.equal(retryForFirst.host, 'retry-3');
+  assert.equal(retryForSecond.seamless, true);
+  assert.equal(retryForSecond.round, 1);
+
+  const [fallbackFirst, fallbackSecond] = await Promise.all([
+    first.next(message => message.t === 'host-changed' && message.authorityEpoch === 4),
+    second.next(message => message.t === 'host-changed' && message.authorityEpoch === 4)
+  ]);
+  assert.equal(fallbackFirst.seamless, undefined);
+  assert.equal(fallbackFirst.round, 2,
+    'exhausting healthy candidates must use the existing restart barrier');
+  assert.deepEqual(fallbackSecond, fallbackFirst);
+});
+
+test('snapshot stall election is derived from observed cadence', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `stall-${++nextId}`,
+    roomRandom: () => 0,
+    snapshotStallCount: 3,
+    promotionTimeoutMs: 500
+  });
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room'); await host.next('members');
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest' });
+  await guest.next('room'); await guest.next('members'); await host.next('members');
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), guest.next('start')]);
+  const ids = ['stall-1', 'stall-2'];
+  host.send(validCheckpoint(ids, { tick: 1, time: 1 / 60 }));
+  await guest.next('checkpoint');
+  const pose = (tick, time) => ({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1, round: 1,
+    tick, time, eventSeq: 0, manifestVersion: 1,
+    actors: ids.map(netId => ({ netId })), over: false, winner: null
+  });
+  host.send(pose(1, 1 / 60)); await guest.next('snapshot');
+  await new Promise(resolve => setTimeout(resolve, 25));
+  host.send(pose(2, 2 / 60)); await guest.next('snapshot');
+
+  const change = await guest.next('host-changed');
+  assert.equal(change.seamless, true);
+  assert.equal(change.host, 'stall-2');
+  assert.equal(change.round, 1);
 });
 
 test('hostile nesting and non-string fields are rejected without killing usable connections', async (t) => {

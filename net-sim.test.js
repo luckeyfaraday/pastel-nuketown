@@ -23,6 +23,10 @@ test('the harness runs the real client and converges host and guest', () => {
   assert.strictEqual(match.guest.get('NET.mode'), 'guest');
   assert.strictEqual(match.guest.get('G.actors.length'), 2,
     'guest should have itself plus a replica of the host');
+  assert.ok(match.guest.get('NET.lastRawSnapshot && NET.lastRawSnapshot.tick > 0'),
+    'guest must retain the validated raw migration image');
+  assert.ok(match.guest.get('NET.lastCheckpoint && NET.lastCheckpoint.tick > 0'),
+    'guest must retain the validated low-rate checkpoint');
 
   /* Nothing was dropped for a stale epoch: the harness models the relay's
      check, so this failing means an outbound message lost authorityEpoch. */
@@ -55,6 +59,123 @@ test('a stale authority epoch gets the guest\'s input dropped', () => {
     match.host.get("G.actors.find(a => a.controller === 'remote').inputAck"),
     ackBefore,
     'host must not advance the ack for input sent under a dead epoch');
+});
+
+test('a promoted guest resumes the same authoritative round from the cached checkpoint', () => {
+  const match = SIM.createMatch({
+    latencyMs: LIVE_LATENCY_MS, seed: 9, combatants: 4
+  });
+  match.run(1.0);
+
+  match.host.run(`
+    {
+      const a = G.actors.find(actor => actor.netId === ${JSON.stringify(SIM.GUEST_ID)});
+      a.pos.x = 2.345; a.pos.y = 0; a.pos.z = -4.567;
+      a.vel.x = 0.75; a.vel.y = 0; a.vel.z = -0.25;
+      a.kills = 11; a.deaths = 4; a.streak = 3; a.bestStreak = 6;
+      a.weapon = 'smg'; a.ammo = 7; a.reserve = 41;
+      a._ammoBy = {
+        smg: { ammo: 7, reserve: 41 },
+        rifle: { ammo: 9, reserve: 22 }
+      };
+      NET.eventSeq = 17;
+      NET.checkpointDirty = true;
+      netAfterSimulation(0, true);
+    }
+  `);
+  const cached = match.link.latestSnapshot();
+  const cachedActor = cached.actors.find(actor => actor.netId === SIM.GUEST_ID);
+  assert.ok(cachedActor, 'the migration image should contain the promoted actor');
+  assert.strictEqual(match.link.latestCheckpoint().tick, cached.tick,
+    'the forced checkpoint should be available at the same boundary');
+
+  /* Deliberately put prediction somewhere visibly different. Hydration must
+     choose the last authority everybody observed, not this private display. */
+  match.guest.run('G.player.pos.x = 19; G.player.pos.z = 19;');
+  match.migrateHost();
+  for (let i = 0; i < 30 && match.guest.get('NET.phase') !== 'migrating'; i++)
+    match.tick();
+
+  assert.strictEqual(match.guest.get('NET.phase'), 'migrating');
+  assert.strictEqual(match.guest.get('G.tick'), cached.tick,
+    'hydration must restore the exact authoritative tick');
+  assert.strictEqual(match.guest.get('G.time'), cached.time,
+    'hydration must restore the exact authoritative time');
+  assert.strictEqual(match.guest.get('G.player.pos.x'), cachedActor.pos[0],
+    'the promoted player deliberately rewinds to the shared authority');
+  assert.strictEqual(match.guest.get('G.player.pos.z'), cachedActor.pos[2]);
+  assert.strictEqual(match.guest.get('G.player.kills'), 11);
+  assert.strictEqual(match.guest.get('G.player.deaths'), 4);
+  assert.strictEqual(match.guest.get('G.player.ammo'), 7);
+  assert.strictEqual(match.guest.get('G.player._ammoBy.rifle.ammo'), 9,
+    'slow per-weapon ammo must come from the low-rate checkpoint');
+  assert.strictEqual(match.guest.get('G.player._ammoBy.rifle.reserve'), 22);
+  assert.strictEqual(match.guest.get('G.fixedAcc'), 0,
+    'hydration must not carry a render-loop catch-up backlog');
+  assert.strictEqual(match.guest.get(`
+    (() => {
+      const actor = G.actors.find(a => a.netId === 'bot-2');
+      const expected = AI.createBrain({
+        id: actor.id, seed: 1000 + 1 * 77, skill: actor.skill
+      });
+      return actor.brain.phase === expected.phase &&
+        actor.brain.phase2 === expected.phase2 &&
+        actor.brain.strafeSign === expected.strafeSign;
+    })()
+  `), true, 'bot brain seed must come from stable bot-N, not shifted array position');
+
+  for (let i = 0; i < 30 &&
+       !(match.guest.get('NET.mode') === 'host' &&
+         match.guest.get('NET.phase') === 'playing'); i++) match.tick();
+
+  assert.strictEqual(match.guest.get('NET.mode'), 'host');
+  assert.strictEqual(match.guest.get('NET.phase'), 'playing');
+  const resumedTick = match.guest.get('G.tick');
+  match.run(0.25);
+  assert.ok(match.guest.get('G.tick') > resumedTick,
+    'the promoted authority should continue ticking rather than restart');
+  assert.strictEqual(match.guest.get('NET.round'), 1,
+    'seamless migration must preserve the round');
+  assert.strictEqual(match.guest.get('NET.authorityEpoch'), 2,
+    'the authority fence must still advance');
+  assert.strictEqual(match.guest.get('G.player.kills'), 11,
+    'scores must survive continued simulation');
+  assert.ok(match.guest.get('G.player.ammo') <= 7,
+    'ammo must continue from the restored magazine, never refill');
+});
+
+test('an event raced by normal flush and checkpoint replay is visible exactly once', () => {
+  const match = SIM.createMatch({ latencyMs: 5, seed: 4 });
+  match.run(0.3);
+  SIM.probeFeedback(match.guest);
+  const event = {
+    id: 44,
+    kind: 'damage',
+    target: SIM.HOST_ID,
+    from: SIM.GUEST_ID,
+    damage: 10,
+    head: false,
+    at: [0, 1, 0],
+    seq: null
+  };
+  match.guest.context.__wire = JSON.stringify({
+    t: 'event', v: SIM.NETP.VERSION,
+    authorityEpoch: 1, round: 1, events: [event]
+  });
+  match.guest.run('netHandleWire(__wire)');
+  assert.strictEqual(match.guest.get('__feedback.markers.length'), 1);
+
+  /* The same id can be replayed from the checkpoint under the new authority
+     epoch after its ordinary 30Hz flush won the race. */
+  match.guest.run('NET.authorityEpoch = 2;');
+  match.guest.context.__wire = JSON.stringify({
+    t: 'event', v: SIM.NETP.VERSION,
+    authorityEpoch: 2, round: 1, events: [event]
+  });
+  match.guest.run('netHandleWire(__wire)');
+  assert.strictEqual(match.guest.get('__feedback.markers.length'), 1,
+    'event id deduplication must span authority epochs');
+  assert.strictEqual(match.guest.get('NET.lastEventSeq'), 44);
 });
 
 test('a guest sees its own hit immediately instead of a round trip later', () => {
@@ -265,7 +386,9 @@ test('neither peer outruns the relay\'s message budget', () => {
      Measured: guest 60.0/s, host 27.0/s. */
   const BUDGET = 90;
   const seconds = 4;
-  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5 });
+  const match = SIM.createMatch({
+    latencyMs: LIVE_LATENCY_MS, seed: 5, combatants: 9
+  });
   match.run(1.0);
 
   const before = { guest: match.link.stats.fromGuest, host: match.link.stats.fromHost };
@@ -278,4 +401,11 @@ test('neither peer outruns the relay\'s message budget', () => {
 
   assert.ok(guestRate < BUDGET, `guest sends ${guestRate}/s against a ${BUDGET}/s budget`);
   assert.ok(hostRate < BUDGET, `host sends ${hostRate}/s against a ${BUDGET}/s budget`);
+  const migrationBytes = Buffer.byteLength(JSON.stringify({
+    snapshot: match.link.latestSnapshot(),
+    checkpoint: match.link.latestCheckpoint()
+  }));
+  assert.ok(migrationBytes < SIM.NETP.MAX_MESSAGE_BYTES,
+    `cached migration state is ${migrationBytes} bytes against a ` +
+    `${SIM.NETP.MAX_MESSAGE_BYTES}-byte message limit`);
 });

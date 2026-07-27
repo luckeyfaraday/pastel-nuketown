@@ -672,6 +672,8 @@ function switchRemoteWeapon(a, id) {
   a.ammo = clamp(saved.ammo, 0, w.mag);
   a.reserve = Math.max(0, saved.reserve);
   a.reloadT = 0;
+  if (typeof netOnAuthoritySlowStateChanged === 'function')
+    netOnAuthoritySlowStateChanged();
 }
 
 /* The host simulates remote humans from their latest sequenced input.

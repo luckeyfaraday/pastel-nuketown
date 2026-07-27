@@ -14,7 +14,7 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = 4;
+  var VERSION = 5;
   var MAX_PLAYERS = 4;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
@@ -121,9 +121,19 @@
     var priorRound = Number.isSafeInteger(previousRound) && previousRound >= 0
       ? previousRound
       : -1;
+    var seamless = message.seamless === true;
     if (!Number.isSafeInteger(message.round) || message.round < 0 ||
-        message.round <= priorRound) {
-      return result(false, null, 'round must increase');
+        (seamless ? message.round !== priorRound : message.round <= priorRound)) {
+      return result(false, null, seamless
+        ? 'seamless host change must preserve round'
+        : 'round must increase');
+    }
+    if (seamless &&
+        (!message.snapshot || typeof message.snapshot !== 'object' ||
+         Array.isArray(message.snapshot) ||
+         !message.checkpoint || typeof message.checkpoint !== 'object' ||
+         Array.isArray(message.checkpoint))) {
+      return result(false, null, 'seamless host change requires migration state');
     }
     if (typeof message.host !== 'string' || !message.host ||
         message.host.length > 80) {
@@ -162,13 +172,49 @@
       return result(false, null, 'host change roster is incomplete');
     }
 
-    return result(true, {
+    var change = {
       t: 'host-changed',
       v: VERSION,
       authorityEpoch: message.authorityEpoch,
       round: message.round,
       host: message.host,
       members: members
+    };
+    if (seamless) {
+      change.seamless = true;
+      change.snapshot = message.snapshot;
+      change.checkpoint = message.checkpoint;
+    }
+    return result(true, change, null);
+  }
+
+  function sanitizeAuthorityState(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message) ||
+        message.t !== 'authority-state' || message.v !== VERSION ||
+        !isAuthorityEpoch(message.authorityEpoch) ||
+        !Number.isSafeInteger(message.round) || message.round < 0) {
+      return result(false, null, 'authority state header is invalid');
+    }
+    var counters = ['inputSeq', 'fireSeq', 'reloadSeq', 'weaponSeq'];
+    for (var i = 0; i < counters.length; i++) {
+      if (!Number.isSafeInteger(message[counters[i]]) ||
+          message[counters[i]] < 0 || message[counters[i]] > 0x7fffffff) {
+        return result(false, null, counters[i] + ' is invalid');
+      }
+    }
+    if (ALLOWED_WEAPONS.indexOf(message.weapon) < 0) {
+      return result(false, null, 'weapon is invalid');
+    }
+    return result(true, {
+      t: 'authority-state',
+      v: VERSION,
+      authorityEpoch: message.authorityEpoch,
+      round: message.round,
+      inputSeq: message.inputSeq,
+      fireSeq: message.fireSeq,
+      reloadSeq: message.reloadSeq,
+      weaponSeq: message.weaponSeq,
+      weapon: message.weapon
     }, null);
   }
 
@@ -597,6 +643,7 @@
     cleanPlayerName: cleanPlayerName,
     isAuthorityEpoch: isAuthorityEpoch,
     sanitizeHostChanged: sanitizeHostChanged,
+    sanitizeAuthorityState: sanitizeAuthorityState,
     isPrivateHost: isPrivateHost,
     isWeaponStateAcknowledged: isWeaponStateAcknowledged,
     classifyFireIntent: classifyFireIntent,
