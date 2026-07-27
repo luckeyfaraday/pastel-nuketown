@@ -7,6 +7,7 @@ Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs enti
 ## Features
 
 - **Browser-based FPS** — runs in any modern browser (Chrome, Firefox, Edge, Safari) with no install
+- **Plays on a phone** — on-screen thumbstick, look-drag and button cluster appear automatically on touch devices, with an analog stick the netcode carries as-is
 - **Multiplayer rooms** — host-authoritative relay server supports up to 4 players per room with client-side interpolation and prediction
 - **AI bots** — three difficulty levels (easy, normal, hard) with navigation mesh pathfinding, burst-fire combat, and retreat behaviour
 - **Three weapons** — BUBBLEGUN (full-auto SMG), MARSHMALLOW (9-pellet shotgun), LOLLIPOP (semi-auto rifle with 2.2x headshot multiplier)
@@ -57,6 +58,24 @@ The WebSocket relay accepts any origin by default. Players on your local network
 | Tab (hold) | Scoreboard |
 | Esc | Release pointer / pause |
 
+### Touch controls
+
+On a touch device the on-screen controls appear on their own — no setting to find. Landscape is strongly preferred; portrait raises a dismissible nudge.
+
+| Input | Action |
+|---|---|
+| Drag on the left half | Move (analog thumbstick; the base spawns wherever your thumb lands) |
+| Push the stick fully forward | Sprint |
+| Drag on the right half | Look |
+| FIRE | Fire (hold for full-auto) |
+| ⤒ | Jump |
+| ⟳ | Reload |
+| 1 / 2 / 3 | Select BUBBLEGUN / MARSHMALLOW / LOLLIPOP |
+| ☰ | Toggle scoreboard |
+| ❚❚ | Pause |
+
+Append `?touch=1` to force the controls on, or `?touch=0` to force them off — useful for testing the layout on a desktop.
+
 ## Weapons
 
 | # | Name | Type | Mag | Damage | Notes |
@@ -81,6 +100,7 @@ src/
   60-fx.js          particles, tracers, muzzle flash
   70-game.js        match flow, player control, combat, bot wiring
   75-network.js     multiplayer client (WebSocket, interpolation, prediction)
+  78-touch.js       on-screen controls for touch devices
   80-ui.js          HUD, killfeed, scoreboard, screens
   90-main.js        boot, camera, render loop
 ```
@@ -123,6 +143,9 @@ Yes. Solo mode fills the arena with 8 AI bots across three difficulty levels. Bo
 
 **What browsers are supported?**
 Any modern evergreen browser: Chrome, Firefox, Edge, and Safari. The game uses Pointer Lock, WebGL (via Three.js), and WebSockets.
+
+**Can I play on a phone or tablet?**
+Yes. Touch devices get on-screen controls automatically: an analog thumbstick on the left, look-drag on the right, and a fire / jump / reload cluster with weapon chips. Pointer Lock is not used on touch — it would swallow the drag events the controls need — so pausing is a button rather than Esc. Landscape is recommended; portrait shows a dismissible nudge. The stick is analog end to end, including over the network: the wire protocol already carried movement as clamped floats, so a half-push travels as a half-push.
 
 **Is there a game engine or framework?**
 No. Pastel Nuketown is written in vanilla JavaScript with Three.js for rendering. There is no React, no Unity, no Godot, and no bundler. The build step is a shell script that concatenates source files.
