@@ -162,3 +162,42 @@ test('the guest renders other players in the past, but less than it used to', ()
   assert.ok(delayMs > 50 && delayMs < 70,
     `steady-link buffer should be near one interval, got ${delayMs}ms`);
 });
+
+test('the seam\'s move-normalize change is exact for keyboard input', () => {
+  /* 937e1ac replaced `if (ml > 1e-4) { normalize }` with `if (ml > 1) { clamp }`
+     in both stepPlayer and stepRemotePlayer, and argued the two are bit-for-bit
+     identical for keyboard play. Nothing could load src/70-game.js to check it,
+     so the claim shipped unverified. This checks it exhaustively.
+
+     The argument is that a key is either down or not, so every reachable
+     magnitude is 0, 1 or sqrt(2) -- and dividing by 1 is identity, which is the
+     only case where the two conditions disagree. That holds only if
+     readLocalInput really does emit nothing else, which is the part worth
+     testing rather than reasoning about. */
+  const instance = SIM.createInstance({ ms: 0 });
+  const KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
+
+  for (let mask = 0; mask < 16; mask++) {
+    instance.run('KEY.KeyW = KEY.KeyA = KEY.KeyS = KEY.KeyD = false;');
+    const held = KEYS.filter((_, bit) => mask & (1 << bit));
+    for (const key of held) instance.run(`KEY.${key} = true;`);
+
+    const input = instance.run('readLocalInput(true)');
+    const ml = Math.hypot(input.fwd, input.strafe);
+
+    const reachable = Math.abs(ml) < 1e-12 ||
+      Math.abs(ml - 1) < 1e-12 ||
+      Math.abs(ml - Math.SQRT2) < 1e-12;
+    assert.ok(reachable,
+      `keyboard should only ever produce 0, 1 or sqrt(2), got ${ml} for [${held}]`);
+
+    /* Both formulas, applied to the same vector. */
+    const oldWay = { x: input.strafe, z: input.fwd };
+    if (ml > 1e-4) { oldWay.x /= ml; oldWay.z /= ml; }
+    const newWay = { x: input.strafe, z: input.fwd };
+    if (ml > 1) { newWay.x /= ml; newWay.z /= ml; }
+
+    assert.strictEqual(newWay.x, oldWay.x, `strafe differs for [${held}]`);
+    assert.strictEqual(newWay.z, oldWay.z, `forward differs for [${held}]`);
+  }
+});
