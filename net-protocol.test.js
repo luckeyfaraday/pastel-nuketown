@@ -14,6 +14,16 @@ function closeEnough(actual, expected, epsilon = 1e-12) {
   );
 }
 
+function mulberry32(seed) {
+  return function () {
+    seed |= 0;
+    seed = seed + 0x6D2B79F5 | 0;
+    let value = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    value = value + Math.imul(value ^ value >>> 7, 61 | value) ^ value;
+    return ((value ^ value >>> 14) >>> 0) / 4294967296;
+  };
+}
+
 function validInput(overrides) {
   return Object.assign({
     t: 'input',
@@ -28,6 +38,7 @@ function validInput(overrides) {
     fireSeq: 0,
     yaw: 0.75,
     pitch: -0.2,
+    renderTime: 12.5,
     weapon: 'smg',
     weaponSeq: 0,
     reloadSeq: 0
@@ -116,7 +127,7 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 2);
+  assert.equal(Protocol.VERSION, 3);
   assert.equal(Protocol.MAX_PLAYERS, 4);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
@@ -231,6 +242,52 @@ test('classifies weapon reconciliation and retained fire intent', () => {
   assert.equal(Protocol.classifyFireIntent(false, false, 0.01, 0, 1), 'drop');
 });
 
+test('clamps client render time to a bounded host-history window', () => {
+  assert.equal(Protocol.MAX_REWIND_SECONDS, 0.3);
+  closeEnough(Protocol.clampRewindTime(9.82, 10, 9.7), 9.82);
+  closeEnough(
+    Protocol.clampRewindTime(9.72, 10, 9.78),
+    9.78,
+    1e-12
+  );
+  assert.equal(Protocol.clampRewindTime(10.001, 10, 9.7), null);
+  assert.equal(Protocol.clampRewindTime(9.699, 10, 9.6), null);
+  assert.equal(Protocol.clampRewindTime(NaN, 10, 9.7), null);
+});
+
+test('selects interpolation brackets and bounds starved-buffer extrapolation', () => {
+  const samples = [{ time: 1 }, { time: 1.05 }, { time: 1.1 }];
+  const bracket = Protocol.selectTimedSamples(samples, 1.075, 0.1);
+  assert.equal(bracket.from, 1);
+  assert.equal(bracket.to, 2);
+  closeEnough(bracket.alpha, 0.5);
+  assert.equal(bracket.extrapolation, 0);
+  assert.deepEqual(Protocol.selectTimedSamples(samples, 0.9, 0.1), {
+    from: 0,
+    to: 0,
+    alpha: 0,
+    extrapolation: 0
+  });
+  assert.deepEqual(Protocol.selectTimedSamples([{ time: 2 }], 2.15, 0.1), {
+    from: 0,
+    to: 0,
+    alpha: 0,
+    extrapolation: 0.1
+  });
+  assert.equal(Protocol.selectTimedSamples([], 1, 0.1), null);
+});
+
+test('derives repeatable, shooter-specific spread sequences from fireSeq', () => {
+  const spread = (shooter, fireSeq) => {
+    const random = mulberry32(Protocol.shotSpreadSeed(shooter, fireSeq));
+    return Array.from({ length: 6 }, () => random());
+  };
+
+  assert.deepEqual(spread('guest-2', 9), spread('guest-2', 9));
+  assert.notDeepEqual(spread('guest-2', 9), spread('guest-2', 10));
+  assert.notDeepEqual(spread('guest-2', 9), spread('guest-3', 9));
+});
+
 test('sanitizes valid input into a bounded, canonical payload', () => {
   const sanitized = Protocol.sanitizeInput(validInput({
     seq: 9,
@@ -241,6 +298,7 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
     fireSeq: 7,
     yaw: Math.PI * 3,
     pitch: 99,
+    renderTime: 42.125,
     weapon: 'rifle',
     weaponSeq: 3,
     reloadSeq: 5,
@@ -252,7 +310,7 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
   assert.equal(sanitized.error, null);
   assert.deepEqual(sanitized.value, {
     t: 'input',
-    v: 2,
+    v: 3,
     round: 1,
     seq: 9,
     fwd: 1,
@@ -263,6 +321,7 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
     fireSeq: 7,
     yaw: -Math.PI,
     pitch: Protocol.MAX_PITCH,
+    renderTime: 42.125,
     weapon: 'rifle',
     weaponSeq: 3,
     reloadSeq: 5
@@ -282,6 +341,10 @@ test('rejects stale sequences, malformed controls, and unknown weapons', () => {
     [validInput({ fwd: Infinity }), 'finite'],
     [validInput({ strafe: '1' }), 'finite'],
     [validInput({ yaw: NaN }), 'finite'],
+    [validInput({ renderTime: undefined }), 'renderTime'],
+    [validInput({ renderTime: NaN }), 'renderTime'],
+    [validInput({ renderTime: -0.01 }), 'renderTime'],
+    [validInput({ renderTime: 100000001 }), 'renderTime'],
     [validInput({ jump: 1 }), 'booleans'],
     [validInput({ sprint: null }), 'booleans'],
     [validInput({ fire: 'yes' }), 'booleans'],
@@ -453,6 +516,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   assert.equal(relayedInput.from, 'peer-2');
   assert.equal(relayedInput.fwd, 1);
   assert.equal(relayedInput.fireSeq, 2);
+  assert.equal(relayedInput.renderTime, 12.5);
   assert.equal(relayedInput.weaponSeq, 0);
   assert.equal(relayedInput.reloadSeq, 1);
 

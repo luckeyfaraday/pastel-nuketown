@@ -50,7 +50,8 @@ function makeActor(opts) {
     brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
     netInput: null, netTarget: null, lastInputSeq: -1, lastWeaponSeq: -1,
     inputAck: 0, weaponAck: 0,
-    lastFireSeq: 0, lastReloadSeq: 0, pendingFireUntil: 0
+    lastFireSeq: 0, lastReloadSeq: 0, pendingFireUntil: 0,
+    pendingFireSeq: 0, pendingRenderTime: 0
   };
   const w = WBY[a.weapon];
   a.ammo = w.mag; a.reserve = w.reserve;
@@ -249,7 +250,7 @@ function finishReload(a) {
   if (a.isPlayer) SFX.reloadDone(); else SFX.reloadDone(a.pos.x, a.pos.y + 1.2, a.pos.z);
 }
 
-function fireWeapon(a) {
+function fireWeapon(a, fireSeq, renderTime) {
   const w = WBY[a.weapon];
   const visualOnly = a.isPlayer && typeof netIsGuest === 'function' && netIsGuest();
   if (a.fireCd > 0 || a.reloadT > 0 || !a.alive) return false;
@@ -267,6 +268,10 @@ function fireWeapon(a) {
   const ex = a.pos.x, ey = actorEye(a), ez = a.pos.z;
   const moving = Math.hypot(a.vel.x, a.vel.z) > 1.6;
   const spread = moving ? w.spreadMove : w.spread;
+  const spreadRng = Number.isSafeInteger(fireSeq) && fireSeq >= 0
+    ? mulberry32(NETP.shotSpreadSeed(a.netId || a.id, fireSeq))
+    : rng;
+  const spreadRand = (lo, hi) => lo + (hi - lo) * spreadRng();
 
   // muzzle origin for tracers: bots use their gun, the player uses the viewmodel
   let mx = ex, my = ey, mz = ez;
@@ -276,18 +281,31 @@ function fireWeapon(a) {
     mx = p.x; my = p.y; mz = p.z;
   }
 
-  const shotLines = [];
-  for (let p = 0; p < w.pellets; p++) {
-    const yaw = a.aimYaw + rand(-spread, spread) * (p ? 1.6 : 0.35);
-    const pit = a.aimPitch + rand(-spread, spread) * (p ? 1.6 : 0.35);
-    const cp = Math.cos(pit);
-    const dx = Math.sin(yaw) * cp, dy = Math.sin(pit), dz = Math.cos(yaw) * cp;
-    const hit = hitscan(ex, ey, ez, dx, dy, dz, w.range, G.actors, a.id);
-    const endX = hit ? hit.px : ex + dx * w.range;
-    const endY = hit ? hit.py : ey + dy * w.range;
-    const endZ = hit ? hit.pz : ez + dz * w.range;
-    shotLines.push([mx, my, mz, endX, endY, endZ]);
+  const shotLines = [], shotHits = [];
+  const restoreActors = !visualOnly && a.controller === 'remote' &&
+    typeof netBeginLagCompensation === 'function'
+    ? netBeginLagCompensation(a, renderTime)
+    : null;
+  try {
+    for (let p = 0; p < w.pellets; p++) {
+      const yaw = a.aimYaw + spreadRand(-spread, spread) * (p ? 1.6 : 0.35);
+      const pit = a.aimPitch + spreadRand(-spread, spread) * (p ? 1.6 : 0.35);
+      const cp = Math.cos(pit);
+      const dx = Math.sin(yaw) * cp, dy = Math.sin(pit), dz = Math.cos(yaw) * cp;
+      const hit = hitscan(ex, ey, ez, dx, dy, dz, w.range, G.actors, a.id);
+      const endX = hit ? hit.px : ex + dx * w.range;
+      const endY = hit ? hit.py : ey + dy * w.range;
+      const endZ = hit ? hit.pz : ez + dz * w.range;
+      shotHits.push(hit);
+      shotLines.push([mx, my, mz, endX, endY, endZ]);
+    }
+  } finally {
+    if (restoreActors) restoreActors();
+  }
 
+  for (let p = 0; p < shotLines.length; p++) {
+    const hit = shotHits[p];
+    const endX = shotLines[p][3], endY = shotLines[p][4], endZ = shotLines[p][5];
     if (p === 0 || w.pellets <= 3 || p % 3 === 0)
       fxTracer(mx, my, mz, endX, endY, endZ, C(a.isPlayer ? (w.tracer || 0xfff0c0) : a.colors.trim));
 
@@ -408,7 +426,7 @@ function endMatch(winner) {
 const KEY = {};
 const IN = {
   lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
-  fireSeq: 0, reloadSeq: 0
+  fireSeq: 0, fireRenderTime: 0, reloadSeq: 0
 };
 let mouseSens = 0.0021;
 
@@ -430,7 +448,11 @@ function initInput() {
   });
   addEventListener('mousedown', e => {
     if (IN.locked && e.button === 0) {
-      if (!IN.firing) IN.fireSeq++;
+      if (!IN.firing) {
+        IN.fireSeq++;
+        if (typeof netDisplayedRenderTime === 'function')
+          IN.fireRenderTime = netDisplayedRenderTime();
+      }
       IN.firing = true;
     }
   });
@@ -544,8 +566,8 @@ function stepPlayer(a, dt) {
 
   if (firing && !sprinting) {
     const w2 = WBY[a.weapon];
-    if (w2.auto) fireWeapon(a);
-    else if (!IN._heldSemi) { if (fireWeapon(a)) IN._heldSemi = true; }
+    if (w2.auto) fireWeapon(a, IN.fireSeq);
+    else if (!IN._heldSemi) { if (fireWeapon(a, IN.fireSeq)) IN._heldSemi = true; }
   }
   if (!firing) IN._heldSemi = false;
   syncPlayerAmmoStore();
@@ -571,7 +593,7 @@ function stepRemotePlayer(a, dt) {
     fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
     fireSeq: a.lastFireSeq, reloadSeq: a.lastReloadSeq,
     yaw: a.yaw, pitch: a.pitch, weapon: a.weapon,
-    seq: a.inputAck, weaponSeq: a.weaponAck
+    seq: a.inputAck, weaponSeq: a.weaponAck, renderTime: G.time
   };
   if (fresh) {
     a.inputAck = it.seq;
@@ -585,6 +607,8 @@ function stepRemotePlayer(a, dt) {
   if (!a.alive) {
     if (fireEdge) a.lastFireSeq = it.fireSeq;
     a.pendingFireUntil = 0;
+    a.pendingFireSeq = 0;
+    a.pendingRenderTime = 0;
     a.respawnT -= dt;
     if (a.respawnT <= 0) {
       respawnActor(a);
@@ -638,11 +662,15 @@ function stepRemotePlayer(a, dt) {
       a.alive, sprinting, a.fireCd, a.reloadT, a.ammo);
     if (decision === 'retain') {
       a.pendingFireUntil = G.time + NETP.FIRE_INTENT_TTL;
+      a.pendingFireSeq = it.fireSeq;
+      a.pendingRenderTime = it.renderTime;
     } else {
       a.pendingFireUntil = 0;
+      a.pendingFireSeq = 0;
+      a.pendingRenderTime = 0;
       /* Empty-magazine taps still start the normal automatic reload, but the
          tap itself is not kept waiting for that reload to finish. */
-      if (!sprinting) fireWeapon(a);
+      if (!sprinting) fireWeapon(a, it.fireSeq, it.renderTime);
     }
   }
 
@@ -651,12 +679,18 @@ function stepRemotePlayer(a, dt) {
       a.alive, sprinting, a.fireCd, a.reloadT, a.ammo);
     if (G.time > a.pendingFireUntil || decision === 'drop') {
       a.pendingFireUntil = 0;
+      a.pendingFireSeq = 0;
+      a.pendingRenderTime = 0;
     } else if (decision === 'fire') {
       a.pendingFireUntil = 0;
-      fireWeapon(a);
+      const pendingSeq = a.pendingFireSeq;
+      const pendingTime = a.pendingRenderTime;
+      a.pendingFireSeq = 0;
+      a.pendingRenderTime = 0;
+      fireWeapon(a, pendingSeq, pendingTime);
     }
   }
-  if (!sprinting && w.auto && it.fire) fireWeapon(a);
+  if (!sprinting && w.auto && it.fire) fireWeapon(a, it.fireSeq, it.renderTime);
 
   if (!a._ammoBy) a._ammoBy = {};
   a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };

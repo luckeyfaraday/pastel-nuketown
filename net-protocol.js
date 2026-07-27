@@ -14,7 +14,7 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = 2;
+  var VERSION = 3;
   var MAX_PLAYERS = 4;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
@@ -24,6 +24,7 @@
   var ALLOWED_WEAPONS = Object.freeze(['smg', 'shotgun', 'rifle']);
   var MAX_PITCH = 1.45;
   var FIRE_INTENT_TTL = 0.2;
+  var MAX_REWIND_SECONDS = 0.3;
 
   function result(ok, value, error) {
     return {
@@ -121,6 +122,73 @@
     return 'fire';
   }
 
+  function clampRewindTime(renderTime, hostTime, historyStart, maxAge) {
+    var limit = isFiniteNumber(maxAge) && maxAge > 0
+      ? maxAge
+      : MAX_REWIND_SECONDS;
+    if (!isFiniteNumber(renderTime) || !isFiniteNumber(hostTime) ||
+        !isFiniteNumber(historyStart) || renderTime > hostTime ||
+        renderTime < hostTime - limit) return null;
+
+    return clamp(renderTime, Math.max(historyStart, hostTime - limit), hostTime);
+  }
+
+  function selectTimedSamples(samples, renderTime, maxExtrapolation) {
+    if (!Array.isArray(samples) || !samples.length || !isFiniteNumber(renderTime)) {
+      return null;
+    }
+
+    var first = samples[0];
+    if (!first || !isFiniteNumber(first.time)) return null;
+    if (renderTime <= first.time) {
+      return { from: 0, to: 0, alpha: 0, extrapolation: 0 };
+    }
+
+    for (var i = 1; i < samples.length; i++) {
+      var before = samples[i - 1];
+      var after = samples[i];
+      if (!before || !after ||
+          !isFiniteNumber(before.time) || !isFiniteNumber(after.time) ||
+          after.time < before.time) return null;
+      if (renderTime <= after.time) {
+        var span = after.time - before.time;
+        return {
+          from: i - 1,
+          to: i,
+          alpha: span > 0 ? clamp((renderTime - before.time) / span, 0, 1) : 1,
+          extrapolation: 0
+        };
+      }
+    }
+
+    var last = samples[samples.length - 1];
+    var bound = isFiniteNumber(maxExtrapolation) && maxExtrapolation > 0
+      ? maxExtrapolation
+      : 0;
+    return {
+      from: samples.length - 1,
+      to: samples.length - 1,
+      alpha: 0,
+      extrapolation: clamp(renderTime - last.time, 0, bound)
+    };
+  }
+
+  function shotSpreadSeed(shooter, fireSeq) {
+    if ((typeof shooter !== 'string' && typeof shooter !== 'number') ||
+        !Number.isSafeInteger(fireSeq) || fireSeq < 0) return 0;
+
+    var text = String(shooter);
+    var hash = 2166136261;
+    for (var i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    hash ^= fireSeq >>> 0;
+    hash = Math.imul(hash, 16777619);
+    hash ^= Math.floor(fireSeq / 4294967296) >>> 0;
+    return hash >>> 0;
+  }
+
   function createRoomCode(randomFn) {
     var random = typeof randomFn === 'function' ? randomFn : Math.random;
     var code = '';
@@ -197,6 +265,10 @@
     if (!isFiniteNumber(message.yaw) || !isFiniteNumber(message.pitch)) {
       return result(false, null, 'look angles must be finite numbers');
     }
+    if (!isFiniteNumber(message.renderTime) ||
+        message.renderTime < 0 || message.renderTime > 100000000) {
+      return result(false, null, 'renderTime must be a plausible host timestamp');
+    }
     if (typeof message.jump !== 'boolean' ||
         typeof message.sprint !== 'boolean' ||
         typeof message.fire !== 'boolean') {
@@ -228,6 +300,7 @@
       fireSeq: message.fireSeq,
       yaw: wrapAngle(message.yaw),
       pitch: clamp(message.pitch, -MAX_PITCH, MAX_PITCH),
+      renderTime: message.renderTime,
       weapon: message.weapon,
       weaponSeq: message.weaponSeq,
       reloadSeq: message.reloadSeq
@@ -331,11 +404,15 @@
     ALLOWED_WEAPONS: ALLOWED_WEAPONS,
     MAX_PITCH: MAX_PITCH,
     FIRE_INTENT_TTL: FIRE_INTENT_TTL,
+    MAX_REWIND_SECONDS: MAX_REWIND_SECONDS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
     isPrivateHost: isPrivateHost,
     isWeaponStateAcknowledged: isWeaponStateAcknowledged,
     classifyFireIntent: classifyFireIntent,
+    clampRewindTime: clampRewindTime,
+    selectTimedSamples: selectTimedSamples,
+    shotSpreadSeed: shotSpreadSeed,
     cleanRoomSummaries: cleanRoomSummaries,
     createRoomCode: createRoomCode,
     isFiniteNumber: isFiniteNumber,
