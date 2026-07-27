@@ -2,6 +2,9 @@
 
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 const WebSocket = require('ws');
 
@@ -1430,4 +1433,148 @@ test('an idle lobby is not an idle match', async (t) => {
 
   host.ws.terminate();
   waiting.ws.terminate();
+});
+
+function statsDirectory(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nuketown-stats-'));
+  t.after(() => fs.rmSync(dir, { force: true, recursive: true }));
+  return path.join(dir, 'stats.json');
+}
+
+test('counts every seat taken, host and guest alike', async (t) => {
+  const { port } = await startRelay(t, { roomRandom: () => 0 });
+
+  const empty = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(empty.matches, 0, 'a relay nobody has played on has played nothing');
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await guest.opened;
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest' });
+  await guest.next('room');
+
+  const played = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(played.matches, 2, 'opening a room is playing it, and so is joining one');
+
+  /* Leaving does not un-play a match: this is a lifetime total, not a gauge
+     like `online` next to it. */
+  guest.ws.terminate();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const after = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(after.matches, 2);
+  assert.equal(after.online, 1, 'the live count does fall — that is the difference');
+
+  host.ws.terminate();
+});
+
+test('a peer that never reaches a room never counts', async (t) => {
+  /* Scanners and abandoned tabs sit in the handshake window. They are
+     connections, not matches, and inflating the headline number with them
+     would be the easy mistake. */
+  const { port } = await startRelay(t, { roomRandom: () => 0 });
+
+  const lurker = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await lurker.opened;
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  const body = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(body.matches, 0);
+
+  lurker.ws.terminate();
+});
+
+test('the match count survives a restart', async (t) => {
+  const statsPath = statsDirectory(t);
+
+  const first = await startRelay(t, { roomRandom: () => 0, statsPath });
+  const host = websocketClient(`ws://127.0.0.1:${first.port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+  host.ws.terminate();
+
+  /* Shutdown flushes rather than waiting out the debounce — a deploy is the
+     common case, and losing the tail of the count on every one of them would
+     make the number drift low forever. */
+  await first.relay.close();
+  assert.equal(JSON.parse(fs.readFileSync(statsPath, 'utf8')).matches, 1);
+
+  const second = await startRelay(t, { roomRandom: () => 0, statsPath });
+  const body = await (await fetch(`http://127.0.0.1:${second.port}/rooms`)).json();
+  assert.equal(body.matches, 1, 'the count picks up where the last process left it');
+});
+
+test('a corrupt stats file is never overwritten', async (t) => {
+  /* Reading zero out of a broken file and then saving that zero would turn a
+     transient problem into a permanent one, so a count that cannot be read is
+     a count that does not get written. The relay still hosts games. */
+  const statsPath = statsDirectory(t);
+  fs.writeFileSync(statsPath, '{ this is not json');
+
+  const { port, relay } = await startRelay(t, { roomRandom: () => 0, statsPath });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+
+  const body = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(body.matches, 1, 'the relay keeps counting in memory');
+
+  host.ws.terminate();
+  await relay.close();
+  assert.equal(fs.readFileSync(statsPath, 'utf8'), '{ this is not json',
+    'the unreadable file is left exactly as found, for a human to look at');
+});
+
+test('a relay with nowhere to save still counts', async (t) => {
+  /* The default for local play and for the tests: no path, no file, no
+     persistence, and none of that is an error. */
+  const { port, relay } = await startRelay(t, { roomRandom: () => 0 });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+
+  const body = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(body.matches, 1);
+
+  host.ws.terminate();
+  await relay.close();
+});
+
+test('changing host does not replay the room as new matches', async (t) => {
+  /* Promotion moves a peer that is already in the room and already counted.
+     Routing it back through the entry path would quietly inflate the lifetime
+     total every time a host rage-quits — which is exactly when it happens. */
+  const { port } = await startRelay(t, { roomRandom: () => 0 });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await guest.opened;
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest' });
+  await guest.next('room');
+
+  const before = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(before.matches, 2);
+
+  host.ws.close();
+  const changed = await guest.next('host-changed');
+  assert.equal(changed.host, changed.members[0].id, 'the guest now hosts');
+
+  const after = await (await fetch(`http://127.0.0.1:${port}/rooms`)).json();
+  assert.equal(after.matches, 2, 'the same two people, still two matches');
+
+  guest.ws.terminate();
 });

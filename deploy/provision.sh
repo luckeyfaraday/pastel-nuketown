@@ -99,6 +99,11 @@ After=network.target
 User=nuketown
 Group=nuketown
 WorkingDirectory=/opt/pastel-nuketown
+# ProtectSystem=strict below makes the install directory read-only, so the
+# lifetime match count needs somewhere else to live. systemd creates
+# /var/lib/nuketown, chowns it to the service user, and passes the path as
+# \$STATE_DIRECTORY, which is where server.mjs looks for it.
+StateDirectory=nuketown
 Environment=PORT=8080
 Environment=HOST=127.0.0.1
 Environment=ALLOWED_ORIGINS=$ALLOWED_ORIGINS

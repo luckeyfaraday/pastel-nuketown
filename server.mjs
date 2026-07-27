@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { dirname, resolve } from 'node:path';
@@ -90,9 +91,85 @@ export function createRelayServer(options = {}) {
   const roomRandom = typeof options.roomRandom === 'function'
     ? options.roomRandom
     : secureRandom;
+  /* Where the lifetime match count lives across restarts. No path means no
+     persistence: the count still runs, it just starts at zero each boot, which
+     is what the tests and local play want. */
+  const statsPath = typeof options.statsPath === 'string' && options.statsPath
+    ? options.statsPath
+    : null;
+  const statsFlushMs = positiveInteger(options.statsFlushMs, 10_000);
 
   const rooms = new Map();
   const peers = new Map();
+
+  /* Lifetime matches played, for the title screen. This counts entries into a
+     room, not people: there are no accounts, so the only thing that could tell
+     two players apart is their address, and keeping a record of every visitor's
+     address to decorate a menu is a bad trade. One player who plays five rounds
+     is five here, which is why the client says MATCHES and not PLAYERS. */
+  let matchesPlayed = 0;
+  let statsWritable = statsPath !== null;
+  let statsTimer = null;
+  let statsDirty = false;
+  let statsWriteFailed = false;
+
+  if (statsPath) {
+    try {
+      const saved = JSON.parse(readFileSync(statsPath, 'utf8'));
+      const count = saved && saved.matches;
+      if (!Number.isSafeInteger(count) || count < 0)
+        throw new Error(`expected a non-negative integer, got ${JSON.stringify(count)}`);
+      matchesPlayed = count;
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        /* First boot on a fresh host. Nothing to read, everything to write. */
+      } else {
+        /* The file exists but will not parse. Starting from zero *and* writing
+           would overwrite a real history with a wrong number on the next flush,
+           so stop writing and leave the file for a human. The relay keeps
+           serving; a broken counter is not worth refusing to host games over. */
+        statsWritable = false;
+        console.error(
+          `Refusing to write ${statsPath}: could not read the existing count (${error.message}). ` +
+          'The lifetime match count will not be saved until this file is fixed or removed.'
+        );
+      }
+    }
+  }
+
+  /* Temp file plus rename, so a crash midway through leaves the old count
+     intact rather than a truncated file that reads as corrupt forever. */
+  function flushStats() {
+    if (!statsDirty || !statsWritable) return;
+    const temp = `${statsPath}.${process.pid}.tmp`;
+    try {
+      writeFileSync(temp, `${JSON.stringify({ matches: matchesPlayed })}\n`);
+      renameSync(temp, statsPath);
+      statsDirty = false;
+      statsWriteFailed = false;
+    } catch (error) {
+      /* Say it once. A read-only state directory would otherwise print this
+         every flush for the life of the process. */
+      if (!statsWriteFailed) {
+        statsWriteFailed = true;
+        console.error(`Unable to save the match count to ${statsPath}: ${error.message}`);
+      }
+    }
+  }
+
+  function countMatchPlayed() {
+    matchesPlayed++;
+    if (!statsWritable) return;
+    statsDirty = true;
+    /* Batched: a full room is four writes in a few seconds, and this number is
+       decoration — losing the last few seconds of it to a hard kill is fine. */
+    if (statsTimer) return;
+    statsTimer = setTimeout(() => {
+      statsTimer = null;
+      flushStats();
+    }, statsFlushMs);
+    if (typeof statsTimer.unref === 'function') statsTimer.unref();
+  }
 
   /* JSON.parse accepts extremely deep values. Walk iteratively so hostile
      payloads cannot turn a later String()/JSON.stringify() into stack
@@ -252,7 +329,10 @@ export function createRelayServer(options = {}) {
          scanners and abandoned tabs sit in, inflating the number. */
       let online = 0;
       for (const peer of peers.values()) if (peer.room) online++;
-      const body = Buffer.from(JSON.stringify({ rooms: listedRooms(), online }), 'utf8');
+      const body = Buffer.from(
+        JSON.stringify({ rooms: listedRooms(), online, matches: matchesPlayed }),
+        'utf8'
+      );
       /* Mirror the socket's policy: wide open when unconfigured, otherwise
          only the origins that are allowed to play here. */
       const origin = request.headers.origin;
@@ -403,6 +483,11 @@ export function createRelayServer(options = {}) {
     peer.activeAt = Date.now();
     room.members.set(peer.id, peer);
     if (role === 'host') room.host = peer;
+    /* Here rather than at connect: this is the point a peer has cleared the
+       handshake and taken a seat, so scanners and abandoned tabs never land in
+       the total. Host migration reuses the peers already counted — it does not
+       come back through here. */
+    countMatchPlayed();
   }
 
   /* The round is part of the handshake, not just of `start`. A player who
@@ -1072,6 +1157,11 @@ export function createRelayServer(options = {}) {
   async function close() {
     if (heartbeat) clearInterval(heartbeat);
     if (idleSweep) clearInterval(idleSweep);
+    /* A planned shutdown is a deploy, and a deploy that quietly dropped the
+       last few minutes of the count would be the common case, not the rare one. */
+    if (statsTimer) clearTimeout(statsTimer);
+    statsTimer = null;
+    flushStats();
     for (const room of rooms.values()) {
       clearSnapshotStall(room);
       if (room.migrating && room.migrating.timer) clearTimeout(room.migrating.timer);
@@ -1100,11 +1190,24 @@ export function createRelayServer(options = {}) {
 const isMain = process.argv[1] &&
   pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
 
+/* systemd sets STATE_DIRECTORY from `StateDirectory=` in the unit, and that is
+   the only path the service can write to — ProtectSystem=strict makes the
+   install directory read-only. Taking the path from the environment rather
+   than hardcoding /var/lib/nuketown keeps the two in step, and running without
+   it (a bare `npm start`) simply means the count does not persist. Colons
+   separate multiple directories; the first is ours. */
+function statsPathFromEnvironment(env) {
+  if (env.STATS_PATH) return resolve(env.STATS_PATH);
+  const stateDir = (env.STATE_DIRECTORY || '').split(':')[0];
+  return stateDir ? resolve(stateDir, 'stats.json') : null;
+}
+
 if (isMain) {
   const port = Number.parseInt(process.env.PORT || '8080', 10);
   const host = process.env.HOST || '0.0.0.0';
   const relay = createRelayServer({
-    allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(',')
+    allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(','),
+    statsPath: statsPathFromEnvironment(process.env)
   });
 
   relay.listen(port, host, () => {
