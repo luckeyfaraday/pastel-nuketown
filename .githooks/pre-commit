@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Regenerate index.html when a build input is staged, and stage it with the
+# commit that caused it.
+#
+# index.html is a build artifact that is nonetheless tracked, because the
+# house convention is that an entry is exactly one <folder>/index.html. That
+# means every commit touching src/ has to carry a rebuilt index.html, and
+# `build.sh --check` fails the whole `npm run check` when it does not. Left to
+# discipline this gets forgotten, and the failure surfaces later as a red
+# branch rather than at the moment it was caused.
+#
+# Shared by every linked worktree: hooks live in the common .git directory.
+set -euo pipefail
+
+git_dir=$(git rev-parse --git-dir)
+
+# Stay out of the way of operations that replay or combine existing commits.
+# Rebase does not run this hook for replayed commits, but `rebase --continue`
+# after a conflict does, and regenerating an artifact mid-conflict fights the
+# operation rather than helping it.
+for marker in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+  if [ -e "$git_dir/$marker" ]; then
+    exit 0
+  fi
+done
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Only rebuild when something build.sh actually reads is staged. A README or
+# test-only commit has no reason to touch the artifact.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+if ! printf '%s\n' "$staged" | grep -qE '^(src/|mapspec\.js|bots\.js|net-protocol\.js|build\.sh$)'; then
+  exit 0
+fi
+
+# A partial commit (`git commit -- some/file`) builds against a temporary
+# index, where staging extra paths from a hook does not do what it looks like
+# it does. Detect it and step aside rather than half-apply.
+if [ -n "${GIT_INDEX_FILE:-}" ] && [ "$(basename "$GIT_INDEX_FILE")" != "index" ]; then
+  echo "pre-commit: partial commit detected; skipping index.html rebuild." >&2
+  echo "            run 'npm run build' and commit index.html yourself." >&2
+  exit 0
+fi
+
+before=$(git hash-object index.html 2>/dev/null || echo absent)
+
+if ! ./build.sh >/dev/null; then
+  echo "pre-commit: build.sh failed, so index.html could not be regenerated." >&2
+  echo "            commit aborted; fix the build first." >&2
+  exit 1
+fi
+
+after=$(git hash-object index.html)
+
+git add index.html
+if [ "$before" != "$after" ]; then
+  echo "pre-commit: regenerated index.html and staged it with this commit."
+fi

@@ -120,11 +120,21 @@ Shared modules consumed by both the browser client and the Node.js server:
 
 ```bash
 npm run build      # reassemble index.html from src/
-npm test           # run the test suite (node --test, 26 tests)
+npm test           # run the test suite (node --test)
 npm run check      # syntax-check every source file + tests + build freshness
 ```
 
-The test suite covers bot navigation, weapon validation, wire protocol parsing, room lifecycle, origin allowlisting, and hostile-input rejection.
+The test suite covers bot navigation, weapon validation, wire protocol parsing, room lifecycle, origin allowlisting, hostile-input rejection, and — through a headless harness that runs the real client — guest-side prediction and the host/guest fairness baseline.
+
+### The pre-commit hook
+
+`index.html` is tracked, so every commit touching `src/` has to carry a rebuilt copy or `npm run check` fails on build freshness. Forgetting surfaces later as a red branch rather than at the moment it was caused, so `.githooks/pre-commit` rebuilds and stages the artefact alongside the change that caused it.
+
+```bash
+git config core.hooksPath .githooks     # or: cp .githooks/pre-commit .git/hooks/
+```
+
+It runs only when a build input is staged, stays out of rebases, merges and docs-only commits, and aborts rather than committing if `build.sh` fails.
 
 ## Deployment
 
