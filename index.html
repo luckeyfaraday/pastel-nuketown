@@ -140,6 +140,8 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   -webkit-text-fill-color:transparent;filter:drop-shadow(0 4px 0 var(--ink))}
 #title .sub{margin-top:14px;font-family:var(--disp);font-size:clamp(13px,2vw,18px);letter-spacing:.34em;
   text-transform:uppercase;color:var(--ink);opacity:.8}
+.online-count{font-family:var(--disp);font-size:12px;font-weight:600;letter-spacing:.12em;
+  color:var(--ink);opacity:.55;margin-top:6px}
 #menu{width:min(560px,calc(100vw - 28px));margin-top:22px;display:flex;flex-direction:column;align-items:center;gap:12px}
 .identity{width:min(330px,100%);display:flex;align-items:center;gap:10px;padding:6px 8px 6px 14px;
   border:2.5px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.76);box-shadow:0 3px 0 var(--ink)}
@@ -244,6 +246,7 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   #title{padding-top:8px}
   #title h1{font-size:38px}
   #title .sub{display:none}
+  .online-count{display:none}
   .identity{padding-top:3px;padding-bottom:3px}
   .menu-btn{padding-top:8px;padding-bottom:10px}
   .menu-btn.alt{padding-top:8px;padding-bottom:10px}
@@ -448,6 +451,7 @@ body.touch .touch-keys{display:flex}
 <div class="screen" id="title">
   <h1>PASTEL<em>NUKETOWN</em></h1>
   <div class="sub">Free&nbsp;For&nbsp;All</div>
+  <div class="online-count" id="onlineCount"></div>
   <div id="menu">
     <label class="identity setup-only" for="playerName">
       <span>CALLSIGN</span>
@@ -6041,6 +6045,18 @@ function netRoomsPanelOpen() {
          !!menu && !menu.hidden && !menu.classList.contains('pause');
 }
 
+/* Blank unless there is genuinely someone to play with. An unreachable or
+   too-old server has nothing to report, and "0 players online" would hang a
+   sign saying the game is dead right above the button that revives it —
+   solo players are invisible here, so an empty relay is the normal case. */
+function netRenderOnline(count) {
+  const el = document.getElementById('onlineCount');
+  if (!el) return;
+  el.textContent = typeof count === 'number' && count >= 2
+    ? count + ' players online'
+    : '';
+}
+
 function netRenderRooms(rooms, message) {
   const list = document.getElementById('roomList');
   if (!list) return;
@@ -6105,10 +6121,12 @@ function netRefreshRooms(manual) {
       /* A refresh that lands after the player has already left the menu must
          not repaint a list they can no longer act on. */
       if (netRoomsPanelOpen()) netRenderRooms(rooms);
+      netRenderOnline(body && body.online);
     })
     .catch(() => {
       if (netRoomsPanelOpen())
         netRenderRooms(null, 'No room server reachable.');
+      netRenderOnline(null);
     })
     .then(() => {
       if (bail) clearTimeout(bail);
