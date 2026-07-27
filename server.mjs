@@ -229,7 +229,13 @@ export function createRelayServer(options = {}) {
        opened straight off disk (file://), which makes this request
        cross-origin. Allow it explicitly and never cache it. */
     if (pathname === '/rooms') {
-      const body = Buffer.from(JSON.stringify({ rooms: listedRooms() }), 'utf8');
+      /* Solo play never opens a socket, so this is the multiplayer population.
+         Count only peers that finished the handshake and landed in a room —
+         peers.size would also include the up-to-joinTimeoutMs window that
+         scanners and abandoned tabs sit in, inflating the number. */
+      let online = 0;
+      for (const peer of peers.values()) if (peer.room) online++;
+      const body = Buffer.from(JSON.stringify({ rooms: listedRooms(), online }), 'utf8');
       /* Mirror the socket's policy: wide open when unconfigured, otherwise
          only the origins that are allowed to play here. */
       const origin = request.headers.origin;

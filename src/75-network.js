@@ -203,6 +203,18 @@ function netRoomsPanelOpen() {
          !!menu && !menu.hidden && !menu.classList.contains('pause');
 }
 
+/* Blank unless there is genuinely someone to play with. An unreachable or
+   too-old server has nothing to report, and "0 players online" would hang a
+   sign saying the game is dead right above the button that revives it —
+   solo players are invisible here, so an empty relay is the normal case. */
+function netRenderOnline(count) {
+  const el = document.getElementById('onlineCount');
+  if (!el) return;
+  el.textContent = typeof count === 'number' && count >= 2
+    ? count + ' players online'
+    : '';
+}
+
 function netRenderRooms(rooms, message) {
   const list = document.getElementById('roomList');
   if (!list) return;
@@ -267,10 +279,12 @@ function netRefreshRooms(manual) {
       /* A refresh that lands after the player has already left the menu must
          not repaint a list they can no longer act on. */
       if (netRoomsPanelOpen()) netRenderRooms(rooms);
+      netRenderOnline(body && body.online);
     })
     .catch(() => {
       if (netRoomsPanelOpen())
         netRenderRooms(null, 'No room server reachable.');
+      netRenderOnline(null);
     })
     .then(() => {
       if (bail) clearTimeout(bail);
