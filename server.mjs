@@ -395,7 +395,13 @@ export function createRelayServer(options = {}) {
   /* The round is part of the handshake, not just of `start`. A player who
      joins a room that has already run a round starts from that room's round,
      so the next `start` they see is the expected step forward. Without this a
-     late joiner sits in the lobby ignoring every start it is sent. */
+     late joiner sits in the lobby ignoring every start it is sent.
+
+     `started` is the same idea one step further: it tells a peer arriving
+     mid-round to walk into the match rather than wait in a lobby for a start
+     that already happened. The relay sends no world state with it — the host
+     seats the arrival on the next roster broadcast and the existing snapshot
+     stream carries the world, which is why drop-in needs no new message. */
   function roomReply(peer) {
     send(peer, {
       t: 'room',
@@ -405,6 +411,7 @@ export function createRelayServer(options = {}) {
       role: peer.role,
       authorityEpoch: peer.room.authorityEpoch,
       round: peer.room.round,
+      started: peer.room.started,
       members: memberList(peer.room)
     });
   }
@@ -462,8 +469,13 @@ export function createRelayServer(options = {}) {
       sendError(peer, 'room-not-found', 'That room does not exist.');
       return;
     }
-    if (room.started) {
-      sendError(peer, 'match-started', 'That match has already started.');
+    /* A started room is joinable now. The one state that is not is a room
+       changing host: the migration is waiting on state from a known set of
+       guests, and a peer that was not in that set when it began has nothing
+       to contribute and no world to be handed. It resolves in well under a
+       second, so this is "try again", not "go away". */
+    if (room.migrating) {
+      sendError(peer, 'room-migrating', 'That room is changing host. Try again in a moment.');
       return;
     }
     if (room.members.size >= Protocol.MAX_PLAYERS) {

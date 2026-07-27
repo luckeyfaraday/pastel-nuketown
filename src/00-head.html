@@ -198,11 +198,10 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 #roomList li .mini-btn{padding:4px 11px 5px;font-size:11px}
 #roomList li.rooms-empty{display:block;text-align:center;border-style:dashed;color:var(--ink-soft);
   font-size:12px;font-weight:600;letter-spacing:.04em;background:rgba(255,255,255,.42)}
-/* A running match is shown but not offered: present enough to prove the game
-   has people in it, faded enough that nobody aims for a seat it cannot give. */
-#roomList li.busy{opacity:.6;border-style:dashed}
-#roomList li .tag{font-size:10px;letter-spacing:.09em;color:var(--ink-soft);white-space:nowrap;
-  padding:4px 9px 5px;border:2px dashed rgba(74,63,92,.5);border-radius:10px}
+/* A running match is joinable, so it reads as available rather than greyed.
+   The dashed edge is all that marks it as already underway; its button says
+   DROP IN where a lobby's says JOIN. */
+#roomList li.busy{border-style:dashed;background:rgba(255,255,255,.44)}
 #menuNote,#netStatus{min-height:18px;text-align:center;font-family:var(--disp);font-size:12px;font-weight:600;
   letter-spacing:.035em;color:var(--ink-soft)}
 #netStatus{margin-top:9px;color:#4f7389}
