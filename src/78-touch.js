@@ -200,11 +200,25 @@ function releaseStick() {
    LOOK
    ===================================================================== */
 function onLookDown(e) {
-  claimLook(e);
+  claimLook(e, true);
 }
 
-function claimLook(e) {
-  if (TUI.lookId !== -1) return;
+/* Who gets to aim, when two fingers are down and either could mean it.
+
+   FIRE takes the look pointer only when nothing already holds it, which is
+   what lets you press the trigger and slide off it to turn. A drag beginning
+   in the look zone takes it unconditionally, because starting a drag there
+   means nothing except "aim", while a finger parked on FIRE says nothing
+   about looking at all. Without that asymmetry the common grip -- index
+   finger holding FIRE still, other thumb turning -- finds look owned by a
+   pointer that never moves, and aiming dies for as long as the trigger is
+   held. Firing is unaffected either way; only look ownership moves.
+
+   Seeding lookX/lookY here is not optional: onTouchMove deltas against them,
+   so a claim that set the id alone would measure the first movement from
+   wherever the previous drag ended and snap the view. */
+function claimLook(e, steal) {
+  if (TUI.lookId !== -1 && !steal) return;
   e.preventDefault();
   TUI.lookId = e.pointerId;
   TUI.lookX = e.clientX;
