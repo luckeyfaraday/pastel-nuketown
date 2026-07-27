@@ -1694,7 +1694,7 @@ if (typeof THREE === "undefined") {
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = 3;
+  var VERSION = 4;
   var MAX_PLAYERS = 4;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
@@ -1755,6 +1755,84 @@ if (typeof THREE === "undefined") {
       .trim();
 
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
+  }
+
+  function isAuthorityEpoch(value) {
+    return Number.isSafeInteger(value) && value > 0;
+  }
+
+  /* A host change is a server-authored authority transition. Validate the
+     complete roster here so clients change roles only when the epoch and the
+     cancelled-round barrier both move forward together. */
+  function sanitizeHostChanged(message, localId, previousEpoch, previousRound) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return result(false, null, 'host change must be an object');
+    }
+    if (message.t !== 'host-changed') {
+      return result(false, null, 'unexpected message type');
+    }
+    if (message.v !== VERSION) {
+      return result(false, null, 'unsupported protocol version');
+    }
+
+    var priorEpoch = isAuthorityEpoch(previousEpoch) ? previousEpoch : 0;
+    if (!isAuthorityEpoch(message.authorityEpoch) ||
+        message.authorityEpoch <= priorEpoch) {
+      return result(false, null, 'authorityEpoch must increase');
+    }
+
+    var priorRound = Number.isSafeInteger(previousRound) && previousRound >= 0
+      ? previousRound
+      : -1;
+    if (!Number.isSafeInteger(message.round) || message.round < 0 ||
+        message.round <= priorRound) {
+      return result(false, null, 'round must increase');
+    }
+    if (typeof message.host !== 'string' || !message.host ||
+        message.host.length > 80) {
+      return result(false, null, 'host id is invalid');
+    }
+    if (!Array.isArray(message.members) || message.members.length < 1 ||
+        message.members.length > MAX_PLAYERS) {
+      return result(false, null, 'members are invalid');
+    }
+
+    var seen = Object.create(null);
+    var members = [];
+    var hosts = 0;
+    var includesLocal = typeof localId !== 'string' || !localId;
+    for (var i = 0; i < message.members.length; i++) {
+      var raw = message.members[i];
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
+          typeof raw.id !== 'string' || !raw.id || raw.id.length > 80 ||
+          seen[raw.id] || (raw.role !== 'host' && raw.role !== 'guest')) {
+        return result(false, null, 'member is invalid');
+      }
+      var name = cleanPlayerName(raw.name);
+      if (!name) return result(false, null, 'member name is invalid');
+
+      seen[raw.id] = true;
+      if (raw.role === 'host') {
+        hosts++;
+        if (raw.id !== message.host) {
+          return result(false, null, 'host does not match roster');
+        }
+      }
+      if (raw.id === localId) includesLocal = true;
+      members.push({ id: raw.id, name: name, role: raw.role });
+    }
+    if (hosts !== 1 || !seen[message.host] || !includesLocal) {
+      return result(false, null, 'host change roster is incomplete');
+    }
+
+    return result(true, {
+      t: 'host-changed',
+      v: VERSION,
+      authorityEpoch: message.authorityEpoch,
+      round: message.round,
+      host: message.host,
+      members: members
+    }, null);
   }
 
   function isPrivateHost(hostname) {
@@ -1943,6 +2021,9 @@ if (typeof THREE === "undefined") {
     if (!Number.isSafeInteger(message.round) || message.round < 1) {
       return result(false, null, 'round must be a positive safe integer');
     }
+    if (!isAuthorityEpoch(message.authorityEpoch)) {
+      return result(false, null, 'authorityEpoch must be a positive safe integer');
+    }
 
     var previous = Number.isSafeInteger(lastSeq) ? lastSeq : -1;
     if (message.seq <= previous) {
@@ -1980,6 +2061,7 @@ if (typeof THREE === "undefined") {
     return result(true, {
       t: 'input',
       v: VERSION,
+      authorityEpoch: message.authorityEpoch,
       round: message.round,
       seq: message.seq,
       fwd: clamp(message.fwd, -1, 1),
@@ -2097,6 +2179,8 @@ if (typeof THREE === "undefined") {
     MAX_REWIND_SECONDS: MAX_REWIND_SECONDS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    isAuthorityEpoch: isAuthorityEpoch,
+    sanitizeHostChanged: sanitizeHostChanged,
     isPrivateHost: isPrivateHost,
     isWeaponStateAcknowledged: isWeaponStateAcknowledged,
     classifyFireIntent: classifyFireIntent,
@@ -5453,6 +5537,7 @@ const NET = {
   room: '',
   id: '',
   members: [],
+  authorityEpoch: 0,
   round: 0,
   wanted: null,
   manualClose: false,
@@ -5794,6 +5879,7 @@ function netResetTransport() {
   NET.room = '';
   NET.id = '';
   NET.members = [];
+  NET.authorityEpoch = 0;
   NET.round = 0;
   NET.wanted = null;
   NET.starting = false;
@@ -5914,6 +6000,7 @@ function netHandleWire(raw) {
     const room = NETP.normalizeRoomCode(msg.room);
     if (NET.phase !== 'connecting' || typeof msg.id !== 'string' || !msg.id ||
         msg.id.length > 80 || room.length !== 6 ||
+        !NETP.isAuthorityEpoch(msg.authorityEpoch) ||
         (msg.role !== 'host' && msg.role !== 'guest') || !members ||
         !members.some(member => member.id === msg.id && member.role === msg.role)) {
       if (NET.socket) try { NET.socket.close(1008, 'invalid room handshake'); } catch (e) {}
@@ -5926,12 +6013,28 @@ function netHandleWire(raw) {
     NET.mode = msg.role === 'host' ? 'host' : 'guest';
     NET.phase = 'lobby';
     NET.members = members;
+    NET.authorityEpoch = msg.authorityEpoch;
     /* Adopt the room's round at the handshake. Joining a room that has
        already played a round leaves NET.round behind otherwise, and every
        subsequent `start` looks like it skipped ahead and gets ignored. */
     NET.round = Number.isSafeInteger(msg.round) && msg.round >= 0 ? msg.round : 0;
     netShowLobby();
     netStatus(netIsHost() ? 'Room ready — share the code, then start.' : 'Connected — waiting for the host.');
+    return;
+  }
+  if (msg.t === 'host-changed') {
+    if (!netIsMultiplayer()) return;
+    const checked = NETP.sanitizeHostChanged(
+      msg, NET.id, NET.authorityEpoch, NET.round);
+    if (!checked.ok) return;
+    const change = checked.value;
+    NET.authorityEpoch = change.authorityEpoch;
+    NET.round = change.round;
+    NET.members = change.members;
+    NET.mode = change.host === NET.id ? 'host' : 'guest';
+    NET.phase = 'lobby';
+    NET.starting = false;
+    netReturnToLobbyAfterHostChange(change.host);
     return;
   }
   if (msg.t === 'members') {
@@ -5947,6 +6050,7 @@ function netHandleWire(raw) {
     /* Rounds only ever move forward. Requiring exactly +1 breaks any client
        whose baseline came from the handshake rather than from round 1. */
     if (!netIsMultiplayer() || !Number.isSafeInteger(msg.round) ||
+        msg.authorityEpoch !== NET.authorityEpoch ||
         msg.round <= NET.round || !members ||
         !members.some(member => member.id === NET.id)) return;
     NET.round = msg.round;
@@ -5956,11 +6060,12 @@ function netHandleWire(raw) {
     return;
   }
   if (msg.t === 'lobby' && netIsGuest() && NET.phase === 'playing' &&
-      msg.round === NET.round) {
+      msg.authorityEpoch === NET.authorityEpoch && msg.round === NET.round) {
     netShowRemoteMatchOver(typeof msg.winner === 'string' ? msg.winner : null);
     return;
   }
   if (msg.t === 'input' && netIsHost() && NET.phase === 'playing' &&
+      msg.authorityEpoch === NET.authorityEpoch &&
       msg.round === NET.round && typeof msg.from === 'string') {
     const a = G.actors.find(x => x.controller === 'remote' && x.netId === msg.from);
     if (!a) return;
@@ -5973,11 +6078,12 @@ function netHandleWire(raw) {
     return;
   }
   if (msg.t === 'snapshot' && netIsGuest() && NET.phase === 'playing' &&
-      msg.round === NET.round) {
+      msg.authorityEpoch === NET.authorityEpoch && msg.round === NET.round) {
     netApplySnapshot(msg);
     return;
   }
   if (msg.t === 'event' && netIsGuest() && NET.phase === 'playing' &&
+      msg.authorityEpoch === NET.authorityEpoch &&
       msg.round === NET.round && Array.isArray(msg.events) && msg.events.length <= 256) {
     for (const event of msg.events) netApplyEvent(event);
     return;
@@ -6020,7 +6126,11 @@ function netHostStart() {
     again.textContent = 'STARTING…';
   }
   netStatus('Starting the match…');
-  if (!netSend({ t: 'start', v: NETP.VERSION })) {
+  if (!netSend({
+    t: 'start',
+    v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch
+  })) {
     NET.starting = false;
     if (start) start.disabled = false;
     if (again && G.over) {
@@ -6083,6 +6193,31 @@ function netLeaveLobby() {
   netResetTransport();
   netShowMainMenu();
   netStatus('');
+}
+
+function netReturnToLobbyAfterHostChange(hostId) {
+  if (G.started) {
+    G.paused = true;
+    G.fixedAcc = 0;
+    exitPointerLock();
+    document.getElementById('hud').classList.add('hide');
+    document.getElementById('dead').classList.add('off');
+    document.getElementById('over').classList.add('off');
+    restoreBoard();
+    G.started = false;
+    G.over = false;
+    G.winner = null;
+  }
+  const menu = document.getElementById('menu');
+  if (menu) menu.classList.remove('pause');
+  document.getElementById('title').classList.remove('off');
+  netShowLobby();
+
+  const promoted = hostId === NET.id;
+  const host = NET.members.find(member => member.id === hostId);
+  netStatus(promoted
+    ? 'The previous host left. You are the new host — start a fresh round.'
+    : ((host ? host.name : 'A player') + ' is the new host. Waiting for a fresh round.'));
 }
 
 function netEndSession(message) {
@@ -6160,6 +6295,7 @@ function netFlushEvents() {
   netSend({
     t: 'event',
     v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
     round: NET.round,
     events: events
   });
@@ -6257,6 +6393,7 @@ function netAfterSimulation(dt, force) {
   netSend({
     t: 'snapshot',
     v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
     round: NET.round,
     tick: G.tick,
     time: netRound(G.time),
@@ -6318,6 +6455,7 @@ function netFrame(now) {
   const message = {
     t: 'input',
     v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
     round: NET.round,
     seq: seq,
     fwd: inp.fwd,
@@ -6621,6 +6759,7 @@ function netOnAuthoritativeMatchOver(winner) {
   netSend({
     t: 'lobby',
     v: NETP.VERSION,
+    authorityEpoch: NET.authorityEpoch,
     round: NET.round,
     winner: netActorId(winner)
   });

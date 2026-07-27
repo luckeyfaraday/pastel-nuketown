@@ -14,7 +14,7 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  var VERSION = 3;
+  var VERSION = 4;
   var MAX_PLAYERS = 4;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
@@ -75,6 +75,84 @@
       .trim();
 
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
+  }
+
+  function isAuthorityEpoch(value) {
+    return Number.isSafeInteger(value) && value > 0;
+  }
+
+  /* A host change is a server-authored authority transition. Validate the
+     complete roster here so clients change roles only when the epoch and the
+     cancelled-round barrier both move forward together. */
+  function sanitizeHostChanged(message, localId, previousEpoch, previousRound) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return result(false, null, 'host change must be an object');
+    }
+    if (message.t !== 'host-changed') {
+      return result(false, null, 'unexpected message type');
+    }
+    if (message.v !== VERSION) {
+      return result(false, null, 'unsupported protocol version');
+    }
+
+    var priorEpoch = isAuthorityEpoch(previousEpoch) ? previousEpoch : 0;
+    if (!isAuthorityEpoch(message.authorityEpoch) ||
+        message.authorityEpoch <= priorEpoch) {
+      return result(false, null, 'authorityEpoch must increase');
+    }
+
+    var priorRound = Number.isSafeInteger(previousRound) && previousRound >= 0
+      ? previousRound
+      : -1;
+    if (!Number.isSafeInteger(message.round) || message.round < 0 ||
+        message.round <= priorRound) {
+      return result(false, null, 'round must increase');
+    }
+    if (typeof message.host !== 'string' || !message.host ||
+        message.host.length > 80) {
+      return result(false, null, 'host id is invalid');
+    }
+    if (!Array.isArray(message.members) || message.members.length < 1 ||
+        message.members.length > MAX_PLAYERS) {
+      return result(false, null, 'members are invalid');
+    }
+
+    var seen = Object.create(null);
+    var members = [];
+    var hosts = 0;
+    var includesLocal = typeof localId !== 'string' || !localId;
+    for (var i = 0; i < message.members.length; i++) {
+      var raw = message.members[i];
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
+          typeof raw.id !== 'string' || !raw.id || raw.id.length > 80 ||
+          seen[raw.id] || (raw.role !== 'host' && raw.role !== 'guest')) {
+        return result(false, null, 'member is invalid');
+      }
+      var name = cleanPlayerName(raw.name);
+      if (!name) return result(false, null, 'member name is invalid');
+
+      seen[raw.id] = true;
+      if (raw.role === 'host') {
+        hosts++;
+        if (raw.id !== message.host) {
+          return result(false, null, 'host does not match roster');
+        }
+      }
+      if (raw.id === localId) includesLocal = true;
+      members.push({ id: raw.id, name: name, role: raw.role });
+    }
+    if (hosts !== 1 || !seen[message.host] || !includesLocal) {
+      return result(false, null, 'host change roster is incomplete');
+    }
+
+    return result(true, {
+      t: 'host-changed',
+      v: VERSION,
+      authorityEpoch: message.authorityEpoch,
+      round: message.round,
+      host: message.host,
+      members: members
+    }, null);
   }
 
   function isPrivateHost(hostname) {
@@ -263,6 +341,9 @@
     if (!Number.isSafeInteger(message.round) || message.round < 1) {
       return result(false, null, 'round must be a positive safe integer');
     }
+    if (!isAuthorityEpoch(message.authorityEpoch)) {
+      return result(false, null, 'authorityEpoch must be a positive safe integer');
+    }
 
     var previous = Number.isSafeInteger(lastSeq) ? lastSeq : -1;
     if (message.seq <= previous) {
@@ -300,6 +381,7 @@
     return result(true, {
       t: 'input',
       v: VERSION,
+      authorityEpoch: message.authorityEpoch,
       round: message.round,
       seq: message.seq,
       fwd: clamp(message.fwd, -1, 1),
@@ -417,6 +499,8 @@
     MAX_REWIND_SECONDS: MAX_REWIND_SECONDS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    isAuthorityEpoch: isAuthorityEpoch,
+    sanitizeHostChanged: sanitizeHostChanged,
     isPrivateHost: isPrivateHost,
     isWeaponStateAcknowledged: isWeaponStateAcknowledged,
     classifyFireIntent: classifyFireIntent,
