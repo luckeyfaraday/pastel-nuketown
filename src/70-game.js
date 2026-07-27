@@ -580,23 +580,20 @@ function syncPlayerAmmoStore() {
 /* =====================================================================
    SIMULATION STEP  (fixed 1/60)
    ===================================================================== */
-function stepPlayer(a, dt) {
-  a.aimYaw = a.yaw; a.aimPitch = a.pitch;
-  if (!a.alive) {
-    if (typeof netIsGuest === 'function' && netIsGuest()) return;
-    a.respawnT -= dt;
-    if (a.respawnT <= 0) { respawnActor(a); hideDeadScreen(); }
-    return;
-  }
-  const inp = readLocalInput(!G.paused);
-  const fwd = inp.fwd;
-  const str = inp.strafe;
-  const firing = inp.fire;
-  IN.sprinting = inp.sprint;
+/* The one place a human actor's movement is integrated.
 
+   stepPlayer runs it for the player at the controls, stepRemotePlayer runs it
+   on the authority for everyone else, and a guest's reconciliation replays
+   unacknowledged input back through it. Three callers that must agree exactly:
+   drift between them is not a bug that shows up as a wrong number, it is a
+   correction the player feels as their own body being dragged. Two of them
+   used to be hand-kept transcriptions of the same arithmetic. */
+function applyMovement(a, input, dt) {
+  const fwd = clamp(input.fwd || 0, -1, 1);
+  const str = clamp(input.strafe || 0, -1, 1);
   const w = WBY[a.weapon];
   let speed = CFG.playerSpeed * w.speed;
-  const sprinting = IN.sprinting && fwd > 0 && !firing && a.reloadT <= 0;
+  const sprinting = !!input.sprint && fwd > 0 && !input.fire && a.reloadT <= 0;
   if (sprinting) speed *= CFG.sprintMul;
 
   /* forward = (sin y, cos y); right = cross(forward, up) = (-cos y, sin y).
@@ -617,12 +614,33 @@ function stepPlayer(a, dt) {
   const acc = a.onGround ? CFG.accelGround : CFG.accelAir;
   a.vel.x = damp(a.vel.x, mx, acc, dt);
   a.vel.z = damp(a.vel.z, mz, acc, dt);
-  if (inp.jump && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
+  if (input.jump && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
 
   const res = moveActor(a.pos, a.vel, dt, {});
   const wasGround = a.onGround;
   a.onGround = res.onGround;
-  if (!wasGround && a.onGround) { VM.landDip = 1; SFX.step(); fxShake(0.05); }
+  return { sprinting: sprinting, landed: !wasGround && a.onGround };
+}
+
+function stepPlayer(a, dt) {
+  a.aimYaw = a.yaw; a.aimPitch = a.pitch;
+  if (!a.alive) {
+    if (typeof netIsGuest === 'function' && netIsGuest()) return;
+    a.respawnT -= dt;
+    if (a.respawnT <= 0) { respawnActor(a); hideDeadScreen(); }
+    return;
+  }
+  const inp = readLocalInput(!G.paused);
+  const firing = inp.fire;
+  IN.sprinting = inp.sprint;
+
+  /* Booked before the step, so a replay re-applies exactly what this tick was
+     given rather than a later sample of the same keys. */
+  if (typeof netRecordPredictedStep === 'function') netRecordPredictedStep(inp, dt);
+
+  const moved = applyMovement(a, inp, dt);
+  const sprinting = moved.sprinting;
+  if (moved.landed) { VM.landDip = 1; SFX.step(); fxShake(0.05); }
 
   // footsteps
   const spd = Math.hypot(a.vel.x, a.vel.z);
@@ -659,6 +677,15 @@ function switchRemoteWeapon(a, id) {
 /* The host simulates remote humans from their latest sequenced input.
    This intentionally mirrors local movement, but omits camera/viewmodel UI. */
 function stepRemotePlayer(a, dt) {
+  /* Consume one queued input per tick, matching the rate the guest predicted
+     with, so the two simulations apply the same stream in the same order.
+     Falling behind is worse than skipping: if the queue has run long, take the
+     extra now rather than replaying old intent late. */
+  if (a.netInputQueue && a.netInputQueue.length) {
+    if (a.netInputQueue.length > 3) a.netInputQueue.splice(0, a.netInputQueue.length - 3);
+    a.netInput = a.netInputQueue.shift();
+    a.netInputAt = G.time;
+  }
   const fresh = a.netInput && G.time - (a.netInputAt || 0) <= 0.45;
   const it = fresh ? a.netInput : {
     fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
@@ -697,30 +724,10 @@ function stepRemotePlayer(a, dt) {
     tryReload(a);
   }
 
-  const fwd = clamp(it.fwd || 0, -1, 1);
-  const str = clamp(it.strafe || 0, -1, 1);
+  /* The same integrator the sender predicted with, which is the only reason a
+     guest's replay can converge on this. */
   const w = WBY[a.weapon];
-  let speed = CFG.playerSpeed * w.speed;
-  const sprinting = !!it.sprint && fwd > 0 && !it.fire && a.reloadT <= 0;
-  if (sprinting) speed *= CFG.sprintMul;
-
-  const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
-  let mx = sy * fwd - cy * str;
-  let mz = cy * fwd + sy * str;
-  const ml = Math.hypot(mx, mz);
-  /* Same clamp as stepPlayer, and it has to be the same: the wire already
-     carries fwd/strafe as floats in [-1,1], so if the authority normalized
-     while the sender clamped, a guest pushing its stick half way would predict
-     a walk and be corrected into a run on every snapshot. */
-  if (ml > 1) { mx /= ml; mz /= ml; }
-  mx *= speed; mz *= speed;
-  const acc = a.onGround ? CFG.accelGround : CFG.accelAir;
-  a.vel.x = damp(a.vel.x, mx, acc, dt);
-  a.vel.z = damp(a.vel.z, mz, acc, dt);
-  if (it.jump && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
-
-  const res = moveActor(a.pos, a.vel, dt, {});
-  a.onGround = res.onGround;
+  const sprinting = applyMovement(a, it, dt).sprinting;
   if (a.reloadT > 0) { a.reloadT -= dt; if (a.reloadT <= 0) finishReload(a); }
   if (a.fireCd > 0) a.fireCd -= dt;
 

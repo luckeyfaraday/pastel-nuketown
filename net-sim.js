@@ -290,7 +290,8 @@ function createLink(clock, opts) {
   const rng = mulberry32(opts.seed === undefined ? 1 : opts.seed);
 
   const inflight = [];
-  const stats = { sent: 0, dropped: 0, delivered: 0, rejected: 0, staleEpoch: 0 };
+  const stats = { sent: 0, dropped: 0, delivered: 0, rejected: 0, staleEpoch: 0,
+    fromGuest: 0, fromHost: 0 };
   let relayLastSeq = -1;
   /* Rooms open at epoch 1 (server.mjs), and the relay drops a message whose
      epoch does not match -- for guest input, silently, with no error back.
@@ -320,6 +321,7 @@ function createLink(clock, opts) {
     stats: stats,
     /* Guest -> relay -> host. */
     fromGuest(message) {
+      stats.fromGuest++;
       if (message.t !== 'input') { enqueue('host', message); return; }
       if (!epochCurrent(message)) return;
       const sanitized = NETP.sanitizeInput(message, relayLastSeq);
@@ -329,6 +331,7 @@ function createLink(clock, opts) {
     },
     /* Host -> relay -> guest, forwarded as-is once the epoch checks out. */
     fromHost(message) {
+      stats.fromHost++;
       if (!epochCurrent(message)) return;
       enqueue('guest', message);
     },
@@ -540,6 +543,27 @@ function duel(opts = {}) {
   const hostReaction = opts.hostReactionMs === undefined ? 0 : opts.hostReactionMs;
   const guestReaction = opts.guestReactionMs === undefined ? 0 : opts.guestReactionMs;
 
+  /* Strafing turns this into a different measurement, and a necessary one.
+
+     Standing still, a guest's stale view of a stationary enemy is identical to
+     a fresh one, so the stationary duel cannot see interpolation or prediction
+     work at all -- it credits neither. Moving exposes the guest's own
+     reconciliation: it computes its aim from where it believes it is, the host
+     resolves that yaw from where the authority says it is, and while those
+     differ by v*RTT the angle is wrong by the parallax between them. At duel
+     range that is a clean miss on a body, and it is invisible to any scenario
+     where nobody moves.
+
+     A moving TARGET, by contrast, is still hit reliably: lag compensation
+     rewinds to the instant the shooter reported. It is the moving SHOOTER that
+     pays. */
+  const strafePeriod = opts.strafePeriodMs === undefined ? 0 : opts.strafePeriodMs;
+  const strafe = (instance, elapsed) => {
+    if (strafePeriod <= 0) return;
+    const right = Math.sin((elapsed / strafePeriod) * Math.PI * 2) >= 0;
+    instance.run(`KEY.KeyD = ${right}; KEY.KeyA = ${!right};`);
+  };
+
   const started = match.clock.ms;
   const limit = opts.timeoutMs === undefined ? 4000 : opts.timeoutMs;
   let hostFiring = false;
@@ -551,6 +575,9 @@ function duel(opts = {}) {
     const elapsed = match.clock.ms - started;
     if (!hostFiring && elapsed >= hostReaction) { match.host.run('pressFire()'); hostFiring = true; }
     if (!guestFiring && elapsed >= guestReaction) { match.guest.run('pressFire()'); guestFiring = true; }
+    /* Both strafe on the same schedule, so neither is given an easier target. */
+    strafe(match.host, elapsed);
+    strafe(match.guest, elapsed);
     match.host.run(HOST_AIM);
     match.guest.run(GUEST_AIM);
     match.tick();
@@ -616,6 +643,61 @@ function duelWinRate(opts = {}) {
   };
 }
 
+/* The guest's own prediction error, in metres: how far its idea of where it
+   is stands from where the authority will put it when it resolves the shot the
+   guest is aiming right now.
+
+   This is the mechanism behind the moving-duel handicap, and unlike the
+   handicap it stays continuous instead of saturating. The guest computes its
+   aim from its local position at time T; the host applies that yaw from the
+   authoritative position at roughly T + one upstream latency, because that is
+   when the input lands. With honest prediction those two agree and the error
+   is ~0. With a blind damp toward an authoritative state that is already a
+   round trip old, the controller's steady state is e = -v*RTT: the correction
+   converges on exactly cancelling the prediction, and the error is the whole
+   distance the player covers in a round trip. */
+function measurePredictionErrorM(opts = {}) {
+  const match = createMatch(opts);
+  match.run(1.0);
+  const latencyMs = opts.latencyMs === undefined ? 96 : opts.latencyMs;
+
+  /* Hold a straight sprint: a steady velocity is what makes a steady-state
+     error observable rather than averaged away by turning. */
+  match.guest.run('KEY.KeyW = true;');
+
+  const pending = [];
+  const errors = [];
+  const steps = Math.round((opts.seconds === undefined ? 4 : opts.seconds) / FIXED);
+  for (let i = 0; i < steps; i++) {
+    match.tick();
+    pending.push({
+      dueAt: match.clock.ms + latencyMs,
+      pos: match.guest.get('({x: G.player.pos.x, y: G.player.pos.y, z: G.player.pos.z})')
+    });
+    while (pending.length && pending[0].dueAt <= match.clock.ms) {
+      const believed = pending.shift().pos;
+      const authoritative = match.host.get(
+        "(() => { const a = G.actors.find(x => x.controller === 'remote');" +
+        '        return {x: a.pos.x, y: a.pos.y, z: a.pos.z}; })()');
+      /* Discard the settling period, and any tick where the guest was not
+         actually moving -- a stationary player has no error to report. */
+      if (i > 90) {
+        errors.push(Math.hypot(
+          believed.x - authoritative.x,
+          believed.y - authoritative.y,
+          believed.z - authoritative.z));
+      }
+    }
+  }
+
+  errors.sort((a, b) => a - b);
+  return {
+    samples: errors.length,
+    medianM: errors.length ? errors[Math.floor(errors.length / 2)] : null,
+    match
+  };
+}
+
 /* How far into the past the guest renders the host's body. Sampled against
    the host's own position history rather than assumed from the constants, so
    it measures what the renderer does and not what the code says it does. */
@@ -668,6 +750,7 @@ module.exports = {
   disableHitPrediction,
   probeFeedback,
   measureViewLatencyMs,
+  measurePredictionErrorM,
   createInstance,
   createLink,
   createMatch,
