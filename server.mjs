@@ -645,7 +645,11 @@ export function createRelayServer(options = {}) {
       return;
     }
     if (message.v !== Protocol.VERSION) {
-      sendError(peer, 'version', 'Unsupported protocol version.');
+      /* The client renders this string verbatim, and the only person who ever
+         sees it is a player holding a page from before the last deploy. Naming
+         the protocol tells them nothing they can act on; "reload" is the whole
+         remedy, so say that instead. */
+      sendError(peer, 'version', 'This game is out of date. Reload the page to keep playing.');
       return;
     }
 
