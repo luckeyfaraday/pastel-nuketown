@@ -25,6 +25,21 @@ const NET_SNAPSHOT_INTERVAL = 1 / 20;
    but not once per 60Hz tick: the relay closes a peer over 90 messages a
    second, and snapshots already claim 20 of those. */
 const NET_EVENT_INTERVAL = 1 / 30;
+/* One recorded step per simulated tick; a second of them is far more than the
+   round trip a replay ever has to cover, and bounds the buffer if the socket
+   stalls. */
+const NET_MAX_PENDING_STEPS = 120;
+/* Bounded so a guest that stalls and then floods cannot make the host work
+   through a backlog of stale intent. Overflow drops the oldest: being current
+   matters more than being complete. */
+const NET_MAX_INPUT_QUEUE = 6;
+/* Past this the replay landed somewhere unrelated to the screen -- a respawn,
+   not a misprediction -- and easing into it would drag the body across the
+   map. */
+const NET_SNAP_DISTANCE = 3;
+/* How much of a small residual to leave on screen for the next frame to
+   absorb. Low, because the residual is now nearly always zero. */
+const NET_RESIDUAL_SMOOTHING = 0.5;
 const NET_MAX_HISTORY_SAMPLES = 32;
 const NET_MAX_REPLICA_SAMPLES = 16;
 const NET = {
@@ -46,6 +61,8 @@ const NET = {
   lastInputAck: 0,
   snapshotAcc: 0,
   eventAcc: 0,
+  pendingSteps: [],
+  lastResidual: 0,
   lastSnapshotTick: -1,
   lastSnapshotTime: -1,
   snapshotInterval: NET_SNAPSHOT_INTERVAL,
@@ -391,6 +408,8 @@ function netResetTransport() {
   NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
   NET.eventAcc = 0;
+  NET.pendingSteps = [];
+  NET.lastResidual = 0;
   NET.lastSnapshotTick = -1;
   NET.lastSnapshotTime = -1;
   NET.snapshotInterval = NET_SNAPSHOT_INTERVAL;
@@ -576,6 +595,15 @@ function netHandleWire(raw) {
     if (!a) return;
     const checked = NETP.sanitizeInput(msg, a.lastInputSeq, a.lastWeaponSeq);
     if (!checked.ok) return;
+    /* Queued rather than assigned. A guest now sends one input per simulated
+       tick, and jitter means two can land between two host ticks; overwriting
+       would silently drop one, and a dropped input is one the guest predicted
+       with and the authority never applied -- exactly the disagreement that
+       replay exists to remove. */
+    if (!a.netInputQueue) a.netInputQueue = [];
+    a.netInputQueue.push(checked.value);
+    if (a.netInputQueue.length > NET_MAX_INPUT_QUEUE)
+      a.netInputQueue.splice(0, a.netInputQueue.length - NET_MAX_INPUT_QUEUE);
     a.netInput = checked.value;
     a.lastInputSeq = checked.value.seq;
     a.lastWeaponSeq = checked.value.weaponSeq;
@@ -656,6 +684,8 @@ function netBeginMatch() {
   NET.lastInputAck = 0;
   NET.snapshotAcc = 0;
   NET.eventAcc = 0;
+  NET.pendingSteps = [];
+  NET.lastResidual = 0;
   NET.lastSnapshotTick = -1;
   NET.lastSnapshotTime = -1;
   NET.snapshotInterval = NET_SNAPSHOT_INTERVAL;
@@ -894,6 +924,9 @@ function netBeginLagCompensation(shooter, renderTime) {
 }
 
 function netAfterSimulation(dt, force) {
+  /* Once per simulated tick, so the host consumes input at exactly the rate
+     the guest predicted with. */
+  if (netIsGuest() && NET.phase === 'playing') netSendInput();
   if (netIsHost() && NET.phase === 'playing') netRecordActorHistory();
   if (!netIsHost() || NET.phase !== 'playing' || !netSocketOpen()) return;
   NET.snapshotAcc += dt;
@@ -965,13 +998,23 @@ function netDisplayedRenderTime() {
   return NET.renderTime;
 }
 
+/* Render-rate work only. Input used to be sent from here, gated to 33ms, which
+   made it a sample of the player's intent taken on the display's clock rather
+   than the simulation's. Two consequences, both paid by the guest: up to 33ms
+   of dead time before anything was sent -- the residue that still loses a duel
+   81/19 on a 5ms LAN, where the network is nearly free -- and an input stream
+   the host consumed at a different rate than the guest predicted with, which
+   makes an exact replay impossible. Sending is now netSendInput, once per
+   simulation tick. */
 function netFrame(now) {
   if (!netIsGuest() || NET.phase !== 'playing' || !G.player || !netSocketOpen()) return;
-  const nextRenderTime = netGuestRenderTime(now / 1000);
-  const displayedRenderTime = NET.renderTime || nextRenderTime;
-  NET.renderTime = nextRenderTime;
-  if (now - NET.lastInputSentAt < 33) return;
-  NET.lastInputSentAt = now;
+  NET.renderTime = netGuestRenderTime(now / 1000);
+}
+
+function netSendInput() {
+  if (!netIsGuest() || NET.phase !== 'playing' || !G.player || !netSocketOpen()) return;
+  const now = performance.now();
+  const displayedRenderTime = NET.renderTime;
   const active = G.started && !G.paused && !G.over && G.player.alive;
   const p = G.player;
   const edgePending = IN.fireSeq > NET.lastFireSeqSent;
@@ -1010,6 +1053,72 @@ function netFrame(now) {
     if (NET.inputSentTimes.size > 64)
       NET.inputSentTimes.delete(NET.inputSentTimes.keys().next().value);
   }
+  /* Stamp the step this tick predicted with the sequence that carried it, so
+     reconciliation knows which steps the host has already accounted for. */
+  for (let i = NET.pendingSteps.length - 1; i >= 0; i--) {
+    if (NET.pendingSteps[i].seq !== null) break;
+    NET.pendingSteps[i].seq = seq;
+  }
+}
+
+/* One entry per simulated tick, holding the intent that tick was given. The
+   struct is readLocalInput's, unchanged, so a replay feeds applyMovement
+   exactly what the live step fed it. */
+function netRecordPredictedStep(input, dt) {
+  if (!netIsGuest() || NET.phase !== 'playing') return;
+  NET.pendingSteps.push({
+    seq: null,
+    dt: dt,
+    input: {
+      fwd: input.fwd, strafe: input.strafe,
+      jump: input.jump, sprint: input.sprint, fire: input.fire
+    }
+  });
+  if (NET.pendingSteps.length > NET_MAX_PENDING_STEPS)
+    NET.pendingSteps.splice(0, NET.pendingSteps.length - NET_MAX_PENDING_STEPS);
+}
+
+/* Reconciliation by replay.
+
+   What this replaces damped the local player 16% of the way toward the
+   authoritative state on every snapshot. That state describes where the guest
+   was a full round trip ago, so the controller's fixed point is e = -v*RTT: it
+   converges on cancelling the prediction outright, and the guest ends up
+   rendered where the host thought it was ~190ms earlier. Correct velocity, so
+   it does not feel slow -- it feels floaty, and releasing a key slides you
+   about a metre past where you stopped.
+
+   Replay instead: take the authoritative state, re-apply every input the host
+   has not acknowledged yet, and land where those inputs actually put you. When
+   prediction was right the result equals what was already on screen and
+   nothing moves. Only genuine mispredictions produce a correction. */
+function netReconcilePlayer(a, s) {
+  const steps = NET.pendingSteps;
+  let kept = 0;
+  while (kept < steps.length && steps[kept].seq !== null && steps[kept].seq <= s.ack) kept++;
+  if (kept > 0) steps.splice(0, kept);
+
+  const shownX = a.pos.x, shownY = a.pos.y, shownZ = a.pos.z;
+
+  a.pos.x = s.pos[0]; a.pos.y = s.pos[1]; a.pos.z = s.pos[2];
+  a.vel.x = s.vel[0]; a.vel.y = s.vel[1]; a.vel.z = s.vel[2];
+  a.onGround = !!s.onGround;
+
+  for (const step of steps) applyMovement(a, step.input, step.dt);
+
+  const residual = Math.hypot(a.pos.x - shownX, a.pos.y - shownY, a.pos.z - shownZ);
+  /* A replay that lands somewhere far from the screen is a teleport -- a
+     respawn, or a correction after a long stall -- not a misprediction to ease
+     into. Take it as-is. Below that, ease the last of it out over a few frames
+     so a small disagreement is not a visible flick; the offset is applied to
+     the predicted result rather than to the authority, so it delays only the
+     appearance of the correction and never the correction itself. */
+  if (residual > 0.02 && residual <= NET_SNAP_DISTANCE) {
+    a.pos.x = lerp(a.pos.x, shownX, NET_RESIDUAL_SMOOTHING);
+    a.pos.y = lerp(a.pos.y, shownY, NET_RESIDUAL_SMOOTHING);
+    a.pos.z = lerp(a.pos.z, shownZ, NET_RESIDUAL_SMOOTHING);
+  }
+  return residual;
 }
 
 function netFiniteIn(value, min, max) {
@@ -1138,13 +1247,7 @@ function netApplyActorState(a, s, local, sampleTime) {
   if (local) {
     netObserveInputAck(s.ack);
     if (Number.isInteger(s.id)) a.id = s.id;
-    const dx = s.pos[0] - a.pos.x, dy = s.pos[1] - a.pos.y, dz = s.pos[2] - a.pos.z;
-    const err = Math.hypot(dx, dy, dz);
-    const correction = err > 3 ? 1 : 0.16;
-    a.pos.x += dx * correction; a.pos.y += dy * correction; a.pos.z += dz * correction;
-    a.vel.x = lerp(a.vel.x, s.vel[0], 0.3);
-    a.vel.y = lerp(a.vel.y, s.vel[1], 0.3);
-    a.vel.z = lerp(a.vel.z, s.vel[2], 0.3);
+    NET.lastResidual = netReconcilePlayer(a, s);
     if (oldWeapon !== a.weapon) vmSetWeapon(a.weapon);
     if (wasAlive && !a.alive) {
       const killer = G.actors.find(x => x.netId === NET.lastKillerId);
