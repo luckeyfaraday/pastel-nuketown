@@ -1,2 +1,16 @@
 node_modules/
 .build.tmp
+.context-workspace/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+*.sqlite
+*.db
+.DS_Store
+id_rsa
+id_ed25519
+authorized_keys

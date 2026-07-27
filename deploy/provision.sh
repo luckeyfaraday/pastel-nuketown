@@ -9,7 +9,7 @@ set -euo pipefail
 
 DOMAIN="${DOMAIN:-relay.luckeysystems.com}"
 SITE="${SITE:-nuketown.luckeysystems.com}"
-ADMIN="${ADMIN:-alan}"
+ADMIN="${ADMIN:-deploy}"
 APP_DIR="${APP_DIR:-/opt/pastel-nuketown}"
 REPO="${REPO:-https://github.com/luckeyfaraday/pastel-nuketown.git}"
 # Deploy something other than main — a fix branch, or a tag — with:
@@ -193,7 +193,7 @@ say "done — remaining manual step"
 cat <<'NEXT'
 Confirm key login as the admin user from another terminal FIRST:
 
-    ssh alan@relay.luckeysystems.com 'sudo -n true && echo sudo-ok'
+    ssh <admin-user>@relay.luckeysystems.com 'sudo -n true && echo sudo-ok'
 
 Only once that prints sudo-ok, harden sshd:
 
