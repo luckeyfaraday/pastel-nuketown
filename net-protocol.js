@@ -432,8 +432,13 @@
 
   /* The room browser is fetched over plain HTTP, so the payload is as
      untrusted as anything arriving on the socket. Drop entries that are
-     malformed, duplicated, or no longer joinable rather than the whole list —
-     one bad row should not blank the browser. */
+     malformed, duplicated, or impossible rather than the whole list — one bad
+     row should not blank the browser.
+
+     `inProgress` rooms are listed but not joinable: a room disappearing the
+     moment it got interesting is what made the browser read empty while people
+     were playing. They are the only rows allowed to be full, since a running
+     room's seats say nothing about whether you could take one. */
   function cleanRoomSummaries(value, limit) {
     if (!Array.isArray(value)) return [];
 
@@ -454,11 +459,19 @@
       var capacity = Number.isSafeInteger(raw.max) && raw.max > 0
         ? Math.min(raw.max, MAX_PLAYERS)
         : MAX_PLAYERS;
+      var inProgress = raw.inProgress === true;
       if (!Number.isSafeInteger(raw.players) || raw.players < 1 ||
-          raw.players >= capacity) continue;
+          raw.players > capacity ||
+          (!inProgress && raw.players === capacity)) continue;
 
       seen[code] = true;
-      out.push({ code: code, host: host, players: raw.players, max: capacity });
+      out.push({
+        code: code,
+        host: host,
+        players: raw.players,
+        max: capacity,
+        inProgress: inProgress
+      });
     }
 
     return out;

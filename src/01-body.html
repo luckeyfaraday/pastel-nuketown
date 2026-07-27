@@ -72,25 +72,31 @@
       <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
     </label>
     <div class="menu-actions">
+      <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
       <button class="menu-btn" id="play">SOLO</button>
-      <button class="menu-btn alt setup-only" id="hostGame">CREATE ROOM</button>
-    </div>
-    <label class="listed setup-only" for="roomPublic">
-      <input type="checkbox" id="roomPublic" checked>
-      <span>SHOW MY ROOM IN THE BROWSER</span>
-    </label>
-    <div class="join-row setup-only">
-      <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
-      <button class="mini-btn" id="joinGame">JOIN</button>
     </div>
     <div class="rooms setup-only">
       <div class="rooms-head">
-        <span>OPEN ROOMS</span>
+        <span>ROOMS</span>
         <button class="mini-btn" id="refreshRooms">REFRESH</button>
       </div>
       <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
     </div>
-    <div id="menuNote">Join an open room below, create your own, or enter a six-character code.</div>
+    <button class="link-btn setup-only" id="roomToggle" type="button" aria-expanded="false" aria-controls="roomOptions">ROOM OPTIONS</button>
+    <div id="roomOptions" class="setup-only" hidden>
+      <div class="join-row">
+        <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
+        <button class="mini-btn" id="joinGame">JOIN</button>
+      </div>
+      <div class="opt-row">
+        <button class="mini-btn" id="hostGame">CREATE ROOM</button>
+        <label class="listed" for="roomPublic">
+          <input type="checkbox" id="roomPublic" checked>
+          <span>LIST IT PUBLICLY</span>
+        </label>
+      </div>
+    </div>
+    <div id="menuNote">PLAY finds you a room with people in it. SOLO is you and eight bots.</div>
   </div>
   <div id="lobby" class="panel" hidden>
     <div class="lobby-head">
@@ -99,6 +105,10 @@
     </div>
     <div class="roster-title"><span>PLAYERS</span><b id="rosterCount">1 / 4</b></div>
     <ul id="roster"></ul>
+    <div id="lobbyCountdown" hidden>
+      <span id="countdownText"></span>
+      <button class="mini-btn" id="holdStart" type="button">HOLD</button>
+    </div>
     <div class="lobby-actions">
       <button class="menu-btn" id="netStart">START MATCH</button>
       <button class="mini-btn" id="netLeave">LEAVE</button>
