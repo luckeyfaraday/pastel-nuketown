@@ -4412,7 +4412,7 @@ function buildCharacter(colors) {
     B.box([-0.040, -0.02, 0.10], [0.040, 0.055, 0.26], C(0xe9e2f2));
   }, false);
   gun.position.set(0, -CH.armLen + 0.02, -0.10);
-  gun.rotation.x = Math.PI / 2;
+  gun.rotation.x = -Math.PI / 2;   // barrel down the arm and out of the mitt
   armR.add(gun);
   const muzzle = new THREE.Object3D();
   muzzle.position.set(0, 0, -0.54);
@@ -4584,7 +4584,7 @@ function animateCharacter(ch, a, dt, t) {
     ch.root.scale.setScalar(Math.max(0.001, sc));
     ch.legL.rotation.x = -0.5; ch.legR.rotation.x = 0.35;
     ch.armL.rotation.z = 0.9; ch.armR.rotation.z = -1.1;
-    ch.armL.rotation.x = -0.6; ch.armR.rotation.x = -0.4;
+    ch.armL.rotation.x = 0.6; ch.armR.rotation.x = 0.4;
     return;
   }
 
@@ -4607,7 +4607,7 @@ function animateCharacter(ch, a, dt, t) {
   const lead = angDelta(a.bodyYaw, a.aimYaw + Math.PI);
   ch.hips.rotation.y = damp(ch.hips.rotation.y, clamp(lead, -1.1, 1.1) * 0.55, 12, dt);
   ch.headPiv.rotation.y = damp(ch.headPiv.rotation.y, clamp(lead, -1.3, 1.3) * 0.45, 14, dt);
-  ch.headPiv.rotation.x = damp(ch.headPiv.rotation.x, clamp(-a.aimPitch, -0.6, 0.6), 12, dt);
+  ch.headPiv.rotation.x = damp(ch.headPiv.rotation.x, clamp(a.aimPitch, -0.6, 0.6), 12, dt);
 
   // --- gait ---
   const stride = clamp(spd / 6.2, 0, 1.35);
@@ -4625,16 +4625,20 @@ function animateCharacter(ch, a, dt, t) {
     ch.hips.position.y = damp(ch.hips.position.y, 0, 9, dt);
   }
 
-  // --- arms: raised into a firing pose when engaged, swinging otherwise ---
+  /* --- arms: raised into a firing pose when engaged, swinging otherwise ---
+     The rig faces -Z, so rotating a shoulder by +X swings that arm forward,
+     past +PI/2 tips it skyward. Every sign below reads from that: the fire
+     pose sits just under the horizontal, aiming up adds pitch, recoil adds
+     more, and the swing puts each arm opposite the leg on its own side. */
   const aimUp = a.aiming ? 1 : 0;
   a.aimBlend = damp(a.aimBlend, aimUp, 10, dt);
-  const rest = -sw * 0.62, restL = sw * 0.62;
-  const fireX = -1.42 + clamp(-a.aimPitch, -0.7, 0.7);
-  ch.armR.rotation.x = damp(ch.armR.rotation.x, lerp(rest, fireX, a.aimBlend) - a.recoil * 0.55, 16, dt);
-  ch.armL.rotation.x = damp(ch.armL.rotation.x, lerp(restL, fireX + 0.12, a.aimBlend) - a.recoil * 0.35, 16, dt);
+  const rest = sw * 0.62, restL = -sw * 0.62;
+  const fireX = 1.42 + clamp(a.aimPitch, -0.7, 0.7);
+  ch.armR.rotation.x = damp(ch.armR.rotation.x, lerp(rest, fireX, a.aimBlend) + a.recoil * 0.55, 16, dt);
+  ch.armL.rotation.x = damp(ch.armL.rotation.x, lerp(restL, fireX - 0.12, a.aimBlend) + a.recoil * 0.35, 16, dt);
   ch.armR.rotation.z = damp(ch.armR.rotation.z, lerp(0.06, -0.30, a.aimBlend), 14, dt);
   ch.armL.rotation.z = damp(ch.armL.rotation.z, lerp(-0.06, 0.46, a.aimBlend), 14, dt);
-  ch.armL.rotation.y = damp(ch.armL.rotation.y, lerp(0, -0.55, a.aimBlend), 14, dt);
+  ch.armL.rotation.y = damp(ch.armL.rotation.y, lerp(0, 0.55, a.aimBlend), 14, dt);
 
   // recoil + flinch decay
   a.recoil = Math.max(0, a.recoil - dt * 6.5);
