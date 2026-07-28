@@ -106,14 +106,14 @@ const RES = {
 function pinRes(on) {
   RES.pinned = !!on;
   renderer.setPixelRatio(on ? 1 : RES.scale);
-  renderer.setSize(innerWidth, innerHeight);
+  syncViewSize(true);
 }
 function initAdaptiveRes() {
   RES.max = SOFTWARE_GPU ? 0.72 : Math.min(devicePixelRatio || 1, 1.75);
   RES.min = SOFTWARE_GPU ? 0.38 : 0.6;
   RES.scale = SOFTWARE_GPU ? 0.5 : RES.max;
   renderer.setPixelRatio(RES.scale);
-  renderer.setSize(innerWidth, innerHeight);
+  syncViewSize(true);
 }
 function updateAdaptiveRes(dt) {
   RES.hist.push(dt);
@@ -127,7 +127,7 @@ function updateAdaptiveRes(dt) {
   if (Math.abs(s - RES.scale) > 0.005) {
     RES.scale = s;
     renderer.setPixelRatio(s);
-    renderer.setSize(innerWidth, innerHeight);
+    syncViewSize(true);
   }
   RES.cool = 0.7;
 }

@@ -301,6 +301,53 @@ document.body.appendChild(canvas);
 let renderer, scene, camera, sunLight;
 let SOFTWARE_GPU = false;
 
+/* =====================================================================
+   VIEWPORT SIZE
+   The drawing surface follows the canvas element, never innerWidth /
+   innerHeight. On a phone those two disagree exactly when it matters: a
+   rotation (or the fullscreen a match start asks for) resizes the layout
+   viewport, and the `resize` that follows can carry the pre-transition
+   numbers. Everything else on screen is laid out by CSS and moves with the
+   change; a canvas sized from the stale numbers keeps the inline width and
+   height three.js writes and no longer covers the screen, leaving a band of
+   page background — same #cfe8f5 as the sky, so it reads as a cut-off
+   render — and putting the picture out of register with the crosshair.
+
+   So the stylesheet owns the display size (that's setSize's third argument,
+   which stops three.js from writing over it), the drawing buffer is measured
+   off the element, and it's the element that gets watched: a ResizeObserver
+   fires for every cause, including the ones that never reach `resize`. */
+function viewW() { return Math.max(1, Math.round(canvas.clientWidth) || innerWidth); }
+function viewH() { return Math.max(1, Math.round(canvas.clientHeight) || innerHeight); }
+
+let viewW0 = 0, viewH0 = 0;
+/* `force` is for a pixel-ratio change, where the CSS size is the same but the
+   buffer behind it has to be reallocated anyway. */
+function syncViewSize(force) {
+  const w = viewW(), h = viewH();
+  if (!force && w === viewW0 && h === viewH0) return;
+  viewW0 = w; viewH0 = h;
+  if (camera) { camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  if (vmCam) { vmCam.aspect = w / h; vmCam.updateProjectionMatrix(); }
+  if (renderer) renderer.setSize(w, h, false);
+}
+
+/* Several of these fire together for one rotation, and a couple fire while
+   the layout is still settling, so coalesce into the next frame. */
+function watchViewSize() {
+  let queued = false;
+  const sync = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; syncViewSize(); });
+  };
+  addEventListener('resize', sync);
+  addEventListener('orientationchange', sync);
+  document.addEventListener('fullscreenchange', sync);
+  if (window.visualViewport) visualViewport.addEventListener('resize', sync);
+  if (window.ResizeObserver) new ResizeObserver(sync).observe(canvas);
+}
+
 /* Which GPU are we on? This has to be answered BEFORE the real context is
    made, because `antialias` is baked in at creation and MSAA is the single
    most expensive thing you can ask a software rasteriser for. So probe with
@@ -327,7 +374,7 @@ function initRenderer() {
     antialias: !SOFTWARE_GPU,          // MSAA is ~4x the fill cost in SwiftShader
     powerPreference: 'high-performance'
   });
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(viewW(), viewH(), false);
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.setClearColor(C(0xcfe8f5), 1);
 
@@ -347,13 +394,11 @@ function initRenderer() {
   scene = new THREE.Scene();
   scene.fog = new THREE.Fog(C(0xd7dcf2), 95, 250);
 
-  camera = new THREE.PerspectiveCamera(74, innerWidth / innerHeight, 0.06, 400);
+  camera = new THREE.PerspectiveCamera(74, viewW() / viewH(), 0.06, 400);
   camera.rotation.order = 'YXZ';
 
-  addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);   // RES.scale is kept by setPixelRatio
-  });
+  syncViewSize(true);        // RES.scale is kept by setPixelRatio
+  watchViewSize();
 }
 
 function initLights() {

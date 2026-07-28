@@ -142,8 +142,10 @@ function buildGunMesh(w) {
 function initViewmodel() {
   STAR_TEX = starTexture();
   vmScene = new THREE.Scene();
-  vmCam = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.01, 8);
-  addEventListener('resize', () => { vmCam.aspect = innerWidth / innerHeight; vmCam.updateProjectionMatrix(); });
+  /* Aspect is kept in step by syncViewSize, along with the world camera and
+     the drawing buffer — the viewmodel has to agree with the scene it is
+     composited over, so there is one place that measures the viewport. */
+  vmCam = new THREE.PerspectiveCamera(58, viewW() / viewH(), 0.01, 8);
 
   vmScene.add(new THREE.HemisphereLight(C(0xffffff), C(0xd9c9e8), 0.50));
   const d = new THREE.DirectionalLight(C(0xfff4d9), 0.72); d.position.set(-0.6, 1.1, 0.9); vmScene.add(d);
