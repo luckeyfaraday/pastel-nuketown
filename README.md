@@ -84,8 +84,8 @@ On a touch device the on-screen controls appear on their own — no setting to f
 |---|---|
 | Drag on the left half | Move (analog thumbstick; the base spawns wherever your thumb lands) |
 | Push the stick fully forward | Sprint |
-| Drag on the right half | Look |
-| FIRE | Fire (hold for full-auto) |
+| Drag on the right half | Look; a quick tap fires |
+| FIRE | Hold to aim and release to fire; BUBBLEGUN remains hold-for-full-auto |
 | ⤒ | Jump |
 | ⟳ | Reload |
 | 1 / 2 / 3 | Select BUBBLEGUN / MARSHMALLOW / LOLLIPOP |
@@ -179,7 +179,7 @@ Yes. Solo mode fills the arena with 8 AI bots across three difficulty levels. Bo
 Any modern evergreen browser: Chrome, Firefox, Edge, and Safari. The game uses Pointer Lock, WebGL (via Three.js), and WebSockets.
 
 **Can I play on a phone or tablet?**
-Yes. Touch devices get on-screen controls automatically: an analog thumbstick on the left, look-drag on the right, and a fire / jump / reload cluster with weapon chips. Pointer Lock is not used on touch — it would swallow the drag events the controls need — so pausing is a button rather than Esc. Landscape is recommended; portrait shows a dismissible nudge. The stick is analog end to end, including over the network: the wire protocol already carried movement as clamped floats, so a half-push travels as a half-push.
+Yes. Touch devices get on-screen controls automatically: an analog thumbstick on the left, look-drag or tap-to-fire on the right, and a fire / jump / reload cluster with weapon chips. The shotgun and rifle fire when you lift from FIRE, so you can hold to aim first; the BUBBLEGUN still starts immediately and fires for as long as you hold. Pointer Lock is not used on touch — it would swallow the drag events the controls need — so pausing is a button rather than Esc. Landscape is recommended; portrait shows a dismissible nudge. The stick is analog end to end, including over the network: the wire protocol already carried movement as clamped floats, so a half-push travels as a half-push.
 
 **Is there a game engine or framework?**
 No. Pastel Nuketown is written in vanilla JavaScript with Three.js for rendering. There is no React, no Unity, no Godot, and no bundler. The build step is a shell script that concatenates source files.
