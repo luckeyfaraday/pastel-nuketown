@@ -48,7 +48,11 @@ function updateCrosshair(dt) {
   const p = G.player;
   const spd = p ? Math.hypot(p.vel.x, p.vel.z) : 0;
   const w = p ? WBY[p.weapon] : WEAPONS[0];
-  const base = 7 + spd * 1.5 + (w.id === 'shotgun' ? 9 : 0) + (p && !p.onGround ? 6 : 0);
+  /* A semi-auto held on touch has committed its shot to the lift, so nothing
+     happens on screen for as long as the thumb stays down. Draw the reticle in
+     while it is armed — without it the trigger reads as not having registered. */
+  const base = 7 + spd * 1.5 + (w.id === 'shotgun' ? 9 : 0) + (p && !p.onGround ? 6 : 0)
+             - (IN.touchSemiArmed ? 4 : 0);
   crossPunch = Math.max(0, crossPunch - dt * 60);
   crossSpread = damp(crossSpread, base + crossPunch, 16, dt);
   const s = crossSpread;

@@ -15,6 +15,116 @@ const SIM = require('./net-sim.js');
 
 const LIVE_LATENCY_MS = 96;   // measured on the production relay, commit 60ab2e6
 
+test('touch tap decisions reject drags, long holds, and cancellations', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+
+  assert.strictEqual(match.host.call('touchTapShouldFire', 9.9, 250, false), true);
+  assert.strictEqual(match.host.call('touchTapShouldFire', 10, 100, false), false);
+  assert.strictEqual(match.host.call('touchTapShouldFire', 2, 251, false), false);
+  assert.strictEqual(match.host.call('touchTapShouldFire', 2, 100, true), false);
+});
+
+test('a touch tap holds fire for one tick and shoots exactly once', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+  match.host.run("switchWeapon('rifle'); G.player.fireCd = 0;");
+  const ammo = match.host.get('G.player.ammo');
+  const seq = match.host.get('IN.fireSeq');
+
+  match.host.run('pulseFireForTick();');
+  assert.strictEqual(match.host.get('IN.firing'), true);
+  match.host.run(`simulate(${SIM.FIXED})`);
+
+  assert.strictEqual(match.host.get('G.player.ammo'), ammo - 1);
+  assert.strictEqual(match.host.get('IN.fireSeq'), seq + 1);
+  assert.strictEqual(match.host.get('IN.firing'), false);
+  match.host.run(`simulate(${SIM.FIXED * 30})`);
+  assert.strictEqual(match.host.get('G.player.ammo'), ammo - 1);
+});
+
+test('a tap that lands as the player dies is not spent on the respawn', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+  match.host.run("switchWeapon('rifle'); G.player.fireCd = 0;");
+
+  /* The dead branch of stepPlayer returns before the pulse can be spent, so a
+     tap in the frame the player dies used to survive the whole death and fire
+     itself off on respawn -- popping the spawn shield on arrival. */
+  match.host.run('pulseFireForTick(); killActor(G.player, null);');
+  match.host.run(`simulate(${SIM.FIXED})`);
+  assert.strictEqual(match.host.get('IN.firing'), false);
+  assert.strictEqual(match.host.get('IN._releaseFireAfterTick'), false);
+
+  match.host.run(`G.player.respawnT = 0; simulate(${SIM.FIXED * 2})`);
+  assert.strictEqual(match.host.get('G.player.alive'), true);
+  assert.strictEqual(match.host.get('G.player.ammo'),
+    match.host.get("WBY[G.player.weapon].mag"),
+    'the respawn must not open with an unasked-for shot');
+  assert.ok(match.host.get('G.player.shield') > 0,
+    'and must not pop its own spawn shield');
+});
+
+test('hiding touch controls cancels an armed semi-auto without firing', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+  match.host.run(`
+    switchWeapon('shotgun');
+    IN.touchSemiArmed = true;
+  `);
+  const seq = match.host.get('IN.fireSeq');
+
+  match.host.run('touchReleaseAll();');
+
+  assert.strictEqual(match.host.get('IN.touchSemiArmed'), false);
+  assert.strictEqual(match.host.get('IN.firing'), false);
+  assert.strictEqual(match.host.get('IN.fireSeq'), seq);
+});
+
+test('semi-auto touch holds to aim, releases to fire, and cancels safely', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+  match.host.run(`
+    switchWeapon('rifle');
+    G.player.vel.x = 6;
+    touchFirePress({ pointerId: 8, clientX: 900, clientY: 400,
+      preventDefault() {} });
+  `);
+  const ammo = match.host.get('G.player.ammo');
+  const seq = match.host.get('IN.fireSeq');
+  match.host.run(`simulate(${SIM.FIXED})`);
+
+  assert.strictEqual(match.host.get('G.player.ammo'), ammo,
+    'holding a semi-auto must not fire early');
+  assert.strictEqual(match.host.get('G.player.aiming'), true,
+    'the held trigger should keep the aiming pose active');
+
+  match.host.run('touchFireRelease(null, false);');
+  match.host.run(`simulate(${SIM.FIXED})`);
+  assert.strictEqual(match.host.get('G.player.ammo'), ammo - 1);
+  assert.strictEqual(match.host.get('IN.fireSeq'), seq + 1);
+
+  match.host.run(`
+    touchFirePress({ pointerId: 9, clientX: 900, clientY: 400,
+      preventDefault() {} });
+    touchFireRelease(null, true);
+  `);
+  assert.strictEqual(match.host.get('IN.fireSeq'), seq + 1,
+    'pointercancel must abort rather than discharge');
+});
+
+test('the touch FIRE button keeps the SMG press-and-hold path', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+  match.host.run(`
+    touchFirePress({ pointerId: 8, clientX: 900, clientY: 400,
+      preventDefault() {} });
+  `);
+  const ammo = match.host.get('G.player.ammo');
+  for (let i = 0; i < 12; i++) match.host.run(`simulate(${SIM.FIXED})`);
+  assert.ok(match.host.get('G.player.ammo') < ammo - 1,
+    'holding FIRE should sustain an SMG burst');
+
+  match.host.run('touchFireRelease(null, false);');
+  const releasedAmmo = match.host.get('G.player.ammo');
+  for (let i = 0; i < 12; i++) match.host.run(`simulate(${SIM.FIXED})`);
+  assert.strictEqual(match.host.get('G.player.ammo'), releasedAmmo);
+});
+
 test('the harness runs the real client and converges host and guest', () => {
   const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5 });
   match.run(1.5);

@@ -443,7 +443,8 @@ const KEY = {};
 const TOUCH = { on: false, fwd: 0, strafe: 0, jump: false, sprint: false };
 const IN = {
   lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
-  fireSeq: 0, fireRenderTime: 0, reloadSeq: 0
+  fireSeq: 0, fireRenderTime: 0, reloadSeq: 0,
+  touchSemiArmed: false, _releaseFireAfterTick: false
 };
 /* What the slider stores is the multiplier, not the product, so the base can
    be retuned later without silently changing the feel for everyone who already
@@ -474,6 +475,21 @@ function pressFire() {
 }
 
 function releaseFire() { IN.firing = false; }
+
+/* A release-fired touch shot has to remain a level for the simulation tick
+   that sees its edge. Clearing it in the pointer handler would make solo and
+   guest prediction miss the shot entirely. */
+function pulseFireForTick() {
+  if (IN.firing) return false;
+  pressFire();
+  IN._releaseFireAfterTick = true;
+  return true;
+}
+
+function cancelFirePulse() {
+  IN._releaseFireAfterTick = false;
+  releaseFire();
+}
 
 /* The one place player intent is read. It used to be read straight off KEY/IN
    at each use site, which meant the local simulation and the guest's input
@@ -659,6 +675,11 @@ function applyMovement(a, input, dt) {
 function stepPlayer(a, dt) {
   a.aimYaw = a.yaw; a.aimPitch = a.pitch;
   if (!a.alive) {
+    /* The tick that would have spent this pulse never ran, and the branch below
+       returns before it can be cleared. Left set, it survives the respawn and
+       spends itself on a shot nobody asked for -- which also pops the spawn
+       shield the moment it is granted. */
+    if (IN._releaseFireAfterTick) cancelFirePulse();
     if (typeof netIsGuest === 'function' && netIsGuest()) return;
     a.respawnT -= dt;
     if (a.respawnT <= 0) { respawnActor(a); hideDeadScreen(); }
@@ -685,7 +706,7 @@ function stepPlayer(a, dt) {
 
   if (a.reloadT > 0) { a.reloadT -= dt; if (a.reloadT <= 0) finishReload(a); }
   if (a.fireCd > 0) a.fireCd -= dt;
-  a.aiming = firing || (!sprinting && spd < 4.5);
+  a.aiming = firing || IN.touchSemiArmed || (!sprinting && spd < 4.5);
 
   if (firing && !sprinting) {
     const w2 = WBY[a.weapon];
@@ -693,6 +714,10 @@ function stepPlayer(a, dt) {
     else if (!IN._heldSemi) { if (fireWeapon(a, IN.fireSeq)) IN._heldSemi = true; }
   }
   if (!firing) IN._heldSemi = false;
+  if (firing && IN._releaseFireAfterTick) {
+    IN._releaseFireAfterTick = false;
+    releaseFire();
+  }
   syncPlayerAmmoStore();
 }
 

@@ -22,6 +22,7 @@ const TUI = {
   visible: false,            // controls currently on screen
   sens: 0.0044,              // radians per CSS pixel of look drag
   stickId: -1, lookId: -1,   // pointerIds we own, -1 when free
+  tapId: -1, tapTravel: 0, tapAt: 0,
   stickX: 0, stickY: 0,      // stick base, in client coords
   lookX: 0, lookY: 0,        // last look sample, for deltas
   radius: 54,                // stick throw, CSS px
@@ -37,6 +38,11 @@ const TOUCH_DEADZONE = 0.14;
    no screen space and no second thumb. Just under full so a slightly
    off-centre push still sprints. */
 const TOUCH_SPRINT_AT = 0.86;
+/* TUI.sens is 0.0044 radians per CSS pixel, so 10px turns about 2.5
+   degrees — too little movement to count as a deliberate look drag. */
+const TAP_SLOP_PX = 10;
+/* A longer hold is an aim gesture even if the thumb happened to stay still. */
+const TAP_MS = 250;
 const TOUCH_NUB_R = 27;      // half the nub, for centring its transform
 
 /* =====================================================================
@@ -95,10 +101,10 @@ function bindTouchControls() {
      half of the screen must keep steering, and a pointerup delivered
      somewhere else must still release the control. */
   addEventListener('pointermove', onTouchMove, { passive: false });
-  addEventListener('pointerup', onTouchUp);
-  addEventListener('pointercancel', onTouchUp);
+  addEventListener('pointerup', e => onTouchUp(e, false));
+  addEventListener('pointercancel', e => onTouchUp(e, true));
 
-  touchButton('tFire', e => { claimLook(e); pressFire(); }, releaseFire);
+  touchButton('tFire', touchFirePress, touchFireRelease);
   touchButton('tJump', () => { TOUCH.jump = true; }, () => { TOUCH.jump = false; });
   touchButton('tReload', () => {
     if (!G.player) return;
@@ -131,13 +137,13 @@ function touchButton(target, onPress, onRelease) {
     el.classList.add('down');
     onPress(e);
   });
-  const up = e => {
+  const up = (e, cancelled) => {
     if (!el.classList.contains('down')) return;
     el.classList.remove('down');
-    if (onRelease) onRelease(e);
+    if (onRelease) onRelease(e, cancelled);
   };
-  el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', up);
+  el.addEventListener('pointerup', e => up(e, false));
+  el.addEventListener('pointercancel', e => up(e, true));
 }
 
 /* =====================================================================
@@ -201,6 +207,13 @@ function releaseStick() {
    ===================================================================== */
 function onLookDown(e) {
   claimLook(e, true);
+  TUI.tapId = e.pointerId;
+  TUI.tapTravel = 0;
+  TUI.tapAt = performance.now();
+}
+
+function touchTapShouldFire(travelPx, elapsedMs, cancelled) {
+  return !cancelled && travelPx < TAP_SLOP_PX && elapsedMs <= TAP_MS;
 }
 
 /* Who gets to aim, when two fingers are down and either could mean it.
@@ -226,6 +239,10 @@ function claimLook(e, steal) {
 }
 
 function onTouchMove(e) {
+  if (e.pointerId === TUI.tapId) {
+    const dx = e.clientX - TUI.lookX, dy = e.clientY - TUI.lookY;
+    TUI.tapTravel += Math.hypot(dx, dy);
+  }
   if (e.pointerId === TUI.stickId) {
     e.preventDefault();
     trackStick(e.clientX, e.clientY);
@@ -239,9 +256,36 @@ function onTouchMove(e) {
   if (G.started && !G.paused && !G.over) applyLook(dx, dy, TUI.sens);
 }
 
-function onTouchUp(e) {
+function onTouchUp(e, cancelled) {
+  if (e.pointerId === TUI.tapId) {
+    if (touchTapShouldFire(
+      TUI.tapTravel, performance.now() - TUI.tapAt, cancelled
+    )) pulseFireForTick();
+    TUI.tapId = -1;
+  }
   if (e.pointerId === TUI.stickId) releaseStick();
   else if (e.pointerId === TUI.lookId) TUI.lookId = -1;
+}
+
+function touchFirePress(e) {
+  claimLook(e);
+  const w = G.player && WBY[G.player.weapon];
+  if (w && w.auto) pressFire();
+  else IN.touchSemiArmed = !!w;
+}
+
+function touchFireRelease(e, cancelled) {
+  if (IN.touchSemiArmed) {
+    IN.touchSemiArmed = false;
+    if (!cancelled) pulseFireForTick();
+    return;
+  }
+  releaseFire();
+}
+
+function cancelTouchFire() {
+  IN.touchSemiArmed = false;
+  cancelFirePulse();
 }
 
 /* =====================================================================
@@ -269,8 +313,9 @@ function touchSetVisible(on) {
 function touchReleaseAll() {
   releaseStick();
   TUI.lookId = -1;
+  TUI.tapId = -1;
   TOUCH.jump = false;
-  releaseFire();
+  cancelTouchFire();
   if (!TUI.el) return;
   for (const el of TUI.el.querySelectorAll('.tbtn.down')) el.classList.remove('down');
 }

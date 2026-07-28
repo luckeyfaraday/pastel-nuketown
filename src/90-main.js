@@ -157,7 +157,8 @@ function frame(now) {
       vel: G.player ? G.player.vel : { x: 0, y: 0, z: 0 },
       onGround: G.player ? G.player.onGround : true,
       lookDX: IN.lookDX, lookDY: IN.lookDY,
-      sprinting: !G.paused && IN.sprinting, firing: !G.paused && IN.firing
+      sprinting: !G.paused && IN.sprinting,
+      firing: !G.paused && (IN.firing || IN.touchSemiArmed)
     });
     animateAll(dt);
     updateCrosshair(dt);
