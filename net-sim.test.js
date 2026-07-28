@@ -41,6 +41,27 @@ test('a touch tap holds fire for one tick and shoots exactly once', () => {
   assert.strictEqual(match.host.get('G.player.ammo'), ammo - 1);
 });
 
+test('a tap that lands as the player dies is not spent on the respawn', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+  match.host.run("switchWeapon('rifle'); G.player.fireCd = 0;");
+
+  /* The dead branch of stepPlayer returns before the pulse can be spent, so a
+     tap in the frame the player dies used to survive the whole death and fire
+     itself off on respawn -- popping the spawn shield on arrival. */
+  match.host.run('pulseFireForTick(); killActor(G.player, null);');
+  match.host.run(`simulate(${SIM.FIXED})`);
+  assert.strictEqual(match.host.get('IN.firing'), false);
+  assert.strictEqual(match.host.get('IN._releaseFireAfterTick'), false);
+
+  match.host.run(`G.player.respawnT = 0; simulate(${SIM.FIXED * 2})`);
+  assert.strictEqual(match.host.get('G.player.alive'), true);
+  assert.strictEqual(match.host.get('G.player.ammo'),
+    match.host.get("WBY[G.player.weapon].mag"),
+    'the respawn must not open with an unasked-for shot');
+  assert.ok(match.host.get('G.player.shield') > 0,
+    'and must not pop its own spawn shield');
+});
+
 test('hiding touch controls cancels an armed semi-auto without firing', () => {
   const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
   match.host.run(`

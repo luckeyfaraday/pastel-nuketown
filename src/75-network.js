@@ -1037,6 +1037,8 @@ function netBeginMatch() {
   NET.scoreSignature = '';
   IN.firing = false;
   IN._heldSemi = false;
+  IN.touchSemiArmed = false;
+  IN._releaseFireAfterTick = false;
   IN.fireSeq = 0;
   IN.fireRenderTime = 0;
   IN.reloadSeq = 0;

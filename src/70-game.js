@@ -675,6 +675,11 @@ function applyMovement(a, input, dt) {
 function stepPlayer(a, dt) {
   a.aimYaw = a.yaw; a.aimPitch = a.pitch;
   if (!a.alive) {
+    /* The tick that would have spent this pulse never ran, and the branch below
+       returns before it can be cleared. Left set, it survives the respawn and
+       spends itself on a shot nobody asked for -- which also pops the spawn
+       shield the moment it is granted. */
+    if (IN._releaseFireAfterTick) cancelFirePulse();
     if (typeof netIsGuest === 'function' && netIsGuest()) return;
     a.respawnT -= dt;
     if (a.respawnT <= 0) { respawnActor(a); hideDeadScreen(); }

@@ -5726,6 +5726,11 @@ function applyMovement(a, input, dt) {
 function stepPlayer(a, dt) {
   a.aimYaw = a.yaw; a.aimPitch = a.pitch;
   if (!a.alive) {
+    /* The tick that would have spent this pulse never ran, and the branch below
+       returns before it can be cleared. Left set, it survives the respawn and
+       spends itself on a shot nobody asked for -- which also pops the spawn
+       shield the moment it is granted. */
+    if (IN._releaseFireAfterTick) cancelFirePulse();
     if (typeof netIsGuest === 'function' && netIsGuest()) return;
     a.respawnT -= dt;
     if (a.respawnT <= 0) { respawnActor(a); hideDeadScreen(); }
@@ -7052,6 +7057,8 @@ function netBeginMatch() {
   NET.scoreSignature = '';
   IN.firing = false;
   IN._heldSemi = false;
+  IN.touchSemiArmed = false;
+  IN._releaseFireAfterTick = false;
   IN.fireSeq = 0;
   IN.fireRenderTime = 0;
   IN.reloadSeq = 0;
@@ -8877,7 +8884,11 @@ function updateCrosshair(dt) {
   const p = G.player;
   const spd = p ? Math.hypot(p.vel.x, p.vel.z) : 0;
   const w = p ? WBY[p.weapon] : WEAPONS[0];
-  const base = 7 + spd * 1.5 + (w.id === 'shotgun' ? 9 : 0) + (p && !p.onGround ? 6 : 0);
+  /* A semi-auto held on touch has committed its shot to the lift, so nothing
+     happens on screen for as long as the thumb stays down. Draw the reticle in
+     while it is armed — without it the trigger reads as not having registered. */
+  const base = 7 + spd * 1.5 + (w.id === 'shotgun' ? 9 : 0) + (p && !p.onGround ? 6 : 0)
+             - (IN.touchSemiArmed ? 4 : 0);
   crossPunch = Math.max(0, crossPunch - dt * 60);
   crossSpread = damp(crossSpread, base + crossPunch, 16, dt);
   const s = crossSpread;
