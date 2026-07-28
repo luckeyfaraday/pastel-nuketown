@@ -178,6 +178,13 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 .listed{display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--disp);font-size:11px;
   font-weight:700;letter-spacing:.11em;color:var(--ink-soft)}
 .listed input{width:15px;height:15px;accent-color:#d4638f;cursor:pointer}
+/* Sits in #menu without `setup-only`, so it is reachable from the title screen
+   and from the pause card. Mouse-look only, so it stays off touch devices. */
+.sens{width:min(330px,100%);display:flex;align-items:center;gap:10px;pointer-events:auto;cursor:pointer;
+  font-family:var(--disp);font-size:11px;font-weight:700;letter-spacing:.11em;color:var(--ink-soft)}
+.sens input{flex:1;min-width:0;accent-color:#d4638f;cursor:pointer}
+.sens b{min-width:44px;text-align:right;font-size:12px;color:var(--ink)}
+body.touch .sens{display:none}
 /* Hosting a room by hand is a minority path now that PLAY picks one; it stays
    one click away rather than competing with the button most people want. */
 .link-btn{pointer-events:auto;cursor:pointer;border:0;background:none;padding:2px 6px;
@@ -484,6 +491,11 @@ body.touch .touch-keys{display:flex}
     <label class="identity setup-only" for="playerName">
       <span>CALLSIGN</span>
       <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
+    </label>
+    <label class="sens" for="sensRange">
+      <span>MOUSE SENSITIVITY</span>
+      <input type="range" id="sensRange" min="0.4" max="2.8" step="0.05" value="1">
+      <b id="sensVal">1.00×</b>
     </label>
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
@@ -5437,7 +5449,20 @@ const IN = {
   lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
   fireSeq: 0, fireRenderTime: 0, reloadSeq: 0
 };
-let mouseSens = 0.0021;
+/* What the slider stores is the multiplier, not the product, so the base can
+   be retuned later without silently changing the feel for everyone who already
+   saved a value. Desktop only: the touch layer's drag sensitivity is in
+   different units (radians per CSS pixel, not per mouse count) and keeps its
+   own constant. */
+const MOUSE_SENS_BASE = 0.0021;
+const SENS_MIN = 0.4, SENS_MAX = 2.8;
+let mouseSens = MOUSE_SENS_BASE;
+
+function setSensMultiplier(mult) {
+  const m = clamp(Number(mult) || 1, SENS_MIN, SENS_MAX);
+  mouseSens = MOUSE_SENS_BASE * m;
+  return m;
+}
 
 /* Firing is an edge, not a level: `fireSeq` is how the host names a shot and
    how a guest matches the answer back to it. So pressing has to go through a
@@ -5528,6 +5553,27 @@ function initInput() {
     if (TOUCH.on) return;
     if (!IN.locked && G.started && !G.over) setPaused(true);
     else if (IN.locked) setPaused(false);
+  });
+
+  initSensSlider();
+}
+
+/* The slider lives in #menu without `setup-only`, so the same control serves
+   the title screen and the pause card — which is where you actually notice
+   the aim is wrong. Clamped on read: a hand-edited localStorage value must
+   not be able to leave someone unable to turn around. */
+function initSensSlider() {
+  const el = document.getElementById('sensRange');
+  const out = document.getElementById('sensVal');
+  if (!el) return;
+  let saved = null;
+  try { saved = localStorage.getItem('pastel-nuketown-sens'); } catch (e) {}
+  const show = m => { el.value = m; if (out) out.textContent = m.toFixed(2) + '×'; };
+  show(setSensMultiplier(saved === null ? 1 : parseFloat(saved)));
+  el.addEventListener('input', () => {
+    const m = setSensMultiplier(el.value);
+    if (out) out.textContent = m.toFixed(2) + '×';
+    try { localStorage.setItem('pastel-nuketown-sens', String(m)); } catch (e) {}
   });
 }
 /* Pointer Lock throws if there was no user gesture (autostart, headless).

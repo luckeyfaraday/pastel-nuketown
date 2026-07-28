@@ -445,7 +445,20 @@ const IN = {
   lookDX: 0, lookDY: 0, firing: false, sprinting: false, locked: false,
   fireSeq: 0, fireRenderTime: 0, reloadSeq: 0
 };
-let mouseSens = 0.0021;
+/* What the slider stores is the multiplier, not the product, so the base can
+   be retuned later without silently changing the feel for everyone who already
+   saved a value. Desktop only: the touch layer's drag sensitivity is in
+   different units (radians per CSS pixel, not per mouse count) and keeps its
+   own constant. */
+const MOUSE_SENS_BASE = 0.0021;
+const SENS_MIN = 0.4, SENS_MAX = 2.8;
+let mouseSens = MOUSE_SENS_BASE;
+
+function setSensMultiplier(mult) {
+  const m = clamp(Number(mult) || 1, SENS_MIN, SENS_MAX);
+  mouseSens = MOUSE_SENS_BASE * m;
+  return m;
+}
 
 /* Firing is an edge, not a level: `fireSeq` is how the host names a shot and
    how a guest matches the answer back to it. So pressing has to go through a
@@ -536,6 +549,27 @@ function initInput() {
     if (TOUCH.on) return;
     if (!IN.locked && G.started && !G.over) setPaused(true);
     else if (IN.locked) setPaused(false);
+  });
+
+  initSensSlider();
+}
+
+/* The slider lives in #menu without `setup-only`, so the same control serves
+   the title screen and the pause card — which is where you actually notice
+   the aim is wrong. Clamped on read: a hand-edited localStorage value must
+   not be able to leave someone unable to turn around. */
+function initSensSlider() {
+  const el = document.getElementById('sensRange');
+  const out = document.getElementById('sensVal');
+  if (!el) return;
+  let saved = null;
+  try { saved = localStorage.getItem('pastel-nuketown-sens'); } catch (e) {}
+  const show = m => { el.value = m; if (out) out.textContent = m.toFixed(2) + '×'; };
+  show(setSensMultiplier(saved === null ? 1 : parseFloat(saved)));
+  el.addEventListener('input', () => {
+    const m = setSensMultiplier(el.value);
+    if (out) out.textContent = m.toFixed(2) + '×';
+    try { localStorage.setItem('pastel-nuketown-sens', String(m)); } catch (e) {}
   });
 }
 /* Pointer Lock throws if there was no user gesture (autostart, headless).
