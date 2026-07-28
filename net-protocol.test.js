@@ -1081,6 +1081,155 @@ test('snapshot stall election is derived from observed cadence', async (t) => {
   assert.equal(change.round, 1);
 });
 
+/* Electing a stalled host is only half a watchdog. The cadence it was priced
+   in belonged to the host that just failed, so finishing a migration throws it
+   away — and a promoted tab that is throttled for the same reason the last one
+   was publishes the one snapshot every migration ends with and then nothing.
+   Two snapshots are needed to price a cadence, so that room used to come out
+   of migration with no watchdog at all: started, listed, joinable, frozen. */
+test('a promoted authority that stops publishing is elected away in its turn', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `graced-${++nextId}`,
+    roomRandom: () => 0,
+    snapshotStallCount: 3,
+    authorityGraceMs: 300,
+    promotionTimeoutMs: 500
+  });
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const first = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const second = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, first.opened, second.opened]);
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room'); await host.next('members');
+  first.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'First' });
+  await first.next('room'); await first.next('members'); await host.next('members');
+  second.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Second' });
+  await second.next('room'); await second.next('members');
+  await first.next('members'); await host.next('members');
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), first.next('start'), second.next('start')]);
+
+  const ids = ['graced-1', 'graced-2', 'graced-3'];
+  const pose = (tick, authorityEpoch) => ({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch, round: 1,
+    tick, time: tick / 20, eventSeq: 0, manifestVersion: 1,
+    actors: ids.map((netId) => ({ netId })), over: false, winner: null
+  });
+
+  host.send(validCheckpoint(ids, { tick: 1, time: 1 / 20 }));
+  await first.next('checkpoint');
+  host.send(pose(1, 1)); await first.next('snapshot');
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  host.send(pose(2, 1)); await first.next('snapshot');
+
+  /* The original host stalls. Its socket is fine — a backgrounded tab still
+     answers pings — so this is the cadence watchdog doing the electing. */
+  const promotion = await first.next('host-changed');
+  assert.equal(promotion.host, 'graced-2');
+  assert.equal(promotion.seamless, true);
+  await second.next((message) =>
+    message.t === 'host-changed' && message.authorityEpoch === 2);
+
+  second.send({
+    t: 'authority-state', v: Protocol.VERSION, authorityEpoch: 2, round: 1,
+    netId: 'graced-3', inputSeq: 0, fireSeq: 0,
+    reloadSeq: 0, weaponSeq: 0, weapon: 'smg'
+  });
+  await first.next('authority-state');
+  first.send({
+    t: 'authority-ready', v: Protocol.VERSION, authorityEpoch: 2, round: 1,
+    tick: promotion.snapshot.tick
+  });
+  await Promise.all([first.next('authority-ready'), second.next('authority-ready')]);
+
+  /* Exactly what a throttled promoted tab manages: the forced publish every
+     migration ends with, and then silence. One snapshot cannot price a
+     cadence, so only the grace deadline can catch this. */
+  first.send(validCheckpoint(ids, { tick: 3, time: 3 / 20, authorityEpoch: 2 }));
+  await second.next('checkpoint');
+  first.send(pose(3, 2));
+  await second.next('snapshot');
+
+  const retry = await second.next((message) =>
+    message.t === 'host-changed' && message.authorityEpoch === 3);
+  assert.equal(retry.host, 'graced-3');
+  assert.equal(retry.seamless, true);
+  assert.equal(retry.round, 1, 'the round survives a second seamless promotion');
+
+  /* And an authority that publishes nothing at all is on the same clock: the
+     deadline is armed when the migration finishes, not when a snapshot lands. */
+  const closed = once(second.ws, 'close');
+  second.send({
+    t: 'authority-ready', v: Protocol.VERSION, authorityEpoch: 3, round: 1,
+    tick: retry.snapshot.tick
+  });
+  await second.next('authority-ready');
+  const [code] = await closed;
+  assert.equal(code, 1012);
+});
+
+test('the grace deadline never evicts an authority that is publishing', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `alive-${++nextId}`,
+    roomRandom: () => 0,
+    authorityGraceMs: 300
+  });
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room'); await host.next('members');
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest' });
+  await guest.next('room'); await guest.next('members'); await host.next('members');
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), guest.next('start')]);
+
+  const ids = ['alive-1', 'alive-2'];
+  host.send(validCheckpoint(ids, { tick: 0, time: 0 }));
+  await guest.next('checkpoint');
+  /* 20Hz for a second and a half: five grace windows, and well past the
+     steady-state threshold once two snapshots have priced the cadence. */
+  for (let tick = 1; tick <= 30; tick++) {
+    host.send({
+      t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1, round: 1,
+      tick, time: tick / 20, eventSeq: 0, manifestVersion: 1,
+      actors: ids.map((netId) => ({ netId })), over: false, winner: null
+    });
+    await guest.next('snapshot');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await expectNoMessage(guest, 'host-changed');
+});
+
+test('sitting between rounds is not a stall', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `idle-${++nextId}`,
+    roomRandom: () => 0,
+    authorityGraceMs: 300
+  });
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room'); await host.next('members');
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest' });
+  await guest.next('room'); await guest.next('members'); await host.next('members');
+
+  /* A lobby is a place where nobody is simulating and that is fine. */
+  await expectNoMessage(guest, 'host-changed', 600);
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), guest.next('start')]);
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1, round: 1, winner: null
+  });
+  await guest.next('lobby');
+  await expectNoMessage(guest, 'host-changed', 600);
+});
+
 test('hostile nesting and non-string fields are rejected without killing usable connections', async (t) => {
   let nextId = 0;
   const { port } = await startRelay(t, {

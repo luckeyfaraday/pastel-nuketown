@@ -85,6 +85,14 @@ export function createRelayServer(options = {}) {
   const joinTimeoutMs = positiveInteger(options.joinTimeoutMs, 15_000);
   const promotionTimeoutMs = positiveInteger(options.promotionTimeoutMs, 3_000);
   const snapshotStallCount = positiveInteger(options.snapshotStallCount, 24);
+  /* That count prices the watchdog in observed snapshot intervals, which a
+     fresh authority has not established yet -- and both `start` and a completed
+     migration deliberately discard the previous host's cadence. This guards
+     that gap: a flat deadline for an authority to prove it is simulating at
+     all. Fifty snapshot intervals is far too long to be reached by a host that
+     is merely slow, and short enough that walking a roomful of dead candidates
+     costs seconds rather than the best part of a minute. */
+  const authorityGraceMs = positiveInteger(options.authorityGraceMs, 2_500);
   const makeId = typeof options.idFactory === 'function'
     ? options.idFactory
     : randomUUID;
@@ -704,9 +712,9 @@ export function createRelayServer(options = {}) {
       peer.room.round++;
       peer.room.latestSnapshot = null;
       peer.room.latestCheckpoint = null;
-      clearSnapshotStall(peer.room);
       peer.room.snapshotAt = 0;
       peer.room.snapshotIntervalMs = 0;
+      armSnapshotStall(peer.room, peer, authorityGraceMs);
       /* A round starting is a fresh slate for everyone: time spent waiting in
          the lobby is not time spent away from a match. */
       for (const member of peer.room.members.values()) {
@@ -841,6 +849,22 @@ export function createRelayServer(options = {}) {
     room.snapshotStallTimer = null;
   }
 
+  function armSnapshotStall(room, host, delayMs) {
+    clearSnapshotStall(room);
+    if (!room.started || room.migrating || !host) return;
+    const epoch = room.authorityEpoch;
+    room.snapshotStallTimer = setTimeout(() => {
+      room.snapshotStallTimer = null;
+      if (room.started && !room.migrating && room.host === host &&
+          room.authorityEpoch === epoch) {
+        beginMigration(room, host, true);
+        try { host.ws.close(1012, 'authority snapshot stalled'); } catch (error) {}
+      }
+    }, delayMs);
+    if (typeof room.snapshotStallTimer.unref === 'function')
+      room.snapshotStallTimer.unref();
+  }
+
   function observeSnapshot(room, host) {
     const now = Date.now();
     if (room.snapshotAt) {
@@ -852,19 +876,13 @@ export function createRelayServer(options = {}) {
       }
     }
     room.snapshotAt = now;
-    clearSnapshotStall(room);
-    if (!room.snapshotIntervalMs) return;
-    const epoch = room.authorityEpoch;
-    room.snapshotStallTimer = setTimeout(() => {
-      room.snapshotStallTimer = null;
-      if (room.started && !room.migrating && room.host === host &&
-          room.authorityEpoch === epoch) {
-        beginMigration(room, host, true);
-        try { host.ws.close(1012, 'authority snapshot stalled'); } catch (error) {}
-      }
-    }, Math.ceil(room.snapshotIntervalMs * snapshotStallCount));
-    if (typeof room.snapshotStallTimer.unref === 'function')
-      room.snapshotStallTimer.unref();
+    /* Until a second snapshot has priced the cadence, the grace deadline stands
+       in for it. Giving up here instead left the room with no watchdog at all,
+       which a host that sent exactly one snapshot -- the forced one every
+       migration ends with -- turned into a room nothing was ever watching. */
+    armSnapshotStall(room, host, room.snapshotIntervalMs
+      ? Math.ceil(room.snapshotIntervalMs * snapshotStallCount)
+      : authorityGraceMs);
   }
 
   function canMigrateSeamlessly(room) {
@@ -1010,6 +1028,7 @@ export function createRelayServer(options = {}) {
     }, true);
     room.snapshotAt = 0;
     room.snapshotIntervalMs = 0;
+    armSnapshotStall(room, room.host, authorityGraceMs);
   }
 
   function migrateHostedRoom(room, departedHost) {
