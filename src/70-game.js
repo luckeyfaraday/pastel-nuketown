@@ -21,6 +21,23 @@ const G = {
   winner: null, frozen: false, hintT: 0,
   fixedAcc: 0, tick: 0
 };
+const _shotMuzzlePos = new THREE.Vector3();
+function impactSurfaceColor(hit) {
+  if (!hit || !hit.mat) return null;
+  if (hit.mat === 'house') return hit.house === 'A' ? PAL.houseA : PAL.houseB;
+  if (hit.mat === 'trim') return hit.house === 'A' ? PAL.houseAtrim : PAL.houseBtrim;
+  if (hit.mat === 'roof') return hit.house === 'A' ? PAL.roofA : PAL.roofB;
+  if (hit.mat === 'slab') return PAL.slab;
+  if (hit.mat === 'stair') return PAL.stair;
+  if (hit.mat === 'post') return PAL.post;
+  if (hit.mat === 'rail') return PAL.rail;
+  if (hit.mat === 'picket') return PAL.picket;
+  if (hit.mat === 'crate') return PAL.crate;
+  if (hit.mat === 'perimeter') return PAL.perimeter;
+  if (hit.mat === 'bus') return PAL.bus;
+  if (hit.mat === 'truck') return PAL.truck;
+  return null;
+}
 
 /* =====================================================================
    ACTOR
@@ -40,7 +57,9 @@ function makeActor(opts) {
     skill: opts.skill || 'normal',
     pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 },
     yaw: 0, pitch: 0, aimYaw: 0, aimPitch: 0,
-    bodyYaw: 0, gait: 0, recoil: 0, flinch: 0, aimBlend: 0, aiming: false,
+    bodyYaw: 0, gait: 0, recoil: 0, flinch: 0, flinchSide: 1,
+    aimBlend: 0, sprintBlend: 0, aiming: false,
+    landT: 0, landImpact: 0, _animGround: false, _animFallV: 0, _animHealth: 100,
     health: 100, maxHealth: 100, alive: true,
     deathT: 0, deathDir: 1, spawnT: 0, respawnT: 0,
     weapon: opts.weapon || 'smg', ammo: 0, reserve: 0, reloadT: 0, fireCd: 0,
@@ -113,6 +132,8 @@ function respawnActor(a, instant) {
   a.aimYaw = spawnYaw; a.aimPitch = 0; a.bodyYaw = spawnYaw + Math.PI;
   a.health = a.maxHealth; a.alive = true;
   a.deathT = 0; a.spawnT = 0.45; a.respawnT = 0;
+  a.flinch = 0; a.flinchSide = 1; a.landT = 0; a.landImpact = 0;
+  a._animGround = false; a._animFallV = 0; a._animHealth = a.health;
   a.shield = CFG.spawnShield;
   a.streak = 0;
   const w = WBY[a.weapon];
@@ -231,6 +252,10 @@ function fallbackThink(a, dt) {
 /* =====================================================================
    COMBAT
    ===================================================================== */
+// Local recoil must not perturb the authoritative spawn and AI stream.
+const recoilRng = mulberry32(0xC0FFEE);
+const recoilRand = (lo, hi) => lo + (hi - lo) * recoilRng();
+
 function actorEye(a) { return a.pos.y + (a.isPlayer ? ACT.eye : HIT.headY); }
 
 function tryReload(a) {
@@ -277,8 +302,8 @@ function fireWeapon(a, fireSeq, renderTime) {
   let mx = ex, my = ey, mz = ez;
   if (!a.isPlayer && a.char) {
     a.char.muzzle.updateWorldMatrix(true, false);
-    const p = new THREE.Vector3().setFromMatrixPosition(a.char.muzzle.matrixWorld);
-    mx = p.x; my = p.y; mz = p.z;
+    _shotMuzzlePos.setFromMatrixPosition(a.char.muzzle.matrixWorld);
+    mx = _shotMuzzlePos.x; my = _shotMuzzlePos.y; mz = _shotMuzzlePos.z;
   }
 
   const shotLines = [], shotHits = [];
@@ -303,6 +328,7 @@ function fireWeapon(a, fireSeq, renderTime) {
     if (restoreActors) restoreActors();
   }
 
+  fxMuzzle(mx, my, mz);
   for (let p = 0; p < shotLines.length; p++) {
     const hit = shotHits[p];
     const endX = shotLines[p][3], endY = shotLines[p][4], endZ = shotLines[p][5];
@@ -322,14 +348,14 @@ function fireWeapon(a, fireSeq, renderTime) {
         if (typeof netPredictHit === 'function')
           netPredictHit(hit.actor, dmg, hit.head, endX, endY, endZ, fireSeq);
       } else applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ, fireSeq);
-      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'actor');
+      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'actor', hit.actor.colors.body);
     } else if (hit.kind === 'mannequin') {
-      hit.obj.userData.spin += rand(3, 7) * (rng() < 0.5 ? -1 : 1);
+      hit.obj.userData.spin += fxRand(3, 7) * (fxRng() < 0.5 ? -1 : 1);
       hit.obj.userData.lean = Math.min(1.2, hit.obj.userData.lean + 0.4);
-      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'map');
+      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'map', PAL.mannequin);
       SFX.tone(520, 300, 0.12, 0.14, 'triangle', endX, endY, endZ);
     } else {
-      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'map');
+      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'map', impactSurfaceColor(hit));
     }
   }
 
@@ -338,8 +364,8 @@ function fireWeapon(a, fireSeq, renderTime) {
     SFX.shoot(w.id);
     fxShake(w.id === 'shotgun' ? 0.34 : (w.id === 'rifle' ? 0.24 : 0.09));
     // view kick
-    G.player.pitch = clamp(G.player.pitch + w.kickRot * rand(0.7, 1.15), -1.45, 1.45);
-    G.player.yaw += rand(-1, 1) * w.kickRot * 0.35;
+    G.player.pitch = clamp(G.player.pitch + w.kickRot * recoilRand(0.7, 1.15), -1.45, 1.45);
+    G.player.yaw += recoilRand(-1, 1) * w.kickRot * 0.35;
     setCrosshairPunch(w.id === 'shotgun' ? 14 : 7);
   } else {
     SFX.shoot(w.id, a.pos.x, a.pos.y + 1.3, a.pos.z);
@@ -366,13 +392,20 @@ function applyDamage(target, dmg, from, head, hx, hy, hz, fireSeq) {
   }
   target.health -= dmg;
   target.flinch = 1;
+  if (from) {
+    const hitYaw = Math.atan2(from.pos.x - target.pos.x, from.pos.z - target.pos.z);
+    target.flinchSide = angDelta(target.bodyYaw + Math.PI, hitYaw) < 0 ? -1 : 1;
+  }
   target.lastHitBy = from ? from.id : null;
   target.lastHitT = G.time;
   if (target.plate) drawPlate(target.plate, target.name, Math.max(0, target.health), target.maxHealth, target.colors.body);
 
   if (from && from.isPlayer) {
     SFX.hit(head);
+    elHitmark.style.filter = head ? 'drop-shadow(0 0 5px #ffe27a)' : 'none';
     showHitmarker(head);
+    hitmarkT = head ? 0.34 : 0.28;
+    setCrosshairPunch(head ? 13 : 9);
     addFloater(head ? Math.round(dmg) + '!' : String(Math.round(dmg)), hx, hy, hz,
                head ? '#fff0a8' : '#ffffff', head);
   }
@@ -391,7 +424,7 @@ function killActor(target, from) {
   target.alive = false;
   target.health = 0;
   target.deathT = 0;
-  target.deathDir = rng() < 0.5 ? -1 : 1;
+  target.deathDir = ((target.id + target.deaths) & 1) ? -1 : 1;
   target.respawnT = CFG.respawn;
   target.deaths++;
   target.streak = 0;
@@ -405,6 +438,10 @@ function killActor(target, from) {
     from.bestStreak = Math.max(from.bestStreak, from.streak);
     if (from.isPlayer) {
       SFX.kill();
+      showHitmarker(true);
+      hitmarkT = 0.44;
+      elHitmark.style.filter = 'drop-shadow(0 0 8px #7fe6b4)';
+      setCrosshairPunch(18);
       addFloater('+1', target.pos.x, target.pos.y + 1.6, target.pos.z, '#b8f2d8', true);
       if (from.streak >= 3) showHint(from.streak + ' IN A ROW!');
     }
@@ -491,6 +528,8 @@ function cancelFirePulse() {
   releaseFire();
 }
 
+const _localInput = { fwd: 0, strafe: 0, jump: false, sprint: false, fire: false };
+
 /* The one place player intent is read. It used to be read straight off KEY/IN
    at each use site, which meant the local simulation and the guest's input
    packet each had their own copy of what "moving forward" means -- two copies
@@ -501,16 +540,19 @@ function cancelFirePulse() {
    deflection. So a held key wins and touch fills in underneath it, which keeps
    a hybrid laptop from cancelling one source against the other. */
 function readLocalInput(accepts) {
-  if (!accepts) return { fwd: 0, strafe: 0, jump: false, sprint: false, fire: false };
+  if (!accepts) {
+    _localInput.fwd = 0; _localInput.strafe = 0;
+    _localInput.jump = false; _localInput.sprint = false; _localInput.fire = false;
+    return _localInput;
+  }
   const kFwd = (KEY.KeyW ? 1 : 0) - (KEY.KeyS ? 1 : 0);
   const kStrafe = (KEY.KeyD ? 1 : 0) - (KEY.KeyA ? 1 : 0);
-  return {
-    fwd: kFwd || TOUCH.fwd,
-    strafe: kStrafe || TOUCH.strafe,
-    jump: !!KEY.Space || TOUCH.jump,
-    sprint: !!KEY.ShiftLeft || !!KEY.ShiftRight || TOUCH.sprint,
-    fire: !!IN.firing
-  };
+  _localInput.fwd = kFwd || TOUCH.fwd;
+  _localInput.strafe = kStrafe || TOUCH.strafe;
+  _localInput.jump = !!KEY.Space || TOUCH.jump;
+  _localInput.sprint = !!KEY.ShiftLeft || !!KEY.ShiftRight || TOUCH.sprint;
+  _localInput.fire = !!IN.firing;
+  return _localInput;
 }
 
 /* Shared by mouse-look and touch-drag; they differ only in sensitivity. */
@@ -638,6 +680,7 @@ function syncPlayerAmmoStore() {
    drift between them is not a bug that shows up as a wrong number, it is a
    correction the player feels as their own body being dragged. Two of them
    used to be hand-kept transcriptions of the same arithmetic. */
+const _movementResult = { sprinting: false, landed: false };
 function applyMovement(a, input, dt) {
   const fwd = clamp(input.fwd || 0, -1, 1);
   const str = clamp(input.strafe || 0, -1, 1);
@@ -666,10 +709,12 @@ function applyMovement(a, input, dt) {
   a.vel.z = damp(a.vel.z, mz, acc, dt);
   if (input.jump && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
 
-  const res = moveActor(a.pos, a.vel, dt, {});
+  const res = moveActor(a.pos, a.vel, dt, null);
   const wasGround = a.onGround;
   a.onGround = res.onGround;
-  return { sprinting: sprinting, landed: !wasGround && a.onGround };
+  _movementResult.sprinting = sprinting;
+  _movementResult.landed = !wasGround && a.onGround;
+  return _movementResult;
 }
 
 function stepPlayer(a, dt) {
@@ -891,7 +936,7 @@ function stepBot(a, dt) {
   a.vel.z = damp(a.vel.z, mvz, acc, dt);
   if (it.jump && a.onGround) { a.vel.y = JUMP_V; a.onGround = false; }
 
-  const res = moveActor(a.pos, a.vel, dt, {});
+  const res = moveActor(a.pos, a.vel, dt, null);
   a.onGround = res.onGround;
 
   if (a.reloadT > 0) { a.reloadT -= dt; if (a.reloadT <= 0) finishReload(a); }

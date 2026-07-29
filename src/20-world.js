@@ -4,7 +4,11 @@
    so the whole town is two draw calls.
    ===================================================================== */
 
-const WORLD = { group: null, mannequins: [], props: [], sky: null };
+const WORLD = { group: null, mannequins: [], props: [], sky: null, contacts: null };
+const STREET_MOTION = {
+  wires: null, wireBase: null,
+  flags: null, flagBase: null, flagPhase: null
+};
 
 /* ---- small geometry helpers layered on GeoBuilder ---- */
 function ngonPrism(B, axis, c0, c1, cu, cv, r, sides, color, rot) {
@@ -510,9 +514,10 @@ function buildWorld() {
     box(-2.8, F1 + 1.5, -17.78, -1.0, F1 + 2.5, -17.72, C(A ? 0xffb7c5 : 0xa8dcf0)); // poster
   }
 
+  B.bakeAO();
   /* Chunk along the street axis so looking one way culls the other end.
      The ground slab lands in the middle chunk; its bounding sphere is huge,
-     so that chunk simply never culls — which is correct, you always see it. */
+     so that chunk intentionally resists culling because it is always seen. */
   const CUTS = [-16, -5, 5, 16];
   const meshes = B.meshChunks(CUTS);
   const lineSets = B.lineChunks(CUTS, 0.42);
@@ -525,9 +530,144 @@ function buildWorld() {
 
   buildMannequins();
   WORLD.sky = buildSky();
+  buildContactShadows();
+  buildStreetMotion(poleTops);
   buildDustMotes();
   buildMagic();
   return grp;
+}
+
+function buildContactShadows() {
+  const specs = [];
+  const mats = ['crate', 'bus', 'truck', 'post', 'picket'];
+  for (const s of MAP.solids) {
+    if (mats.indexOf(s.mat) < 0) continue;
+    const x0 = s.min[0], z0 = s.min[2], x1 = s.max[0], z1 = s.max[2];
+    const x = (x0 + x1) * 0.5, z = (z0 + z1) * 0.5;
+    const pad = s.mat === 'post' ? 2.4 : (s.mat === 'picket' ? 1.18 : 1.32);
+    specs.push([x, z, Math.max(0.9, (x1 - x0) * pad), Math.max(0.9, (z1 - z0) * pad)]);
+  }
+  specs.push([-4.5, -5.55, 3.8, 1.35], [4.5, 5.55, 3.8, 1.35]);
+
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+  const cx = cv.getContext('2d');
+  const rg = cx.createRadialGradient(32, 32, 3, 32, 32, 31);
+  rg.addColorStop(0, 'rgba(255,255,255,.95)');
+  rg.addColorStop(0.54, 'rgba(255,255,255,.62)');
+  rg.addColorStop(1, 'rgba(255,255,255,0)');
+  cx.fillStyle = rg; cx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, color: C(0x695979), transparent: true, opacity: 0.31,
+    depthWrite: false, fog: true, polygonOffset: true, polygonOffsetFactor: -1
+  });
+  const shadows = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), mat, specs.length);
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI * 0.5);
+  const p = new THREE.Vector3(), s = new THREE.Vector3(), m = new THREE.Matrix4();
+  for (let i = 0; i < specs.length; i++) {
+    const v = specs[i];
+    const az = Math.abs(v[1]);
+    const y = az < 4.05 ? 0.058 : (az < 5.55 ? 0.176 : 0.049);
+    p.set(v[0], y, v[1]); s.set(v[2], v[3], 1);
+    m.compose(p, q, s);
+    shadows.setMatrixAt(i, m);
+  }
+  shadows.instanceMatrix.needsUpdate = true;
+  shadows.frustumCulled = false;
+  shadows.renderOrder = 2;
+  scene.add(shadows);
+  WORLD.contacts = shadows;
+}
+
+function buildStreetMotion(poles) {
+  const wirePos = [];
+  const addWire = (x0, y0, z0, x1, y1, z1, segs, sag) => {
+    for (let i = 0; i < segs; i++) {
+      const a = i / segs, b = (i + 1) / segs;
+      const ay = lerp(y0, y1, a) - Math.sin(a * Math.PI) * sag;
+      const by = lerp(y0, y1, b) - Math.sin(b * Math.PI) * sag;
+      wirePos.push(lerp(x0, x1, a), ay, lerp(z0, z1, a),
+                   lerp(x0, x1, b), by, lerp(z0, z1, b));
+    }
+  };
+  for (let p = 0; p < poles.length - 1; p++) {
+    for (const zOff of [-0.62, 0, 0.62])
+      addWire(poles[p][0], 7.24, poles[p][2] + zOff,
+              poles[p + 1][0], 7.24, poles[p + 1][2] + zOff, 10, 0.48);
+  }
+  for (const x of [-8, 8])
+    addWire(x, 6.15, -6.25, x, 6.15, 6.25, 12, 0.58);
+
+  const wg = new THREE.BufferGeometry();
+  wg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wirePos), 3));
+  const wires = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({
+    color: C(0x564965), transparent: true, opacity: 0.72, fog: true
+  }));
+  wires.frustumCulled = false;
+  scene.add(wires);
+  STREET_MOTION.wires = wires;
+  STREET_MOTION.wireBase = wg.attributes.position.array.slice(0);
+
+  const flagPos = [], flagCol = [], flagPhase = [];
+  const hues = [0xff8fa8, 0xffd36e, 0x78d8c0, 0x87bfe6, 0xb89bea, 0xffae87];
+  for (const x of [-8, 8]) {
+    const n = 12;
+    for (let i = 0; i < n; i++) {
+      const z0 = lerp(-5.9, 5.9, (i + 0.08) / n);
+      const z1 = lerp(-5.9, 5.9, (i + 0.92) / n);
+      const zm = (z0 + z1) * 0.5;
+      const y = 6.15 - Math.sin((i + 0.5) / n * Math.PI) * 0.58;
+      flagPos.push(x, y, z0, x, y, z1, x, y - 0.86, zm);
+      const c = C(hues[(i + (x > 0 ? 2 : 0)) % hues.length]);
+      for (let j = 0; j < 3; j++) {
+        flagCol.push(c.r, c.g, c.b);
+        flagPhase.push(i * 0.51 + j * 0.16 + (x > 0 ? 1.7 : 0));
+      }
+    }
+  }
+  const fg = new THREE.BufferGeometry();
+  fg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(flagPos), 3));
+  fg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(flagCol), 3));
+  const flags = new THREE.Mesh(fg, new THREE.MeshBasicMaterial({
+    vertexColors: true, side: THREE.DoubleSide, fog: true
+  }));
+  flags.frustumCulled = false;
+  flags.castShadow = !SOFTWARE_GPU;
+  scene.add(flags);
+  STREET_MOTION.flags = flags;
+  STREET_MOTION.flagBase = fg.attributes.position.array.slice(0);
+  STREET_MOTION.flagPhase = new Float32Array(flagPhase);
+}
+
+function updateStreetMotion(t) {
+  if (WORLD.sky) {
+    WORLD.sky.nearClouds.rotation.y = t * 0.0042;
+    WORLD.sky.farClouds.rotation.y = -t * 0.0018;
+  }
+  if (STREET_MOTION.wires) {
+    const a = STREET_MOTION.wires.geometry.attributes.position;
+    const p = a.array, b = STREET_MOTION.wireBase;
+    for (let i = 0; i < p.length; i += 3) {
+      p[i] = b[i];
+      p[i + 1] = b[i + 1] + Math.sin(t * 0.85 + b[i] * 0.08 + b[i + 2] * 0.17) * 0.045;
+      p[i + 2] = b[i + 2] + Math.sin(t * 0.62 + b[i] * 0.11) * 0.028;
+    }
+    a.needsUpdate = true;
+  }
+  if (STREET_MOTION.flags) {
+    const a = STREET_MOTION.flags.geometry.attributes.position;
+    const p = a.array, b = STREET_MOTION.flagBase, ph = STREET_MOTION.flagPhase;
+    for (let i = 0; i < ph.length; i++) {
+      const k = i * 3, flap = i % 3 === 2 ? 1 : 0.22;
+      p[k] = b[k] + Math.sin(t * 1.9 + ph[i]) * 0.12 * flap;
+      p[k + 1] = b[k + 1] + Math.sin(t * 1.25 + ph[i] * 0.7) * 0.045 * flap;
+      p[k + 2] = b[k + 2] + Math.cos(t * 1.7 + ph[i]) * 0.08 * flap;
+    }
+    a.needsUpdate = true;
+  }
 }
 
 /* =====================================================================
@@ -736,6 +876,7 @@ function buildDustMotes() {
   scene.add(MOTES);
 }
 function updateMotes(t) {
+  updateStreetMotion(t);
   if (!MOTES) return;
   const p = MOTES.geometry.attributes.position, base = MOTES.userData.base, ph = MOTES.userData.ph;
   const c = MOTES.geometry.attributes.color, tint = MOTES.userData.tint;

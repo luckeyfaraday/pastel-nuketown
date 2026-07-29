@@ -48,9 +48,12 @@ function updateCamera(dt) {
 
   if (FX.shake > 0.001) {
     const s = FX.shake;
-    camera.position.x += rand(-s, s) * 0.16;
-    camera.position.y += rand(-s, s) * 0.16;
-    camera.rotation.z += rand(-s, s) * 0.035;
+    /* fxRand, not rand: shake is client-local, so drawing from the simulation
+       stream advances it by a different amount on every client and desyncs
+       every random draw that follows. */
+    camera.position.x += fxRand(-s, s) * 0.16;
+    camera.position.y += fxRand(-s, s) * 0.16;
+    camera.rotation.z += fxRand(-s, s) * 0.035;
   }
   /* Slight roll when strafing reads as weight. Read through the same
      function the simulation uses — this used to be a third transcription
@@ -78,8 +81,12 @@ function animateAll(dt) {
 }
 
 function renderAll() {
-  renderer.autoClear = true;
-  renderer.render(scene, camera);
+  if (PostFX.active) {
+    PostFX.render(G.time);
+  } else {
+    renderer.autoClear = true;
+    renderer.render(scene, camera);
+  }
   if (G.started && !G.paused && G.player && G.player.alive && !G.frozenNoVM) {
     renderer.autoClear = false;
     renderer.clearDepth();
