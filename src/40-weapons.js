@@ -45,9 +45,6 @@ const _vmEjectPos = new THREE.Vector3();
 const _vmEjectScale = new THREE.Vector3();
 const _vmEjectQuat = new THREE.Quaternion();
 const _vmEjectEuler = new THREE.Euler();
-const VM_EJECT_SMG = C(0xffe6a8);
-const VM_EJECT_SHOTGUN = C(0xfff8e7);
-const VM_EJECT_RIFLE = C(0xb8f2d8);
 
 function vmSetEjectInstance(index, e, zero) {
   if (zero) {
@@ -61,12 +58,6 @@ function vmSetEjectInstance(index, e, zero) {
   _vmEjectMesh.setMatrixAt(index, _vmEjectMatrix);
   _vmEjectMesh.instanceMatrix.needsUpdate = true;
 }
-function vmSetEjectColor(index, color) {
-  const a = _vmEjectMesh.instanceColor.array, p = index * 3;
-  a[p] = color.r; a[p + 1] = color.g; a[p + 2] = color.b;
-  _vmEjectMesh.instanceColor.needsUpdate = true;
-}
-
 /* The guns are modelled at true scale (~0.9m) and then shrunk to viewmodel
    proportions. Anything sized to match the gun — the muzzle flash above all
    — must use the SAME number, or it ends up half a screen wide. */
@@ -241,12 +232,10 @@ function initViewmodel() {
   const ejectCount = SOFTWARE_GPU ? 4 : 12;
   _vmEjectMesh = new THREE.InstancedMesh(
     ejectGeo,
-    new THREE.MeshBasicMaterial({ color: C(0xffffff), vertexColors: true }),
+    new THREE.MeshBasicMaterial({ color: C(0xffffff) }),
     ejectCount
   );
   _vmEjectMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  _vmEjectMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(ejectCount * 3), 3);
-  _vmEjectMesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
   _vmEjectMesh.frustumCulled = false;
   _vmEjectMatrix.makeScale(0, 0, 0);
   for (let i = 0; i < ejectCount; i++) {
@@ -331,9 +320,6 @@ function vmFire(w) {
     e.scaleX = w.id === 'shotgun' ? 1.4 : 0.8;
     e.scaleY = w.id === 'rifle' ? 1.4 : 0.9;
     e.scaleZ = 0.8;
-    vmSetEjectColor(index, w.id === 'shotgun'
-      ? VM_EJECT_SHOTGUN
-      : (w.id === 'rifle' ? VM_EJECT_RIFLE : VM_EJECT_SMG));
     vmSetEjectInstance(index, e, false);
     _vmEjectMesh.visible = true;
   }
