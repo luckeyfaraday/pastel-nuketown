@@ -8,6 +8,8 @@ const SOLIDS = MAP.solids;
 const ACT = MAP.actor;               // {radius, height, eye, step}
 const GRAVITY = 26.0;
 const JUMP_V  = 8.4;
+const _moveProbe = { x: 0, y: 0, z: 0 };
+const _moveResult = { onGround: false, hitWall: false, landed: false };
 
 /* ---------- AABB overlap for an actor cylinder treated as a box ---- */
 function boxOverlap(s, x, y, z, r, h) {
@@ -78,7 +80,8 @@ function moveActor(p, v, dt, opts) {
     const gotSq = (p.x - preX) * (p.x - preX) + (p.z - preZ) * (p.z - preZ);
     const wantSq = dx * dx + dz * dz;
     if (gotSq < wantSq * 0.92) {
-      const t = { x: preX, y: preY + step, z: preZ };
+      const t = _moveProbe;
+      t.x = preX; t.y = preY + step; t.z = preZ;
       let blocked = false;
       for (let k = 0; k < SOLIDS.length; k++)
         if (boxOverlap(SOLIDS[k], t.x, t.y, t.z, r, h)) { blocked = true; break; }
@@ -109,7 +112,10 @@ function moveActor(p, v, dt, opts) {
   p.x = clamp(p.x, B.minX + r, B.maxX - r);
   p.z = clamp(p.z, B.minZ + r, B.maxZ - r);
 
-  return { onGround, hitWall, landed: onGround && startY - p.y > 0.06 };
+  _moveResult.onGround = onGround;
+  _moveResult.hitWall = hitWall;
+  _moveResult.landed = onGround && startY - p.y > 0.06;
+  return _moveResult;
 }
 
 /* =====================================================================
@@ -134,19 +140,23 @@ function rayBox(ox, oy, oz, dx, dy, dz, s, maxT) {
   return t0;
 }
 function raycastMap(ox, oy, oz, dx, dy, dz, maxT) {
-  let best = maxT, bn = [0, 1, 0], found = false;
+  let best = maxT, bn = [0, 1, 0], found = false, mat = null, house = null;
   for (let k = 0; k < SOLIDS.length; k++) {
     const t = rayBox(ox, oy, oz, dx, dy, dz, SOLIDS[k], best);
-    if (t >= 0 && t < best) { best = t; found = true; bn = [_rc.nx, _rc.ny, _rc.nz]; }
+    if (t >= 0 && t < best) {
+      best = t; found = true; bn = [_rc.nx, _rc.ny, _rc.nz];
+      mat = SOLIDS[k].mat || null; house = SOLIDS[k].house || null;
+    }
   }
   // ground plane
   if (dy < -1e-9) {
     const t = -oy / dy;
-    if (t >= 0 && t < best) { best = t; found = true; bn = [0, 1, 0]; }
+    if (t >= 0 && t < best) { best = t; found = true; bn = [0, 1, 0]; mat = null; house = null; }
   }
   if (!found) return null;
   return { dist: best, nx: bn[0], ny: bn[1], nz: bn[2],
-           px: ox + dx * best, py: oy + dy * best, pz: oz + dz * best };
+           px: ox + dx * best, py: oy + dy * best, pz: oz + dz * best,
+           mat: mat, house: house };
 }
 function canSee(ax, ay, az, bx, by, bz) {
   let dx = bx - ax, dy = by - ay, dz = bz - az;
@@ -193,7 +203,8 @@ function raySphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r, maxT) {
 function hitscan(ox, oy, oz, dx, dy, dz, maxT, actors, ignoreId) {
   const m = raycastMap(ox, oy, oz, dx, dy, dz, maxT);
   let best = m ? m.dist : maxT;
-  let res = m ? { kind: 'map', dist: m.dist, px: m.px, py: m.py, pz: m.pz, nx: m.nx, ny: m.ny, nz: m.nz } : null;
+  let res = m ? { kind: 'map', dist: m.dist, px: m.px, py: m.py, pz: m.pz,
+                  nx: m.nx, ny: m.ny, nz: m.nz, mat: m.mat, house: m.house } : null;
 
   for (let i = 0; i < actors.length; i++) {
     const a = actors[i];

@@ -22,6 +22,26 @@ const G = {
   fixedAcc: 0, tick: 0
 };
 
+/* Impact debris takes the colour of what it hit, so sugar dust on a lawn is
+   green and on a roof is pink. The material tag rides along on the raycast
+   result; anything untagged falls back to the effect's own warm white. */
+function impactSurfaceColor(hit) {
+  if (!hit || !hit.mat) return null;
+  if (hit.mat === 'house') return hit.house === 'A' ? PAL.houseA : PAL.houseB;
+  if (hit.mat === 'trim') return hit.house === 'A' ? PAL.houseAtrim : PAL.houseBtrim;
+  if (hit.mat === 'roof') return hit.house === 'A' ? PAL.roofA : PAL.roofB;
+  if (hit.mat === 'slab') return PAL.slab;
+  if (hit.mat === 'stair') return PAL.stair;
+  if (hit.mat === 'post') return PAL.post;
+  if (hit.mat === 'rail') return PAL.rail;
+  if (hit.mat === 'picket') return PAL.picket;
+  if (hit.mat === 'crate') return PAL.crate;
+  if (hit.mat === 'perimeter') return PAL.perimeter;
+  if (hit.mat === 'bus') return PAL.bus;
+  if (hit.mat === 'truck') return PAL.truck;
+  return null;
+}
+
 /* =====================================================================
    ACTOR
    ===================================================================== */
@@ -303,6 +323,7 @@ function fireWeapon(a, fireSeq, renderTime) {
     if (restoreActors) restoreActors();
   }
 
+  fxMuzzle(mx, my, mz);
   for (let p = 0; p < shotLines.length; p++) {
     const hit = shotHits[p];
     const endX = shotLines[p][3], endY = shotLines[p][4], endZ = shotLines[p][5];
@@ -322,14 +343,14 @@ function fireWeapon(a, fireSeq, renderTime) {
         if (typeof netPredictHit === 'function')
           netPredictHit(hit.actor, dmg, hit.head, endX, endY, endZ, fireSeq);
       } else applyDamage(hit.actor, dmg, a, hit.head, endX, endY, endZ, fireSeq);
-      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'actor');
+      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'actor', hit.actor.colors.body);
     } else if (hit.kind === 'mannequin') {
       hit.obj.userData.spin += rand(3, 7) * (rng() < 0.5 ? -1 : 1);
       hit.obj.userData.lean = Math.min(1.2, hit.obj.userData.lean + 0.4);
-      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'map');
+      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'map', PAL.mannequin);
       SFX.tone(520, 300, 0.12, 0.14, 'triangle', endX, endY, endZ);
     } else {
-      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'map');
+      fxImpact(endX, endY, endZ, hit.nx, hit.ny, hit.nz, 'map', impactSurfaceColor(hit));
     }
   }
 

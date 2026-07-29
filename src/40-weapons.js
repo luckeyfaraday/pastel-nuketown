@@ -11,7 +11,7 @@ const WEAPONS = [
     spread: 0.021, spreadMove: 0.030, pellets: 1, reload: 1.55, range: 90,
     kick: 0.016, kickRot: 0.030, speed: 1.0,
     col: { body: 0xffb7c5, accent: 0xb8f2d8, metal: 0xe9e2f2, grip: 0x6b5f80 },
-    flash: 0xffd9e8, tracer: 0xffb7c5
+    flash: 0xffd9e8, tracer: 0xffb7c5, projectile: 'bubble'
   },
   {
     id: 'shotgun', name: 'MARSHMALLOW', icon: '🍡',
@@ -19,7 +19,7 @@ const WEAPONS = [
     spread: 0.075, spreadMove: 0.088, pellets: 9, reload: 2.3, range: 34,
     kick: 0.055, kickRot: 0.105, speed: 0.94,
     col: { body: 0xffefa8, accent: 0xff9aa2, metal: 0xe9e2f2, grip: 0xd8a97a },
-    flash: 0xffd8b0, tracer: 0xffc79a
+    flash: 0xffd8b0, tracer: 0xffc79a, projectile: 'mallow'
   },
   {
     id: 'rifle', name: 'LOLLIPOP', icon: '🍭',
@@ -27,7 +27,7 @@ const WEAPONS = [
     spread: 0.004, spreadMove: 0.030, pellets: 1, reload: 1.9, range: 140,
     kick: 0.040, kickRot: 0.075, speed: 0.92,
     col: { body: 0xd4c5f9, accent: 0xa8dcf0, metal: 0xe9e2f2, grip: 0x6b5f80 },
-    flash: 0xc9e8ff, tracer: 0xbcd8ff
+    flash: 0xc9e8ff, tracer: 0xbcd8ff, projectile: 'dart'
   }
 ];
 const WBY = {}; WEAPONS.forEach(w => WBY[w.id] = w);
