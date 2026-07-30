@@ -214,6 +214,10 @@ function vmFire(w) {
   vmFlash.children[0].scale.set(s, s, 1);
 }
 function vmStartReload(dur) { VM.reloadT = dur; VM.reloadDur = dur; }
+/* Dying cancels the reload the actor was running, so the viewmodel must drop
+   it too — otherwise a death mid-reload spends the new life's opening moments
+   tilting the gun over to swap a magazine that is already full. */
+function vmCancelReload() { VM.reloadT = 0; VM.reloadDur = 0; }
 
 function updateViewmodel(dt, st) {
   // recoil spring (critically-damped-ish)

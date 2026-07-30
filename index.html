@@ -4307,6 +4307,10 @@ function vmFire(w) {
   vmFlash.children[0].scale.set(s, s, 1);
 }
 function vmStartReload(dur) { VM.reloadT = dur; VM.reloadDur = dur; }
+/* Dying cancels the reload the actor was running, so the viewmodel must drop
+   it too — otherwise a death mid-reload spends the new life's opening moments
+   tilting the gun over to swap a magazine that is already full. */
+function vmCancelReload() { VM.reloadT = 0; VM.reloadDur = 0; }
 
 function updateViewmodel(dt, st) {
   // recoil spring (critically-damped-ish)
@@ -5945,6 +5949,8 @@ function respawnActor(a, instant) {
   a.streak = 0;
   const w = WBY[a.weapon];
   a.ammo = w.mag; a.reserve = w.reserve; a.reloadT = 0; a.fireCd = 0;
+  refillAmmoStore(a);
+  if (a.isPlayer) vmCancelReload();
   if (a.brain && G.aiOK && AI.resetBrain) { try { AI.resetBrain(a.brain); } catch (e) {} }
   if (a.char) { a.char.root.visible = true; a.char.root.scale.setScalar(0.001); }
   if (a.plate) drawPlate(a.plate, a.name, a.health, a.maxHealth, a.colors.body);
@@ -6454,6 +6460,14 @@ function syncPlayerAmmoStore() {
   const p = G.player;
   if (!p._ammoBy) p._ammoBy = {};
   p._ammoBy[p.weapon] = { ammo: p.ammo, reserve: p.reserve };
+}
+/* A new life arrives with every gun topped up, not just the one in your hands.
+   The per-weapon store outlives the death that emptied it, so refilling only
+   the held weapon meant the first swap after a respawn handed back the dry
+   magazine you died holding — with no reserve left to reload it from. */
+function refillAmmoStore(a) {
+  if (!a._ammoBy) a._ammoBy = {};
+  for (const w of WEAPONS) a._ammoBy[w.id] = { ammo: w.mag, reserve: w.reserve };
 }
 
 /* =====================================================================
@@ -8854,6 +8868,13 @@ function netApplyActorState(a, s, local, sampleTime) {
       hideDeadScreen();
       SFX.spawn();
       setDamageDirsCleared();
+      /* A guest's own respawn never runs respawnActor -- the snapshot is what
+         brings it back -- so the per-weapon store has to be topped up here or
+         switching after a respawn predicts the magazine it died with. The held
+         weapon keeps what the host just said it has. */
+      refillAmmoStore(a);
+      a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };
+      vmCancelReload();
     }
   } else {
     netPushReplicaSample(a, s, sampleTime);
