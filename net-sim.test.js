@@ -62,6 +62,71 @@ test('a tap that lands as the player dies is not spent on the respawn', () => {
     'and must not pop its own spawn shield');
 });
 
+test('a respawn refills every weapon, not just the one in hand', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+
+  /* Run the rifle dry and stow it. The per-weapon store outlives the death
+     that emptied it, so a respawn that only tops up the held weapon hands the
+     dry magazine straight back on the next swap. */
+  match.host.run(`
+    switchWeapon('rifle');
+    G.player.ammo = 0; G.player.reserve = 0;
+    syncPlayerAmmoStore();
+    switchWeapon('smg');
+    G.player.ammo = 4; syncPlayerAmmoStore();
+    tryReload(G.player);
+  `);
+  assert.ok(match.host.get('VM.reloadT') > 0, 'the viewmodel should be reloading');
+
+  match.host.run(`killActor(G.player, null); G.player.respawnT = 0;`);
+  match.host.run(`simulate(${SIM.FIXED * 2})`);
+  assert.strictEqual(match.host.get('G.player.alive'), true);
+  assert.strictEqual(match.host.get('VM.reloadT'), 0,
+    'a death mid-reload must not leave the new life swapping a full magazine');
+
+  match.host.run("switchWeapon('rifle');");
+  assert.strictEqual(match.host.get('G.player.ammo'), match.host.get('WBY.rifle.mag'),
+    'the stowed weapon must come back loaded');
+  assert.strictEqual(match.host.get('G.player.reserve'),
+    match.host.get('WBY.rifle.reserve'),
+    'and with its reserve restored, or it cannot be reloaded either');
+});
+
+test("a guest's own respawn refills the weapons it is not holding", () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5 });
+  match.run(1.0);
+  const onHost = `G.actors.find(a => a.netId === ${JSON.stringify(SIM.GUEST_ID)})`;
+
+  /* A guest never runs respawnActor for itself -- the snapshot brings it back
+     -- so its own store needs topping up on the alive edge. Empty the rifle on
+     both sides so the two simulations start from the same magazine. */
+  match.guest.run("switchWeapon('rifle');");
+  match.run(0.4);
+  match.host.run(`{
+    const a = ${onHost};
+    a.ammo = 0; a.reserve = 0;
+    a._ammoBy[a.weapon] = { ammo: 0, reserve: 0 };
+  }`);
+  match.guest.run('G.player.ammo = 0; G.player.reserve = 0; syncPlayerAmmoStore();');
+  match.guest.run("switchWeapon('smg');");
+  match.run(0.4);
+
+  match.host.run(`killActor(${onHost}, null);`);
+  match.run(4.0);      // death, the 3s respawn timer, and a snapshot to carry it
+  assert.strictEqual(match.guest.get('G.player.alive'), true,
+    'the guest should be back on its feet');
+
+  match.guest.run("switchWeapon('rifle');");
+  assert.strictEqual(match.guest.get('G.player.ammo'), match.guest.get('WBY.rifle.mag'),
+    'the guest must predict a loaded magazine rather than the one it died with');
+  assert.strictEqual(match.guest.get('G.player.reserve'),
+    match.guest.get('WBY.rifle.reserve'));
+
+  match.run(0.5);
+  assert.strictEqual(match.guest.get('G.player.ammo'), match.guest.get('WBY.rifle.mag'),
+    'and the host must agree once the swap is acknowledged');
+});
+
 test('hiding touch controls cancels an armed semi-auto without firing', () => {
   const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
   match.host.run(`

@@ -137,6 +137,8 @@ function respawnActor(a, instant) {
   a.streak = 0;
   const w = WBY[a.weapon];
   a.ammo = w.mag; a.reserve = w.reserve; a.reloadT = 0; a.fireCd = 0;
+  refillAmmoStore(a);
+  if (a.isPlayer) vmCancelReload();
   if (a.brain && G.aiOK && AI.resetBrain) { try { AI.resetBrain(a.brain); } catch (e) {} }
   if (a.char) { a.char.root.visible = true; a.char.root.scale.setScalar(0.001); }
   if (a.plate) drawPlate(a.plate, a.name, a.health, a.maxHealth, a.colors.body);
@@ -646,6 +648,14 @@ function syncPlayerAmmoStore() {
   const p = G.player;
   if (!p._ammoBy) p._ammoBy = {};
   p._ammoBy[p.weapon] = { ammo: p.ammo, reserve: p.reserve };
+}
+/* A new life arrives with every gun topped up, not just the one in your hands.
+   The per-weapon store outlives the death that emptied it, so refilling only
+   the held weapon meant the first swap after a respawn handed back the dry
+   magazine you died holding — with no reserve left to reload it from. */
+function refillAmmoStore(a) {
+  if (!a._ammoBy) a._ammoBy = {};
+  for (const w of WEAPONS) a._ammoBy[w.id] = { ammo: w.mag, reserve: w.reserve };
 }
 
 /* =====================================================================

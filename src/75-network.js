@@ -2056,6 +2056,13 @@ function netApplyActorState(a, s, local, sampleTime) {
       hideDeadScreen();
       SFX.spawn();
       setDamageDirsCleared();
+      /* A guest's own respawn never runs respawnActor -- the snapshot is what
+         brings it back -- so the per-weapon store has to be topped up here or
+         switching after a respawn predicts the magazine it died with. The held
+         weapon keeps what the host just said it has. */
+      refillAmmoStore(a);
+      a._ammoBy[a.weapon] = { ammo: a.ammo, reserve: a.reserve };
+      vmCancelReload();
     }
   } else {
     netPushReplicaSample(a, s, sampleTime);
