@@ -49,7 +49,9 @@ The WebSocket relay accepts any origin by default. Players on your local network
 
 **PLAY** is the whole flow for anyone who does not want to think about rooms. It reads the room browser, joins the room with the most players and a seat still free, and opens a room of its own only when there is nothing to join. Fullest-first on purpose: a thin population belongs in one match rather than scattered across four rooms of one.
 
-Once a room holds two people the host's lobby counts down and starts on its own — 15 seconds, or 5 once the room is full. A host saving a seat for a friend presses **HOLD** to stop the clock; **START MATCH** is still there for the impatient. Nobody is left staring at a roster waiting for a person who wandered off.
+Once a room holds two people it counts down and starts on its own — five seconds, and twelve between rounds so a scoreboard can be read. **START MATCH** is still there for the impatient, and a host saving a seat for a friend presses **HOLD**, which buys thirty more seconds and can be pressed twice.
+
+The clock runs on the relay rather than in the host's page, which is the only version of it that works: the host who needs it most is the one who stopped looking at their page, and a browser nobody is looking at has had its timers throttled to a crawl or stopped outright. So the countdown you see is the relay's, sent with the roster and shown to guests as well as the host, and no player's inaction can hold a room shut. A host asleep at the start of its own round is elected away by the snapshot watchdog moments later and the room plays on without it.
 
 ![The room lobby showing a two-player roster, a COPY INVITE button, and a countdown reading "Starting in 11…" next to a HOLD button](shots/lobby.png)
 

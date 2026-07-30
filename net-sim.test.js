@@ -598,6 +598,29 @@ function matchmakingClient() {
   return SIM.createInstance({ ms: 0 });
 }
 
+/* A client whose clock the test drives and whose DOM writes it can read back:
+   the harness hands out a fresh stub per getElementById call, so a countdown
+   that only exists as text on a button is otherwise invisible. */
+function countdownClient() {
+  const clock = { ms: 0 };
+  const client = SIM.createInstance(clock);
+  client.run(`
+    var SIM_ELS = new Map();
+    document.getElementById = function (id) {
+      if (!SIM_ELS.has(id)) SIM_ELS.set(id, {
+        id: id, textContent: '', hidden: false, disabled: false, dataset: {},
+        classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+        addEventListener() {}, appendChild(child) { return child; }, innerHTML: ''
+      });
+      return SIM_ELS.get(id);
+    };
+  `);
+  client.advance = (ms) => { clock.ms += ms; };
+  client.text = (id) => client.get(`document.getElementById(${JSON.stringify(id)}).textContent`);
+  client.hidden = (id) => client.get(`document.getElementById(${JSON.stringify(id)}).hidden`);
+  return client;
+}
+
 test('quick play offers the busiest room with a seat free', () => {
   const client = matchmakingClient();
   const pick = (rooms) =>
@@ -621,69 +644,57 @@ test('quick play offers the busiest room with a seat free', () => {
   assert.deepEqual(pick(null), [], 'an unreachable browser is not a crash');
 });
 
-test('the lobby starts itself, and stops when the host says so', () => {
-  const client = matchmakingClient();
-  const started = () => client.get('SIM_STARTS');
+/* The clock itself belongs to the relay, and net-protocol.test.js tests it
+   there. What is left in the page is a display, so what is worth asserting
+   here is that it displays the relay's number and starts nothing of its own. */
+test('the lobby countdown shows the relay\'s clock and starts nothing itself', () => {
+  const client = countdownClient();
+  const shown = () => client.text('countdownText');
   client.run(`
     var SIM_STARTS = 0;
     netHostStart = function () { SIM_STARTS++; };
     NET.mode = 'host';
     NET.phase = 'lobby';
-    NET.members = [{ id: 'a', name: 'A', role: 'host' }];
+    NET.members = [
+      { id: 'a', name: 'A', role: 'host' },
+      { id: 'b', name: 'B', role: 'guest' }
+    ];
   `);
 
   try {
-    client.run('netUpdateAutoStart();');
+    client.run('netUpdateAutoStart(null);');
     assert.strictEqual(client.get('NET.countdownTimer'), 0,
-      'one player in a room is not a match waiting to happen');
+      'a room the relay is not counting shows no clock');
+    assert.strictEqual(client.hidden('lobbyCountdown'), true);
 
-    client.run(`
-      NET.members.push({ id: 'b', name: 'B', role: 'guest' });
-      netUpdateAutoStart();
-    `);
-    assert.strictEqual(client.get('NET.countdown'), client.get('NET_AUTOSTART_SECONDS'),
-      'a second arrival arms the clock');
+    client.run('netUpdateAutoStart(5000);');
+    assert.strictEqual(shown(), 'Starting in 5…', 'the relay says five, the page says five');
+    assert.strictEqual(client.hidden('holdStart'), false,
+      'and the host is offered the deferral');
 
-    /* Filling the room shortens the wait; the count already on screen must
-       never jump back up when somebody joins or leaves. */
-    client.run('netTickAutoStart(); netTickAutoStart();');
-    const midway = client.get('NET.countdown');
-    client.run(`
-      NET.members.push({ id: 'c', name: 'C', role: 'guest' });
-      netUpdateAutoStart();
-    `);
-    assert.strictEqual(client.get('NET.countdown'), midway,
-      'a third player does not restart a countdown already running');
+    /* Wall-clock, not tick-counting: a throttled tab that missed three
+       quarters of its ticks still shows the right number when it wakes. */
+    client.advance(3200);
+    client.run('netTickAutoStart();');
+    assert.strictEqual(shown(), 'Starting in 2…');
 
-    client.run(`
-      NET.members.push({ id: 'd', name: 'D', role: 'guest' });
-      netUpdateAutoStart();
-    `);
-    const full = client.get('NET_AUTOSTART_FULL_SECONDS');
-    assert.strictEqual(client.get('NET.countdown'), full,
-      'a full room stops pretending to wait for anyone');
+    client.advance(2000);
+    client.run('netTickAutoStart();');
+    assert.strictEqual(shown(), 'Starting in 0…', 'it runs out rather than going negative');
+    assert.strictEqual(client.get('SIM_STARTS'), 0,
+      'and reaching zero starts nothing: that is the relay\'s call, not this page\'s');
 
-    assert.strictEqual(started(), 0, 'nothing has started yet');
-    for (let i = 0; i < full; i++) client.run('netTickAutoStart();');
-    assert.strictEqual(started(), 1, 'the clock, not a person, starts the match');
-    assert.strictEqual(client.get('NET.countdownTimer'), 0,
-      'and it stops counting once it has');
-
-    /* HOLD is the escape hatch for a host keeping a seat for a friend: it
-       disarms for good rather than re-arming on the next roster change. */
-    client.run('netUpdateAutoStart(); netCancelAutoStart(true);');
-    assert.strictEqual(client.get('NET.autoStartHeld'), true);
-    client.run('netUpdateAutoStart();');
-    assert.strictEqual(client.get('NET.countdownTimer'), 0,
-      'held means held, even when the roster changes again');
-    assert.strictEqual(started(), 1, 'and nothing starts behind the host\'s back');
+    /* A roster change re-syncs to whatever the relay now says, in either
+       direction — a HOLD granted by the relay arrives exactly this way. */
+    client.run('netUpdateAutoStart(30000);');
+    assert.strictEqual(shown(), 'Starting in 30…');
   } finally {
     client.run('netCancelAutoStart();');
   }
 });
 
-test('a guest never runs the host\'s countdown', () => {
-  const client = matchmakingClient();
+test('a guest sees the same clock as the host', () => {
+  const client = countdownClient();
   client.run(`
     var SIM_STARTS = 0;
     netHostStart = function () { SIM_STARTS++; };
@@ -693,12 +704,53 @@ test('a guest never runs the host\'s countdown', () => {
       { id: 'a', name: 'A', role: 'host' },
       { id: 'b', name: 'B', role: 'guest' }
     ];
-    netUpdateAutoStart();
+    netUpdateAutoStart(5000);
   `);
 
-  assert.strictEqual(client.get('NET.countdownTimer'), 0,
-    'only the authority may start a round, so only it counts down');
-  assert.strictEqual(client.get('SIM_STARTS'), 0);
+  try {
+    /* A guest used to be told the rule and left to trust it. It gets the
+       number now — the same number, off the same clock. */
+    assert.strictEqual(client.text('countdownText'), 'Starting in 5…');
+    assert.strictEqual(client.hidden('holdStart'), true,
+      'but only the host may push it back');
+    assert.strictEqual(client.get('SIM_STARTS'), 0,
+      'and only the authority starts a round');
+  } finally {
+    client.run('netCancelAutoStart();');
+  }
+});
+
+test('between rounds the clock lands on the rematch button', () => {
+  const client = countdownClient();
+  const label = () => client.text('again');
+  client.run(`
+    NET.mode = 'guest';
+    NET.phase = 'playing';
+    G.over = true;
+    NET.members = [
+      { id: 'a', name: 'A', role: 'host' },
+      { id: 'b', name: 'B', role: 'guest' }
+    ];
+    netUpdateAutoStart(12000);
+  `);
+
+  try {
+    assert.strictEqual(label(), 'REMATCH IN 12',
+      'a scoreboard is the whole screen, so the clock goes on the button that is on it');
+    client.run("NET.mode = 'host'; netTickAutoStart();");
+    assert.strictEqual(label(), 'START REMATCH (12)',
+      'the host is told it can skip the wait');
+
+    client.run("NET.starting = true; netTickAutoStart();");
+    assert.strictEqual(label(), 'START REMATCH (12)',
+      'a start already in flight owns the label; a countdown must not talk over it');
+
+    /* The round beginning is what stops it — the same call netBeginMatch makes. */
+    client.run("NET.starting = false; G.over = false; netTickAutoStart();");
+    assert.strictEqual(client.get('NET.countdownTimer'), 0);
+  } finally {
+    client.run('netCancelAutoStart();');
+  }
 });
 
 /* ---------------------------------------------------------------------

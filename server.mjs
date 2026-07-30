@@ -93,6 +93,30 @@ export function createRelayServer(options = {}) {
      is merely slow, and short enough that walking a roomful of dead candidates
      costs seconds rather than the best part of a minute. */
   const authorityGraceMs = positiveInteger(options.authorityGraceMs, 2_500);
+  /* How long a room with someone to play against waits before starting itself.
+     This clock lives here rather than in the host's page because the case it
+     exists for is a host who is not looking at their page: a backgrounded tab
+     throttles its timers to a crawl and a locked phone stops them dead, so the
+     one browser that could start the match is the one browser guaranteed not
+     to. Short, because drop-in means a late arrival walks into the round
+     already running rather than missing it. Zero disables the clock. */
+  const autoStartMs = options.autoStartMs === 0
+    ? 0
+    : positiveInteger(options.autoStartMs, 5_000);
+  /* HOLD buys a host keeping a seat for a friend more time; it cannot buy them
+     silence. Every press pushes the deadline out by this much and no further,
+     so a host who presses it and wanders off blocks the room for half a minute
+     instead of forever. */
+  const autoStartHoldMs = positiveInteger(options.autoStartHoldMs, 30_000);
+  /* And how many times in a row. Without a cap, "press HOLD again" is a way to
+     keep a room shut indefinitely — which is the behaviour this whole clock
+     exists to take away, just with a script doing the waiting. */
+  const autoStartMaxHolds = positiveInteger(options.autoStartMaxHolds, 2);
+  /* Between rounds the same clock runs longer. A room in a lobby is people
+     waiting to play; a room on a scoreboard is people reading one, and
+     yanking that away five seconds after the winning shot is its own kind of
+     nobody-asked-me. */
+  const autoStartRematchMs = positiveInteger(options.autoStartRematchMs, 12_000);
   const makeId = typeof options.idFactory === 'function'
     ? options.idFactory
     : randomUUID;
@@ -438,12 +462,93 @@ export function createRelayServer(options = {}) {
     const encoded = encode({
       t: 'members',
       v: Protocol.VERSION,
-      members: memberList(room)
+      members: memberList(room),
+      autoStartIn: autoStartRemaining(room)
     });
 
     for (const peer of room.members.values()) {
       sendEncoded(peer, encoded);
     }
+  }
+
+  /* ---- automatic start ---------------------------------------------------
+
+     A lobby waits on a clock rather than on a person. The clock is here and
+     not in the host's page because the host who needs it most is the one who
+     stopped looking at their page, and a browser that is not being looked at
+     is a browser whose timers have been throttled to a crawl or stopped
+     outright. Every room therefore starts itself, and START MATCH is left for
+     the impatient. */
+
+  function autoStartEligible(room) {
+    return autoStartMs > 0 && !room.started && !room.migrating &&
+      !!room.host && room.members.size >= 2;
+  }
+
+  function clearAutoStart(room) {
+    if (room.autoStartTimer) clearTimeout(room.autoStartTimer);
+    room.autoStartTimer = null;
+    room.autoStartAt = 0;
+    /* Holds are spent per wait, not per room: every fresh clock — a new round,
+       a rebuilt roster — is a fresh case for keeping a seat open. */
+    room.autoStartHolds = 0;
+  }
+
+  /* The deadline outlives the timer that watches it, so a roster change re-arms
+     without moving the moment: the number already counting down on four screens
+     must not jump back up because a fifth person opened the door. */
+  function scheduleAutoStart(room) {
+    if (!autoStartEligible(room)) {
+      clearAutoStart(room);
+      return;
+    }
+    if (!room.autoStartAt) {
+      room.autoStartAt = Date.now() +
+        (room.round > 0 ? autoStartRematchMs : autoStartMs);
+    }
+    if (room.autoStartTimer) clearTimeout(room.autoStartTimer);
+    room.autoStartTimer = setTimeout(() => {
+      room.autoStartTimer = null;
+      if (!autoStartEligible(room)) return;
+      /* Nothing here asks the host first, and nothing waits for it to answer.
+         If its page is asleep the round begins without it and the snapshot
+         watchdog hands authority to somebody awake a couple of seconds later,
+         which is a match starting late rather than a room never starting. */
+      startRound(room);
+    }, Math.max(0, room.autoStartAt - Date.now()));
+    if (typeof room.autoStartTimer.unref === 'function') room.autoStartTimer.unref();
+  }
+
+  /* Milliseconds left, or null for a room that is not counting. Sent with the
+     roster so every client — guests included — can show the same clock instead
+     of watching a roster that never moves and hoping. */
+  function autoStartRemaining(room) {
+    if (!room.autoStartTimer || !room.autoStartAt) return null;
+    return Math.max(0, room.autoStartAt - Date.now());
+  }
+
+  function startRound(room) {
+    clearAutoStart(room);
+    room.started = true;
+    room.round++;
+    room.latestSnapshot = null;
+    room.latestCheckpoint = null;
+    room.snapshotAt = 0;
+    room.snapshotIntervalMs = 0;
+    armSnapshotStall(room, room.host, authorityGraceMs);
+    /* A round starting is a fresh slate for everyone: time spent waiting in
+       the lobby is not time spent away from a match. */
+    for (const member of room.members.values()) {
+      member.lastSeq = -1;
+      member.activeAt = Date.now();
+    }
+    broadcastRoom(room, {
+      t: 'start',
+      v: Protocol.VERSION,
+      authorityEpoch: room.authorityEpoch,
+      round: room.round,
+      members: memberList(room)
+    }, true);
   }
 
   function broadcastRoom(room, message, includeHost = false) {
@@ -518,7 +623,8 @@ export function createRelayServer(options = {}) {
       authorityEpoch: peer.room.authorityEpoch,
       round: peer.room.round,
       started: peer.room.started,
-      members: memberList(peer.room)
+      members: memberList(peer.room),
+      autoStartIn: autoStartRemaining(peer.room)
     });
   }
 
@@ -552,6 +658,9 @@ export function createRelayServer(options = {}) {
       snapshotAt: 0,
       snapshotIntervalMs: 0,
       snapshotStallTimer: null,
+      autoStartTimer: null,
+      autoStartAt: 0,
+      autoStartHolds: 0,
       /* Listed by default so the room browser is useful out of the box;
          a host that wants the old code-only privacy sends listed:false. */
       listed: message.listed !== false
@@ -590,6 +699,9 @@ export function createRelayServer(options = {}) {
     }
 
     enterRoom(peer, room, 'guest', name);
+    /* Before either reply: the arrival is the second body that starts the
+       clock, and both messages are meant to carry the clock's answer. */
+    scheduleAutoStart(room);
     roomReply(peer);
     broadcastMembers(room);
   }
@@ -708,27 +820,29 @@ export function createRelayServer(options = {}) {
         sendError(peer, 'already-started', 'The match is already running.');
         return;
       }
-      peer.room.started = true;
-      peer.room.round++;
-      peer.room.latestSnapshot = null;
-      peer.room.latestCheckpoint = null;
-      peer.room.snapshotAt = 0;
-      peer.room.snapshotIntervalMs = 0;
-      armSnapshotStall(peer.room, peer, authorityGraceMs);
-      /* A round starting is a fresh slate for everyone: time spent waiting in
-         the lobby is not time spent away from a match. */
-      for (const member of peer.room.members.values()) {
-        member.lastSeq = -1;
-        member.activeAt = Date.now();
+      startRound(peer.room);
+      return;
+    }
+
+    /* HOLD: the host is keeping a seat for somebody. It buys time and nothing
+       else — the deadline moves, it never goes away — so the room stays a room
+       people can join and leave rather than one person's waiting decision. */
+    if (message.t === 'hold') {
+      if (peer.role !== 'host') {
+        sendError(peer, 'host-only', 'Only the host can hold the start.');
+        return;
       }
-      const start = {
-        t: 'start',
-        v: Protocol.VERSION,
-        authorityEpoch: peer.room.authorityEpoch,
-        round: peer.room.round,
-        members: memberList(peer.room)
-      };
-      broadcastRoom(peer.room, start, true);
+      if (!hasCurrentAuthority(peer, message)) return;
+      if (!autoStartEligible(peer.room)) return;
+      if (peer.room.autoStartHolds >= autoStartMaxHolds) {
+        sendError(peer, 'hold-exhausted',
+          'The start cannot be held any longer — everyone here is waiting to play.');
+        return;
+      }
+      peer.room.autoStartHolds++;
+      peer.room.autoStartAt = Date.now() + autoStartHoldMs;
+      scheduleAutoStart(peer.room);
+      broadcastMembers(peer.room);
       return;
     }
 
@@ -743,6 +857,9 @@ export function createRelayServer(options = {}) {
       clearSnapshotStall(peer.room);
       peer.room.snapshotAt = 0;
       peer.room.snapshotIntervalMs = 0;
+      /* Back between rounds is back on the clock: a rematch nobody calls for
+         strands a room exactly the way an uncalled first round does. */
+      scheduleAutoStart(peer.room);
       broadcastRoom(peer.room, {
         t: 'lobby',
         v: Protocol.VERSION,
@@ -750,6 +867,10 @@ export function createRelayServer(options = {}) {
         round: peer.room.round,
         winner: typeof message.winner === 'string' ? message.winner.slice(0, 80) : null
       });
+      /* After, not before. The roster is what carries the deadline, and a
+         client only knows where to show it once the message above has told it
+         the round is over. */
+      broadcastMembers(peer.room);
       return;
     }
 
@@ -918,6 +1039,7 @@ export function createRelayServer(options = {}) {
     clearSnapshotStall(room);
     const nextHost = room.members.values().next().value;
     if (!nextHost) {
+      clearAutoStart(room);
       rooms.delete(room.code);
       room.host = null;
       room.started = false;
@@ -935,6 +1057,10 @@ export function createRelayServer(options = {}) {
       member.lastSeq = -1;
       member.activeAt = Date.now();
     }
+    /* The new host inherits a lobby, so it inherits the clock too — and the
+       roster broadcast is what carries the deadline, since `host-changed` is a
+       fixed shape the clients sanitise field by field. */
+    scheduleAutoStart(room);
     broadcastRoom(room, {
       t: 'host-changed',
       v: Protocol.VERSION,
@@ -943,6 +1069,7 @@ export function createRelayServer(options = {}) {
       host: nextHost.id,
       members: memberList(room)
     }, true);
+    broadcastMembers(room);
   }
 
   function attemptPromotion(room) {
@@ -984,6 +1111,7 @@ export function createRelayServer(options = {}) {
 
   function beginMigration(room, failedHost, removeHost) {
     clearSnapshotStall(room);
+    clearAutoStart(room);
     if (removeHost) {
       room.members.delete(failedHost.id);
       clearRoomMembership(failedHost);
@@ -997,6 +1125,8 @@ export function createRelayServer(options = {}) {
       return;
     }
     if (!room.started || !canMigrateSeamlessly(room)) {
+      /* fallbackRestart puts the room back in a lobby, which is a lobby that
+         needs its clock re-armed — it does that itself. */
       fallbackRestart(room);
       return;
     }
@@ -1053,6 +1183,9 @@ export function createRelayServer(options = {}) {
     room.members.delete(peer.id);
     clearRoomMembership(peer);
     if (room.migrating) room.migrating.expected.delete(peer.id);
+    /* A room back down to one person has nobody to play against, so the clock
+       stops rather than starting a host alone against the bots. */
+    scheduleAutoStart(room);
     broadcastMembers(room);
   }
 
@@ -1183,6 +1316,7 @@ export function createRelayServer(options = {}) {
     flushStats();
     for (const room of rooms.values()) {
       clearSnapshotStall(room);
+      clearAutoStart(room);
       if (room.migrating && room.migrating.timer) clearTimeout(room.migrating.timer);
     }
     for (const peer of peers.values()) peer.ws.terminate();

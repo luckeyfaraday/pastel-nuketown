@@ -6855,11 +6855,6 @@ const NET_SNAP_DISTANCE = 3;
 const NET_RESIDUAL_SMOOTHING = 0.5;
 const NET_MAX_HISTORY_SAMPLES = 32;
 const NET_MAX_REPLICA_SAMPLES = 16;
-/* Long enough that a host keeping a seat for one more friend has time to say
-   so, short enough that two strangers are not left reading a roster. */
-const NET_AUTOSTART_SECONDS = 15;
-/* Nobody else is arriving into a full room, so stop pretending to wait. */
-const NET_AUTOSTART_FULL_SECONDS = 5;
 /* Errors that mean "not that room" rather than "not this game". A quick-play
    candidate can fill, close, or start changing host in the moment between the
    poll that offered it and the socket that dials it; that is the next
@@ -6914,11 +6909,11 @@ const NET = {
   roomsBusy: false,
   roomsTimer: 0,
   quick: null,                  // in-flight quick-play plan, or null
-  countdown: 0,
-  countdownTimer: 0,
-  autoStartHeld: false
+  autoStartAt: 0,               // performance.now() the relay's clock reaches 0
+  countdownTimer: 0
 };
 
+function netNow() { return performance.now(); }
 function netIsHost() { return NET.mode === 'host'; }
 function netIsGuest() { return NET.mode === 'guest'; }
 function netIsMultiplayer() { return netIsHost() || netIsGuest(); }
@@ -7309,7 +7304,7 @@ function netShowLobby() {
     start.disabled = NET.phase !== 'lobby';
   }
   netRenderMembers();
-  netUpdateAutoStart();
+  netRenderCountdown();
 }
 
 function netShowMainMenu(message) {
@@ -7328,88 +7323,89 @@ function netShowMainMenu(message) {
 
 /* ---- automatic start ----------------------------------------------------
    The lobby used to wait on a person: guests sat until the host clicked, and a
-   host who wandered off froze everyone behind them. It now waits on a clock
-   the host can stop, and START MATCH is left for the impatient. */
+   host who wandered off froze everyone behind them. A countdown fixed that
+   only on paper, because it ran in the host's own page — the page belonging to
+   the one player who, in the case worth fixing, had stopped looking at it. The
+   relay owns the clock now and starts the round itself. What is left here is a
+   display: the deadline arrives with the roster, and this counts it down so
+   everyone in the room, host and guest alike, can see the same number.
 
-function netAutoStartSeconds() {
-  return NET.members.length >= (NETP ? NETP.MAX_PLAYERS : 4)
-    ? NET_AUTOSTART_FULL_SECONDS
-    : NET_AUTOSTART_SECONDS;
+   Nothing in this file starts a match on a timer any more. START MATCH is the
+   impatient host's shortcut and HOLD is the patient one's, and both of them go
+   to the relay. */
+
+/* Where the clock is shown: the lobby panel before the first round, and the
+   rematch button between rounds, which is the same wait wearing a scoreboard. */
+function netCountdownVisible() {
+  return netIsMultiplayer() &&
+    (NET.phase === 'lobby' || (NET.phase === 'playing' && G.over));
 }
 
-function netCancelAutoStart(held) {
+function netCancelAutoStart() {
   if (NET.countdownTimer) clearInterval(NET.countdownTimer);
   NET.countdownTimer = 0;
-  NET.countdown = 0;
-  if (held) NET.autoStartHeld = true;
+  NET.autoStartAt = 0;
   netRenderCountdown();
 }
 
-function netUpdateAutoStart() {
-  if (!netIsHost() || NET.phase !== 'lobby' || NET.autoStartHeld ||
-      NET.members.length < 2) {
+/* `remaining` is the relay's milliseconds-to-go, or null for a room that is not
+   counting. Held as a local deadline rather than a tick count so a throttled
+   background tab shows an honest number the moment it wakes up rather than one
+   frozen wherever its timer stopped. */
+function netUpdateAutoStart(remaining) {
+  if (!netCountdownVisible() || !Number.isFinite(remaining) || remaining < 0) {
     netCancelAutoStart();
     return;
   }
-
-  const seconds = netAutoStartSeconds();
-  /* A room filling up shortens the wait but never lengthens it: whoever is
-     already watching the number count down should not see it jump back up. */
-  if (!NET.countdownTimer) {
-    NET.countdown = seconds;
-    NET.countdownTimer = setInterval(netTickAutoStart, 1000);
-  } else if (seconds < NET.countdown) {
-    NET.countdown = seconds;
-  }
+  NET.autoStartAt = netNow() + Math.min(remaining, 600000);
+  if (!NET.countdownTimer) NET.countdownTimer = setInterval(netTickAutoStart, 250);
   netRenderCountdown();
 }
 
 function netTickAutoStart() {
-  if (!netIsHost() || NET.phase !== 'lobby' || NET.members.length < 2) {
+  if (!netCountdownVisible()) {
     netCancelAutoStart();
     return;
   }
-  NET.countdown--;
-  if (NET.countdown > 0) {
-    netRenderCountdown();
-    return;
-  }
-  netCancelAutoStart();
-  netHostStart();
+  netRenderCountdown();
+}
+
+/* Rounded up, so the last second is shown as "1" rather than a "0" that sits
+   there for however long the start message spends in flight. */
+function netAutoStartSeconds() {
+  return Math.max(0, Math.ceil((NET.autoStartAt - netNow()) / 1000));
 }
 
 function netRenderCountdown() {
   const wrap = document.getElementById('lobbyCountdown');
   const text = document.getElementById('countdownText');
   const hold = document.getElementById('holdStart');
-  if (!wrap || !text) return;
+  const counting = netCountdownVisible() && !!NET.countdownTimer;
+  const seconds = counting ? netAutoStartSeconds() : 0;
 
-  const show = (message, holdable) => {
-    text.textContent = message;
-    if (hold) hold.hidden = !holdable;
-    wrap.hidden = false;
-  };
+  if (wrap && text) {
+    if (counting && NET.phase === 'lobby') {
+      text.textContent = 'Starting in ' + seconds + '…';
+      /* Only the host may hold, and holding is deferral rather than veto: the
+         relay grants a fixed extension per press, so a host who presses it and
+         walks away costs the room half a minute rather than the evening. */
+      if (hold) hold.hidden = !netIsHost();
+      wrap.hidden = false;
+    } else {
+      wrap.hidden = true;
+    }
+  }
 
-  if (!netIsMultiplayer() || NET.phase !== 'lobby') {
-    wrap.hidden = true;
-    return;
+  /* Between rounds the scoreboard is the whole screen, so the clock goes on
+     the one button already there. Left alone once a start is in flight —
+     showOverScreen and netHostStart own the label then, and a countdown
+     overwriting "STARTING…" would be reporting a wait that is already over. */
+  const again = document.getElementById('again');
+  if (again && counting && G.over && !NET.starting) {
+    again.textContent = netIsHost()
+      ? 'START REMATCH (' + seconds + ')'
+      : 'REMATCH IN ' + seconds;
   }
-  if (!netIsHost()) {
-    /* A guest cannot see the host's clock without a message this protocol
-       version does not have, but it can be told the rule instead of being left
-       to watch a roster that never moves. */
-    show('Waiting for the host — matches start on their own.', false);
-    return;
-  }
-  if (NET.countdownTimer) {
-    show('Starting in ' + NET.countdown + '…', true);
-    return;
-  }
-  if (NET.autoStartHeld && NET.members.length >= 2) {
-    show('Auto-start held — press START MATCH when you are ready.', false);
-    return;
-  }
-  wrap.hidden = true;
 }
 
 function netSetPauseMenu(paused) {
@@ -7498,7 +7494,6 @@ function netResetTransport() {
   NET.scoreSignature = '';
   NET.quick = null;
   NET.endReason = '';
-  NET.autoStartHeld = false;
   netCancelAutoStart();
   NET.manualClose = false;
 }
@@ -7630,6 +7625,7 @@ function netHandleWire(raw) {
       netBeginMatch();
       return;
     }
+    netUpdateAutoStart(msg.autoStartIn);
     netShowLobby();
     netStatus(netIsHost()
       ? (opened
@@ -7675,7 +7671,7 @@ function netHandleWire(raw) {
     if (!netIsMultiplayer() || !members || !members.some(member => member.id === NET.id)) return;
     NET.members = members;
     netRenderMembers();
-    netUpdateAutoStart();
+    netUpdateAutoStart(msg.autoStartIn);
     if (NET.phase === 'migrating' && netIsHost()) {
       const liveGuests = new Set(
         members.filter(member => member.id !== NET.id).map(member => member.id));
@@ -7782,6 +7778,18 @@ function netHandleWire(raw) {
       netStatus(errorText, 'error');
     }
   }
+}
+
+/* The relay answers with a roster carrying the new deadline, so there is
+   nothing to update here — and nothing to update if the send fails either,
+   which is the point: the clock this defers is not one this page owns. */
+function netHoldStart() {
+  if (!netIsHost() || NET.phase !== 'lobby' || NET.starting) return;
+  if (!netSend({ t: 'hold', v: NETP.VERSION, authorityEpoch: NET.authorityEpoch })) {
+    netStatus('Could not hold the start.', 'error');
+    return;
+  }
+  netStatus('Holding the start — press START MATCH when you are ready.');
 }
 
 function netHostStart() {
@@ -9241,7 +9249,7 @@ function initNetworkUI() {
   }
 
   const hold = document.getElementById('holdStart');
-  if (hold) hold.addEventListener('click', () => { SFX.ui(); netCancelAutoStart(true); });
+  if (hold) hold.addEventListener('click', () => { SFX.ui(); netHoldStart(); });
 
   const refresh = document.getElementById('refreshRooms');
   if (refresh) refresh.addEventListener('click', () => netRefreshRooms(true));

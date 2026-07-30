@@ -558,7 +558,8 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     authorityEpoch: 1,
     round: 0,
     started: false,
-    members: [{ id: 'peer-1', name: 'Host', role: 'host' }]
+    members: [{ id: 'peer-1', name: 'Host', role: 'host' }],
+    autoStartIn: null
   });
   await host.next('members');
 
@@ -1344,6 +1345,260 @@ test('the room handshake carries the round so a player who joins between rounds 
 
   host.ws.terminate();
   late.ws.terminate();
+});
+
+/* ---------------------------------------------------------------------
+   Automatic start
+
+   The bug these are about: a host opens a room, wanders off, and everyone who
+   joins is stuck behind a button only that person can press. A countdown in
+   the host's page did not fix it, because a page nobody is looking at is a
+   page whose timers have been throttled or stopped. So the clock lives here,
+   where nobody can walk away from it.
+   --------------------------------------------------------------------- */
+
+test('a lobby nobody starts starts itself', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 150
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const created = await host.next('room');
+  assert.equal(created.autoStartIn, null,
+    'one player is not a match waiting to happen, so no clock is running');
+  await host.next('members');
+
+  guest.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Guest' });
+  const joined = await guest.next('room');
+  assert.ok(joined.autoStartIn > 0 && joined.autoStartIn <= 150,
+    `a second arrival arms the clock, got ${joined.autoStartIn}`);
+  const roster = await host.next('members');
+  assert.ok(roster.autoStartIn > 0 && roster.autoStartIn <= 150,
+    'and the deadline reaches everyone, so guests can show it too');
+
+  /* Nothing below sends `start`. That is the entire point of the test: as far
+     as the relay knows, the host closed its laptop after opening the room. */
+  const [hostStart, guestStart] = await Promise.all([
+    host.next('start'),
+    guest.next('start')
+  ]);
+  assert.equal(hostStart.round, 1);
+  assert.equal(guestStart.round, 1);
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
+test('the clock needs somebody to play against, and stops when they leave', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 250
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+  await host.next('members');
+  /* A host alone would be starting a match against nobody. */
+  await expectNoMessage(host, 'start', 400);
+
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await guest.opened;
+  guest.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Guest' });
+  await guest.next('room');
+  await host.next('members');
+  guest.ws.close();
+
+  const emptied = await host.next(
+    (message) => message.t === 'members' && message.members.length === 1);
+  assert.equal(emptied.autoStartIn, null, 'the room is back to one, so the clock stops');
+  /* And the deadline set while there were two does not outlive them. */
+  await expectNoMessage(host, 'start', 400);
+
+  host.ws.terminate();
+});
+
+test('HOLD defers the start rather than cancelling it', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 200,
+    autoStartHoldMs: 700
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+  await host.next('members');
+  guest.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Guest' });
+  await guest.next('room');
+  await host.next('members');
+
+  host.send({ t: 'hold', v: Protocol.VERSION, authorityEpoch: 1 });
+  const held = await host.next(
+    (message) => message.t === 'members' && message.autoStartIn > 200);
+  assert.ok(held.autoStartIn <= 700, `the extension is bounded, got ${held.autoStartIn}`);
+  /* Past the original deadline, so the hold really did move it... */
+  await expectNoMessage(guest, 'start', 350);
+  /* ...and short of forever, which is the part a host cannot opt out of. */
+  const started = await guest.next('start', 1500);
+  assert.equal(started.round, 1);
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
+test('holding runs out, so it cannot be pressed into a veto', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 5_000,
+    autoStartHoldMs: 5_000,
+    autoStartMaxHolds: 2
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+  guest.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Guest' });
+  await guest.next('room');
+  await host.next('members');   // the arrival's roster, so the loop waits on its own
+
+  for (let press = 0; press < 2; press++) {
+    host.send({ t: 'hold', v: Protocol.VERSION, authorityEpoch: 1 });
+    await host.next('members');
+  }
+  host.send({ t: 'hold', v: Protocol.VERSION, authorityEpoch: 1 });
+  assert.equal((await host.next('error')).code, 'hold-exhausted',
+    'a third press is a host trying to keep a room shut, not one keeping a seat');
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
+test('only the host may hold the start', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 0
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+  guest.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Guest' });
+  await guest.next('room');
+
+  guest.send({ t: 'hold', v: Protocol.VERSION, authorityEpoch: 1 });
+  assert.equal((await guest.next('error')).code, 'host-only');
+
+  /* Zero disables the clock outright, which is how a room is held still for
+     as long as a test needs it. */
+  await expectNoMessage(host, 'start', 300);
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
+test('a round that ends puts the room back on a longer clock', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 100,
+    autoStartRematchMs: 400
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+  guest.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Guest' });
+  await guest.next('room');
+  /* Drained rather than ignored: this roster carries the lobby's own deadline,
+     and leaving it queued would answer the question this test asks next. */
+  await guest.next('members');
+  await Promise.all([host.next('start'), guest.next('start')]);
+
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1, round: 1, winner: null
+  });
+  await guest.next('lobby');
+  const between = await guest.next(
+    (message) => message.t === 'members' && message.autoStartIn !== null);
+  assert.ok(between.autoStartIn > 100 && between.autoStartIn <= 400,
+    `a scoreboard gets longer than a lobby does, got ${between.autoStartIn}`);
+
+  const rematch = await guest.next('start', 1500);
+  assert.equal(rematch.round, 2, 'and a rematch nobody called for happens anyway');
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
+test('a host asleep at the start of its own round loses the room, not the room the host', async (t) => {
+  let nextId = 0;
+  const { port } = await startRelay(t, {
+    idFactory: () => `peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 100,
+    autoStartRematchMs: 100,
+    authorityGraceMs: 150
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const first = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const second = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, first.opened, second.opened]);
+
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  await host.next('room');
+  first.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'First' });
+  await first.next('room');
+  second.send({ t: 'join', v: Protocol.VERSION, room: 'AAAAAA', name: 'Second' });
+  await second.next('room');
+
+  /* The relay starts the round on its own, and the sleeping host simulates
+     nothing — no snapshot ever arrives. The stall watchdog is what turns that
+     into a playable room rather than a stuck one. */
+  await first.next('start');
+  const changed = await first.next('host-changed');
+  assert.equal(changed.host, 'peer-2', 'authority goes to somebody awake');
+  assert.deepEqual(changed.members.map((member) => member.id), ['peer-2', 'peer-3'],
+    'and the host that never woke up is gone');
+
+  /* Which leaves two players in a lobby: the same situation the clock exists
+     for, so it runs again and they get their match. */
+  const restarted = await first.next('start', 1500);
+  assert.equal(restarted.round, changed.round + 1);
+
+  host.ws.terminate();
+  first.ws.terminate();
+  second.ws.terminate();
 });
 
 test('the room browser lists rooms you can join and rooms you can only see', async (t) => {
