@@ -108,37 +108,37 @@ function netIsMultiplayer() { return netIsHost() || netIsGuest(); }
 function netHasTransport() { return NET.mode !== 'solo'; }
 function netSocketOpen() { return NET.socket && NET.socket.readyState === WebSocket.OPEN; }
 
-function netColorForIndex(i) {
-  const c = BOT_COLORS[(i + 7) % BOT_COLORS.length];
-  return { body: c.body, trim: c.trim, name: c.name };
-}
-
-function netMemberWithColor(member, i) {
+/* Every client dresses every player the same way without asking, because the
+   answer is the seat the relay already gave them rather than anything local.
+   That matters most for the one actor a guest builds itself: its own. */
+function netMemberWithColor(member) {
   return {
     id: member.id,
     name: member.name,
     role: member.role,
-    colors: netColorForIndex(i)
+    colors: jerseyForSlot(member.slot)
   };
 }
 
 function netLocalPlayerInfo() {
   if (!netIsMultiplayer()) return { id: null, name: 'YOU', colors: PLAYER_COLOR };
-  const i = Math.max(0, NET.members.findIndex(m => m.id === NET.id));
-  const m = NET.members[i] || { id: NET.id, name: 'PLAYER' };
-  return { id: NET.id, name: m.name, colors: netColorForIndex(i) };
+  const m = NET.members.find(member => member.id === NET.id);
+  if (!m) return { id: NET.id, name: 'PLAYER', colors: PLAYER_COLOR };
+  return { id: NET.id, name: m.name, colors: jerseyForSlot(m.slot) };
 }
 
 function netAuthorityRoster() {
   if (!netIsHost()) return [];
   const out = [];
-  for (let i = 0; i < NET.members.length; i++) {
-    const m = NET.members[i];
-    if (m.id !== NET.id) out.push(netMemberWithColor(m, i));
+  for (const m of NET.members) {
+    if (m.id !== NET.id) out.push(netMemberWithColor(m));
   }
   return out;
 }
 
+/* Bots are the shortfall and nothing else, which is why the room cap and the
+   combatant count are the same number: fill every seat and this returns zero.
+   A guest builds only itself and takes the rest of the map from snapshots. */
 function netBotCount(humanCount) {
   if (netIsGuest()) return 0;
   if (netIsHost()) return Math.max(0, CFG.combatants - humanCount);
@@ -454,18 +454,20 @@ function netSend(msg, lossy) {
 function netCleanMembers(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > NETP.MAX_PLAYERS) return null;
   const ids = new Set();
+  const slots = new Set();
   const members = [];
   let hosts = 0;
   for (const raw of value) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
         typeof raw.id !== 'string' || !raw.id || raw.id.length > 80 ||
         typeof raw.name !== 'string' || (raw.role !== 'host' && raw.role !== 'guest') ||
-        ids.has(raw.id)) return null;
+        ids.has(raw.id) || !NETP.validSlot(raw.slot) || slots.has(raw.slot)) return null;
     const name = NETP.cleanPlayerName(raw.name);
     if (!name) return null;
     ids.add(raw.id);
+    slots.add(raw.slot);
     if (raw.role === 'host') hosts++;
-    members.push({ id: raw.id, name: name, role: raw.role });
+    members.push({ id: raw.id, name: name, role: raw.role, slot: raw.slot });
   }
   return hosts === 1 ? members : null;
 }
@@ -616,8 +618,8 @@ function netRenderMembers() {
   for (const member of NET.members) {
     const li = document.createElement('li');
     const sw = document.createElement('i');
-    const i = NET.members.indexOf(member);
-    sw.style.background = '#' + netColorForIndex(i).body.toString(16).padStart(6, '0');
+    sw.style.background =
+      '#' + jerseyForSlot(member.slot).body.toString(16).padStart(6, '0');
     li.appendChild(sw);
     const name = document.createElement('span');
     name.textContent = member.name + (member.id === NET.id ? ' (YOU)' : '');
@@ -628,7 +630,7 @@ function netRenderMembers() {
     list.appendChild(li);
   }
   const count = document.getElementById('rosterCount');
-  if (count) count.textContent = NET.members.length + ' / ' + (NETP ? NETP.MAX_PLAYERS : 4);
+  if (count) count.textContent = NET.members.length + ' / ' + (NETP ? NETP.MAX_PLAYERS : 9);
 }
 
 function netResetTransport() {
@@ -1433,25 +1435,27 @@ function netEndSession(message) {
    needs no world handed to it — the next snapshot is the world, and until the
    host has seated them their client ignores snapshots it is not in. */
 
-/* Which bot pays for the seat. A dead one is already off the map, so taking
-   it costs nobody a target mid-duel; failing that the one doing least, which
-   is the closest thing to "nobody will miss this". Kept to CFG.combatants so
-   a match that people are already playing does not quietly get busier. */
-function netEvictBotForArrival() {
-  if (G.actors.length < CFG.combatants) return;
-  const bots = G.actors.filter(a => a.controller === 'bot');
-  if (!bots.length) return;
+/* The bot wearing the arrival's jersey is the bot that leaves, because the
+   room has exactly as many seats as jerseys: whoever has the colour is
+   sitting in the chair. That it is a specific bot rather than the least
+   missed one is the price of never putting two players in the same colour,
+   and in a firefight the colour matters more.
 
-  const dead = bots.filter(b => !b.alive);
-  const pool = dead.length ? dead : bots;
-  let spare = pool[0];
-  for (const b of pool) if (b.kills < spare.kills) spare = b;
-  detachActor(spare);
+   Nobody may be wearing it — a match that already lost players has jerseys
+   going spare — and then the arrival costs nothing. */
+function netEvictBotForArrival(slot) {
+  const jersey = jerseyForSlot(slot).name;
+  for (const a of G.actors) {
+    if (a.controller === 'bot' && a.colors && a.colors.name === jersey) {
+      detachActor(a);
+      return;
+    }
+  }
 }
 
-function netSeatArrival(member, index) {
-  netEvictBotForArrival();
-  const info = netMemberWithColor(member, index);
+function netSeatArrival(member) {
+  netEvictBotForArrival(member.slot);
+  const info = netMemberWithColor(member);
   const actor = makeActor({
     name: info.name,
     netId: info.id,
@@ -1476,20 +1480,39 @@ function netAdmitArrivals() {
 
   const seated = new Set(G.actors.map(a => a.netId));
   let added = 0;
-  for (let i = 0; i < NET.members.length; i++) {
-    const member = NET.members[i];
+  for (const member of NET.members) {
     if (member.id === NET.id || seated.has(member.id)) continue;
-    netSeatArrival(member, i);
+    netSeatArrival(member);
     added++;
   }
   if (!added) return;
 
+  /* An arrival always costs the bot in its jersey, even in a match that had
+     room to spare — so top the match back up here as well as on departure,
+     or a half-empty room would stay half-empty however many people joined. */
+  netBackfillBots();
   NET.manifestVersion++;
   NET.checkpointDirty = true;
   refreshBoard();
   /* Publish now rather than on the next 20Hz beat: until a snapshot carries
      them, the arrival is staring at an empty map. */
   netAfterSimulation(0, true);
+}
+
+/* The other half of drop-in, and the half a nine-seat room cannot do without.
+   A leaver used to just be subtracted: four seats meant a match could lose at
+   most three people and still have five bots in it, so nobody noticed. Nine
+   seats means a full room can empty out to two players and an empty map, so
+   the bots that stood aside for the humans come back when they go. */
+function netBackfillBots() {
+  if (!netIsHost() || NET.phase !== 'playing' || G.over) return;
+  const spare = freeJerseys(G.actors);
+  const missing = Math.min(CFG.combatants - G.actors.length, spare.length);
+  for (let i = 0; i < missing; i++) {
+    const bot = makeBot(spare[i]);
+    G.actors.push(bot);
+    respawnActor(bot, true);
+  }
 }
 
 function netPruneDepartedPlayers() {
@@ -1501,6 +1524,9 @@ function netPruneDepartedPlayers() {
       changed = true;
     }
   }
+  /* Only once the departed are actually gone: the backfill reads the jerseys
+     nobody is wearing, and a leaver still on the list is still wearing one. */
+  if (changed) netBackfillBots();
   if (changed && netIsHost()) {
     NET.manifestVersion++;
     NET.checkpointDirty = true;

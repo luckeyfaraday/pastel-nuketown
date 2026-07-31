@@ -1,6 +1,6 @@
 # Pastel Nuketown — Browser Multiplayer FPS Game
 
-Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs entirely in the browser. Built with Three.js and vanilla JavaScript, it features a pastel-styled Nuketown-inspired arena with host-authoritative multiplayer over WebSockets. Play solo against AI bots or create a room for up to 4 players. No downloads, no plugins, no accounts — open the page and play.
+Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs entirely in the browser. Built with Three.js and vanilla JavaScript, it features a pastel-styled Nuketown-inspired arena with host-authoritative multiplayer over WebSockets. Play solo against AI bots or create a room for up to 9 players. No downloads, no plugins, no accounts — open the page and play.
 
 ![Pastel Nuketown title screen: a PLAY button over the pastel arena, with a room browser listing two joinable rooms and one marked IN PROGRESS](shots/title.png)
 
@@ -10,7 +10,7 @@ Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs enti
 - **One-button matchmaking** — PLAY joins the busiest room with a seat free, opens one when there is nothing to join, and starts the match on a countdown instead of waiting for someone to click
 - **Drop-in join** — walk into a round already in progress; you spawn shielded and a bot gives up its slot, so nobody waits out somebody else's match
 - **Plays on a phone** — on-screen thumbstick, look-drag and button cluster appear automatically on touch devices, with an analog stick the netcode carries as-is
-- **Multiplayer rooms** — host-authoritative relay server supports up to 4 players per room with client-side interpolation and prediction
+- **Multiplayer rooms** — host-authoritative relay server supports up to 9 players per room with client-side interpolation and prediction
 - **AI bots** — three difficulty levels (easy, normal, hard) with navigation mesh pathfinding, burst-fire combat, and retreat behaviour
 - **Three weapons** — BUBBLEGUN (full-auto SMG), MARSHMALLOW (9-pellet shotgun), LOLLIPOP (semi-auto rifle with 2.2x headshot multiplier)
 - **LAN play** — the relay accepts any origin by default, so players on a local network can join without configuration
@@ -166,13 +166,13 @@ It runs only when a build input is staged, stays out of rebases, merges and docs
 No. Pastel Nuketown runs entirely in the browser. Open the page, click the canvas, and play. The only server-side requirement is Node.js >= 18.14 to run the WebSocket relay.
 
 **How many players can join a multiplayer room?**
-Up to 4 players per room. The server enforces this limit in the protocol (`MAX_PLAYERS = 4`). A room fills the remaining slots with bots, so a match is always nine combatants.
+Up to 9 players per room. The server enforces this limit in the protocol (`MAX_PLAYERS = 9`), and it is set to the combatant count on purpose: a room that fills up is nine real players with no bots in it. Below that, bots make up the difference, so a match is always nine combatants either way.
 
 **How do I find a game?**
 Press PLAY. It picks the busiest room with a seat free and opens one for you if there is nothing to join, then the match starts on a countdown. You never have to know what a room code is unless a friend sends you one.
 
 **Can I join a match that has already started?**
-Yes. Running rooms appear in the browser marked `IN PROGRESS` with a DROP IN button, and PLAY will pick one. You spawn with a shield and a bot gives up its slot, so the match keeps its nine combatants.
+Yes. Running rooms appear in the browser marked `IN PROGRESS` with a DROP IN button, and PLAY will pick one. You spawn with a shield and the bot wearing your jersey gives up its seat, so the match keeps its nine combatants. Leave and a bot takes the seat back.
 
 **Can I play without other people?**
 Yes. Solo mode fills the arena with 8 AI bots across three difficulty levels. Bots use A* pathfinding on a navigation mesh and exhibit patrol, hunt, engage, reposition, and retreat behaviours.

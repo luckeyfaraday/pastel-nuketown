@@ -400,9 +400,11 @@ function createMatch(opts = {}) {
   const guest = createInstance(clock);
   const combatants = opts.combatants === undefined ? 2 : opts.combatants;
 
+  /* Slots as the relay would have handed them out: the room reply carries
+     one per member, and every jersey on the map is drawn from it. */
   const members = [
-    { id: HOST_ID, name: 'HOST', role: 'host' },
-    { id: GUEST_ID, name: 'GUEST', role: 'guest' }
+    { id: HOST_ID, name: 'HOST', role: 'host', slot: 0 },
+    { id: GUEST_ID, name: 'GUEST', role: 'guest', slot: 1 }
   ];
 
   function socketFor(side) {
@@ -432,7 +434,8 @@ function createMatch(opts = {}) {
          lobby, so it is set here. Leaving it at 0 would have every guest
          input silently dropped for a stale epoch. */
       NET.authorityEpoch = ${link.epoch()};
-      NET.members = __members.map(m => ({ id: m.id, name: m.name, role: m.role }));
+      NET.members = __members.map(
+        m => ({ id: m.id, name: m.name, role: m.role, slot: m.slot }));
       NET.socket = __socket;
       netBeginMatch();
       /* netBeginMatch leaves a click-to-deploy card up, because a message from
@@ -470,7 +473,7 @@ function createMatch(opts = {}) {
     migrateHost() {
       hostDeparted = true;
       members.splice(0, members.length,
-        { id: GUEST_ID, name: 'GUEST', role: 'host' });
+        { id: GUEST_ID, name: 'GUEST', role: 'host', slot: 1 });
       link.beginPromotion(members);
       return this;
     },

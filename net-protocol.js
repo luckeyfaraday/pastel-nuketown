@@ -14,13 +14,25 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  /* 6: a room admits players mid-round. The handshake gained `started`, but
+  /* 7: a room seats nine, so a full lobby can be nine real players and no
+     bots at all. Two reasons this cannot be additive. A version 6 peer
+     refuses any roster longer than four outright — it would watch the fifth
+     arrival and then ignore every roster message for the rest of the match.
+     And members now carry `slot`, the jersey the relay reserved for them; a
+     peer that ignores the field falls back to colouring by roster position,
+     which puts two identically dressed players on the map the first time
+     somebody leaves mid-round.
+
+     6: a room admits players mid-round. The handshake gained `started`, but
      the reason this is a bump rather than an additive field is the host: a
      version 5 host receiving a mid-round roster change seats nobody, and the
      arrival becomes a ghost sending input no authority ever applies. Refusing
      the handshake is the only honest outcome, so old and new must not mix. */
-  var VERSION = 6;
-  var MAX_PLAYERS = 4;
+  var VERSION = 7;
+  /* Nine seats, because nine is how many combatants the match runs. Any
+     smaller and the shortfall is made up with bots no matter how popular the
+     room gets, which is the one thing a full room should not have to do. */
+  var MAX_PLAYERS = 9;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
   var ROOM_CODE_LENGTH = 6;
@@ -99,6 +111,15 @@
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
   }
 
+  /* A seat in the room, reserved by the relay and held until its occupant
+     leaves. It is what a player's jersey is drawn from, which is why it is
+     not simply their position in the roster: positions shift under everyone
+     below when somebody leaves mid-round, and a colour that shifts with them
+     is a colour that lands on a player already wearing it. */
+  function validSlot(value) {
+    return Number.isSafeInteger(value) && value >= 0 && value < MAX_PLAYERS;
+  }
+
   function isAuthorityEpoch(value) {
     return Number.isSafeInteger(value) && value > 0;
   }
@@ -150,6 +171,7 @@
     }
 
     var seen = Object.create(null);
+    var slots = Object.create(null);
     var members = [];
     var hosts = 0;
     var includesLocal = typeof localId !== 'string' || !localId;
@@ -162,8 +184,15 @@
       }
       var name = cleanPlayerName(raw.name);
       if (!name) return result(false, null, 'member name is invalid');
+      /* Two players in one jersey is not a cosmetic problem in a shooter, so
+         a roster that hands the same slot out twice is refused rather than
+         cleaned up: whatever produced it is not tracking the room. */
+      if (!validSlot(raw.slot) || slots[raw.slot]) {
+        return result(false, null, 'member slot is invalid');
+      }
 
       seen[raw.id] = true;
+      slots[raw.slot] = true;
       if (raw.role === 'host') {
         hosts++;
         if (raw.id !== message.host) {
@@ -171,7 +200,7 @@
         }
       }
       if (raw.id === localId) includesLocal = true;
-      members.push({ id: raw.id, name: name, role: raw.role });
+      members.push({ id: raw.id, name: name, role: raw.role, slot: raw.slot });
     }
     if (hosts !== 1 || !seen[message.host] || !includesLocal) {
       return result(false, null, 'host change roster is incomplete');
@@ -659,6 +688,7 @@
     MAX_INTERP_SNAPSHOTS: MAX_INTERP_SNAPSHOTS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    validSlot: validSlot,
     isAuthorityEpoch: isAuthorityEpoch,
     sanitizeHostChanged: sanitizeHostChanged,
     sanitizeAuthorityState: sanitizeAuthorityState,

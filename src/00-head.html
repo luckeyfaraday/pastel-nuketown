@@ -226,7 +226,11 @@ body.touch .sens{display:none}
 .lobby-head small,.roster-title{font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
 #lobbyCode{font-family:var(--disp);font-size:29px;line-height:1;letter-spacing:.16em;color:#d4638f}
 .roster-title{margin:17px 3px 7px}
-#roster{list-style:none;display:flex;flex-direction:column;gap:6px}
+/* Nine seats is roughly twice the lobby the card was drawn for, and a
+   landscape phone has no vertical room to spare, so the list scrolls inside
+   itself rather than pushing START MATCH off the bottom of the screen. */
+#roster{list-style:none;display:flex;flex-direction:column;gap:6px;
+  max-height:min(44vh,296px);overflow-y:auto}
 #roster li{display:grid;grid-template-columns:18px 1fr auto;gap:9px;align-items:center;padding:7px 9px;
   border:2px solid rgba(74,63,92,.65);border-radius:10px;background:rgba(255,255,255,.54);
   font-family:var(--disp);font-size:14px}
