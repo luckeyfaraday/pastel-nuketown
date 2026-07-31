@@ -185,14 +185,15 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 .sens input{flex:1;min-width:0;accent-color:#d4638f;cursor:pointer}
 .sens b{min-width:44px;text-align:right;font-size:12px;color:var(--ink)}
 body.touch .sens{display:none}
-/* Hosting a room by hand is a minority path now that PLAY picks one; it stays
-   one click away rather than competing with the button most people want. */
-.link-btn{pointer-events:auto;cursor:pointer;border:0;background:none;padding:2px 6px;
-  font-family:var(--disp);font-size:11px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft);
-  text-decoration:underline;text-underline-offset:3px}
-.link-btn:hover{color:var(--ink)}
-.link-btn::after{content:" \25BE"}
-.link-btn[aria-expanded="true"]::after{content:" \25B4"}
+/* Hosting a room by hand is a minority path now that PLAY picks one, but as an
+   underlined line of fine print it read as a caption and nobody found CREATE
+   ROOM behind it. It is a real button now — quieter than PLAY, still a button —
+   and it says what it opens rather than naming the panel. */
+.room-toggle{width:min(330px,100%);display:flex;align-items:center;justify-content:center;gap:9px;
+  padding:9px 14px 10px;font-size:12px;letter-spacing:.13em;background:rgba(255,255,255,.72)}
+.room-toggle::after{content:"\25BE";font-size:9px;line-height:1;color:var(--ink-soft)}
+.room-toggle[aria-expanded="true"]{background:#fff8f0}
+.room-toggle[aria-expanded="true"]::after{content:"\25B4"}
 #roomOptions{width:min(330px,100%);display:flex;flex-direction:column;gap:9px}
 #roomOptions[hidden]{display:none}
 .opt-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
@@ -512,7 +513,7 @@ body.touch .touch-keys{display:flex}
       </div>
       <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
     </div>
-    <button class="link-btn setup-only" id="roomToggle" type="button" aria-expanded="false" aria-controls="roomOptions">ROOM OPTIONS</button>
+    <button class="mini-btn room-toggle setup-only" id="roomToggle" type="button" aria-expanded="false" aria-controls="roomOptions">CREATE OR JOIN A ROOM</button>
     <div id="roomOptions" class="setup-only" hidden>
       <div class="join-row">
         <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
