@@ -151,8 +151,8 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 6);
-  assert.equal(Protocol.MAX_PLAYERS, 4);
+  assert.equal(Protocol.VERSION, 7);
+  assert.equal(Protocol.MAX_PLAYERS, 9);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
 
@@ -182,8 +182,8 @@ test('validates host promotion as a forward-only authority transition', () => {
     round: 3,
     host: 'peer-2',
     members: [
-      { id: 'peer-2', name: ' New Host ', role: 'host' },
-      { id: 'peer-3', name: 'Guest', role: 'guest' }
+      { id: 'peer-2', name: ' New Host ', role: 'host', slot: 0 },
+      { id: 'peer-3', name: 'Guest', role: 'guest', slot: 1 }
     ]
   }, 'peer-3', 1, 2);
 
@@ -195,8 +195,8 @@ test('validates host promotion as a forward-only authority transition', () => {
     round: 3,
     host: 'peer-2',
     members: [
-      { id: 'peer-2', name: 'New Host', role: 'host' },
-      { id: 'peer-3', name: 'Guest', role: 'guest' }
+      { id: 'peer-2', name: 'New Host', role: 'host', slot: 0 },
+      { id: 'peer-3', name: 'Guest', role: 'guest', slot: 1 }
     ]
   });
 
@@ -205,8 +205,21 @@ test('validates host promotion as a forward-only authority transition', () => {
     [{ authorityEpoch: 1 }, 'authorityEpoch'],
     [{ round: 2 }, 'round'],
     [{ host: 'missing' }, 'host'],
-    [{ members: [{ id: 'peer-2', name: 'Host', role: 'guest' }] }, 'roster'],
-    [{ members: [{ id: 'peer-2', name: 'Host', role: 'host' }] }, 'roster']
+    [{ members: [{ id: 'peer-2', name: 'Host', role: 'guest', slot: 0 }] }, 'roster'],
+    [{ members: [{ id: 'peer-2', name: 'Host', role: 'host', slot: 0 }] }, 'roster'],
+    [{ members: [
+      { id: 'peer-2', name: 'Host', role: 'host', slot: 0 },
+      { id: 'peer-3', name: 'Guest', role: 'guest' }
+    ] }, 'slot'],
+    [{ members: [
+      { id: 'peer-2', name: 'Host', role: 'host', slot: 0 },
+      { id: 'peer-3', name: 'Guest', role: 'guest', slot: Protocol.MAX_PLAYERS }
+    ] }, 'slot'],
+    /* Two players in one jersey: the roster the drop-in bug used to produce. */
+    [{ members: [
+      { id: 'peer-2', name: 'Host', role: 'host', slot: 1 },
+      { id: 'peer-3', name: 'Guest', role: 'guest', slot: 1 }
+    ] }, 'slot']
   ];
   const base = {
     t: 'host-changed',
@@ -215,8 +228,8 @@ test('validates host promotion as a forward-only authority transition', () => {
     round: 3,
     host: 'peer-2',
     members: [
-      { id: 'peer-2', name: 'Host', role: 'host' },
-      { id: 'peer-3', name: 'Guest', role: 'guest' }
+      { id: 'peer-2', name: 'Host', role: 'host', slot: 0 },
+      { id: 'peer-3', name: 'Guest', role: 'guest', slot: 1 }
     ]
   };
   for (const [override, expected] of invalid) {
@@ -399,7 +412,7 @@ test('sanitizes valid input into a bounded, canonical payload', () => {
   assert.equal(sanitized.error, null);
   assert.deepEqual(sanitized.value, {
     t: 'input',
-    v: 6,
+    v: Protocol.VERSION,
     authorityEpoch: 1,
     round: 1,
     seq: 9,
@@ -558,7 +571,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     authorityEpoch: 1,
     round: 0,
     started: false,
-    members: [{ id: 'peer-1', name: 'Host', role: 'host' }],
+    members: [{ id: 'peer-1', name: 'Host', role: 'host', slot: 0 }],
     autoStartIn: null
   });
   await host.next('members');
@@ -594,8 +607,8 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     authorityEpoch: 1,
     round: 1,
     members: [
-      { id: 'peer-1', name: 'Host', role: 'host' },
-      { id: 'peer-2', name: 'Guest', role: 'guest' }
+      { id: 'peer-1', name: 'Host', role: 'host', slot: 0 },
+      { id: 'peer-2', name: 'Guest', role: 'guest', slot: 1 }
     ]
   };
   const [hostStart, guestStart] = await Promise.all([
@@ -752,7 +765,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     authorityEpoch: 2,
     round: 3,
     host: 'peer-2',
-    members: [{ id: 'peer-2', name: 'Guest', role: 'host' }]
+    members: [{ id: 'peer-2', name: 'Guest', role: 'host', slot: 1 }]
   });
 
   guest.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
@@ -763,7 +776,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   assert.equal(restarted.round, 4);
 });
 
-test('started rooms admit late joins, host migration survives them, and capacity is four', async (t) => {
+test('started rooms admit late joins, host migration survives them, and capacity is nine', async (t) => {
   let nextId = 0;
   const { port } = await startRelay(t, {
     idFactory: () => `id-${++nextId}`,
@@ -815,8 +828,8 @@ test('started rooms admit late joins, host migration survives them, and capacity
   assert.equal(promoted.authorityEpoch, 2);
   assert.equal(promoted.round, 2);
   assert.deepEqual(promoted.members, [
-    { id: 'id-2', name: 'One', role: 'host' },
-    { id: 'id-3', name: 'Late', role: 'guest' }
+    { id: 'id-2', name: 'One', role: 'host', slot: 1 },
+    { id: 'id-3', name: 'Late', role: 'guest', slot: 2 }
   ], 'a player who dropped in is a member like any other when the host goes');
 
   const third = websocketClient(`ws://127.0.0.1:${port}/ws`);
@@ -825,37 +838,51 @@ test('started rooms admit late joins, host migration survives them, and capacity
   const thirdRoom = await third.next('room');
   assert.equal(thirdRoom.started, false,
     'the restart migration put the room back between rounds');
-  await third.next('members');
+  const reused = await third.next('members');
+  assert.deepEqual(reused.members.map((member) => member.slot), [1, 2, 0],
+    'the departed host left a jersey behind and the next arrival wears it');
   await first.next('members');
   await late.next('members');
 
-  const fourth = websocketClient(`ws://127.0.0.1:${port}/ws`);
-  await fourth.opened;
-  fourth.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Four' });
-  await fourth.next('room');
-  await fourth.next('members');
-  await first.next('members');
-  await late.next('members');
-  await third.next('members');
+  /* Nine seats, filled. The point of the ceiling being the combatant count is
+     that this room now has no room left for a bot. */
+  const roomPeers = [first, late, third];
+  let roster = reused;
+  for (const name of ['Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']) {
+    const peer = websocketClient(`ws://127.0.0.1:${port}/ws`);
+    await peer.opened;
+    peer.send({ t: 'join', v: Protocol.VERSION, room: room.room, name });
+    await peer.next('room');
+    /* The arrival's own first roster broadcast is the room as it stands with
+       them in it — no queue to be off by one against. */
+    roster = await peer.next('members');
+    for (const other of roomPeers) await other.next('members');
+    roomPeers.push(peer);
+  }
+  assert.equal(roster.members.length, Protocol.MAX_PLAYERS);
+  assert.equal(new Set(roster.members.map((member) => member.slot)).size,
+    Protocol.MAX_PLAYERS,
+    'nine players, nine distinct jerseys, nobody dressed as anybody else');
 
   const overflow = websocketClient(`ws://127.0.0.1:${port}/ws`);
   await overflow.opened;
-  overflow.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Five' });
+  overflow.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Ten' });
   assert.equal((await overflow.next('error')).code, 'room-full',
-    'drop-in does not raise the ceiling');
+    'nine is the ceiling: one seat per jersey, and no tenth jersey exists');
 
   first.ws.close();
-  const [secondPromotion, observedByThird, observedByFourth] = await Promise.all([
+  const [secondPromotion, observedByThird, observedByLast] = await Promise.all([
     late.next('host-changed'),
     third.next('host-changed'),
-    fourth.next('host-changed')
+    roomPeers[roomPeers.length - 1].next('host-changed')
   ]);
   assert.equal(secondPromotion.host, 'id-3',
     'the next-oldest surviving guest wins the next election');
   assert.equal(secondPromotion.authorityEpoch, 3);
   assert.equal(secondPromotion.round, 3);
   assert.deepEqual(observedByThird, secondPromotion);
-  assert.deepEqual(observedByFourth, secondPromotion);
+  assert.deepEqual(observedByLast, secondPromotion,
+    'including the ninth player, who joined long after the first migration');
 });
 
 test('relay promotes from independently fresh snapshot and checkpoint caches without restarting', async (t) => {

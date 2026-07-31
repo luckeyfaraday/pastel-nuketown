@@ -228,7 +228,11 @@ body.touch .sens{display:none}
 .lobby-head small,.roster-title{font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
 #lobbyCode{font-family:var(--disp);font-size:29px;line-height:1;letter-spacing:.16em;color:#d4638f}
 .roster-title{margin:17px 3px 7px}
-#roster{list-style:none;display:flex;flex-direction:column;gap:6px}
+/* Nine seats is roughly twice the lobby the card was drawn for, and a
+   landscape phone has no vertical room to spare, so the list scrolls inside
+   itself rather than pushing START MATCH off the bottom of the screen. */
+#roster{list-style:none;display:flex;flex-direction:column;gap:6px;
+  max-height:min(44vh,296px);overflow-y:auto}
 #roster li{display:grid;grid-template-columns:18px 1fr auto;gap:9px;align-items:center;padding:7px 9px;
   border:2px solid rgba(74,63,92,.65);border-radius:10px;background:rgba(255,255,255,.54);
   font-family:var(--disp);font-size:14px}
@@ -529,7 +533,7 @@ body.touch .touch-keys{display:flex}
       <div><small>ROOM</small><strong id="lobbyCode">······</strong></div>
       <button class="mini-btn" id="copyRoom">COPY INVITE</button>
     </div>
-    <div class="roster-title"><span>PLAYERS</span><b id="rosterCount">1 / 4</b></div>
+    <div class="roster-title"><span>PLAYERS</span><b id="rosterCount">1 / 9</b></div>
     <ul id="roster"></ul>
     <div id="lobbyCountdown" hidden>
       <span id="countdownText"></span>
@@ -1891,13 +1895,25 @@ if (typeof THREE === "undefined") {
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  /* 6: a room admits players mid-round. The handshake gained `started`, but
+  /* 7: a room seats nine, so a full lobby can be nine real players and no
+     bots at all. Two reasons this cannot be additive. A version 6 peer
+     refuses any roster longer than four outright — it would watch the fifth
+     arrival and then ignore every roster message for the rest of the match.
+     And members now carry `slot`, the jersey the relay reserved for them; a
+     peer that ignores the field falls back to colouring by roster position,
+     which puts two identically dressed players on the map the first time
+     somebody leaves mid-round.
+
+     6: a room admits players mid-round. The handshake gained `started`, but
      the reason this is a bump rather than an additive field is the host: a
      version 5 host receiving a mid-round roster change seats nobody, and the
      arrival becomes a ghost sending input no authority ever applies. Refusing
      the handshake is the only honest outcome, so old and new must not mix. */
-  var VERSION = 6;
-  var MAX_PLAYERS = 4;
+  var VERSION = 7;
+  /* Nine seats, because nine is how many combatants the match runs. Any
+     smaller and the shortfall is made up with bots no matter how popular the
+     room gets, which is the one thing a full room should not have to do. */
+  var MAX_PLAYERS = 9;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
   var ROOM_CODE_LENGTH = 6;
@@ -1976,6 +1992,15 @@ if (typeof THREE === "undefined") {
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
   }
 
+  /* A seat in the room, reserved by the relay and held until its occupant
+     leaves. It is what a player's jersey is drawn from, which is why it is
+     not simply their position in the roster: positions shift under everyone
+     below when somebody leaves mid-round, and a colour that shifts with them
+     is a colour that lands on a player already wearing it. */
+  function validSlot(value) {
+    return Number.isSafeInteger(value) && value >= 0 && value < MAX_PLAYERS;
+  }
+
   function isAuthorityEpoch(value) {
     return Number.isSafeInteger(value) && value > 0;
   }
@@ -2027,6 +2052,7 @@ if (typeof THREE === "undefined") {
     }
 
     var seen = Object.create(null);
+    var slots = Object.create(null);
     var members = [];
     var hosts = 0;
     var includesLocal = typeof localId !== 'string' || !localId;
@@ -2039,8 +2065,15 @@ if (typeof THREE === "undefined") {
       }
       var name = cleanPlayerName(raw.name);
       if (!name) return result(false, null, 'member name is invalid');
+      /* Two players in one jersey is not a cosmetic problem in a shooter, so
+         a roster that hands the same slot out twice is refused rather than
+         cleaned up: whatever produced it is not tracking the room. */
+      if (!validSlot(raw.slot) || slots[raw.slot]) {
+        return result(false, null, 'member slot is invalid');
+      }
 
       seen[raw.id] = true;
+      slots[raw.slot] = true;
       if (raw.role === 'host') {
         hosts++;
         if (raw.id !== message.host) {
@@ -2048,7 +2081,7 @@ if (typeof THREE === "undefined") {
         }
       }
       if (raw.id === localId) includesLocal = true;
-      members.push({ id: raw.id, name: name, role: raw.role });
+      members.push({ id: raw.id, name: name, role: raw.role, slot: raw.slot });
     }
     if (hosts !== 1 || !seen[message.host] || !includesLocal) {
       return result(false, null, 'host change roster is incomplete');
@@ -2536,6 +2569,7 @@ if (typeof THREE === "undefined") {
     MAX_INTERP_SNAPSHOTS: MAX_INTERP_SNAPSHOTS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    validSlot: validSlot,
     isAuthorityEpoch: isAuthorityEpoch,
     sanitizeHostChanged: sanitizeHostChanged,
     sanitizeAuthorityState: sanitizeAuthorityState,
@@ -2654,7 +2688,10 @@ const PAL = {
   leaf2:    0xffd6e8
 };
 
-/* bot jersey colours — all pastel, all clearly separable at distance */
+/* Jersey colours — all pastel, all clearly separable at distance. One per
+   combatant, and humans draw from the same nine as the bots do: a room that
+   fills up with real players should look like the same match it was when half
+   of them were bots, not like a different game with a second palette. */
 const BOT_COLORS = [
   { body: 0xffb7c5, trim: 0xff8fa8, name: 'Bubblegum' },
   { body: 0xa8dcf0, trim: 0x7cc6e6, name: 'Sky' },
@@ -2667,6 +2704,26 @@ const BOT_COLORS = [
   { body: 0xdff2b8, trim: 0xbfe08a, name: 'Pistachio' }
 ];
 const PLAYER_COLOR = { body: 0xfff8f0, trim: 0xffc9d6, name: 'You' };
+
+/* A fresh copy every time: an actor's colours get read all over the renderer
+   and handed to snapshot packing, and one shared object per jersey is a
+   mutation away from redressing everyone wearing it. */
+function jerseyForSlot(slot) {
+  const c = BOT_COLORS[slot % BOT_COLORS.length];
+  return { body: c.body, trim: c.trim, name: c.name };
+}
+
+/* The jerseys nobody on the map has on, in palette order. Bots wear whatever
+   the humans left, which is what keeps a mixed match free of twins — and what
+   makes an all-human room simply run out of bots. */
+function freeJerseys(actors) {
+  const worn = new Set(actors.map(a => a.colors && a.colors.name));
+  const free = [];
+  for (let slot = 0; slot < BOT_COLORS.length; slot++) {
+    if (!worn.has(BOT_COLORS[slot].name)) free.push(slot);
+  }
+  return free;
+}
 
 /* ---------------------------------------------------------------------
    YAW CONVENTIONS — these differ on purpose, so convert at the border.
@@ -5936,6 +5993,34 @@ function detachActor(a) {
   if (i >= 0) G.actors.splice(i, 1);
 }
 
+/* Indexed by jersey slot, so there are as many entries as there are jerseys.
+   The first eight are what the solo eight have always been. */
+const BOT_SKILLS = ['easy', 'normal', 'normal', 'hard', 'normal', 'hard', 'easy', 'normal', 'normal'];
+const BOT_GUNS   = ['smg', 'shotgun', 'smg', 'rifle', 'smg', 'shotgun', 'rifle', 'smg', 'shotgun'];
+
+/* One number decides everything about a bot: its jersey, its name, its gun,
+   how well it shoots and the id the network knows it by. Bots are made and
+   unmade mid-match now — evicted when somebody drops in, put back when
+   somebody leaves — and a bot whose identity came from its position in the
+   build loop would come back as a different bot each time. */
+function makeBot(slot) {
+  const colors = jerseyForSlot(slot);
+  const b = makeActor({
+    name: colors.name.toUpperCase(),
+    netId: 'bot-' + slot,
+    controller: 'bot',
+    colors: colors,
+    weapon: BOT_GUNS[slot % BOT_GUNS.length],
+    skill: BOT_SKILLS[slot % BOT_SKILLS.length]
+  });
+  if (G.aiOK) {
+    try { b.brain = AI.createBrain({ id: b.id, seed: 1000 + slot * 77, skill: b.skill }); }
+    catch (e) { b.brain = null; G.aiErr = String(e); }
+  }
+  attachCharacter(b);
+  return b;
+}
+
 function respawnActor(a, instant) {
   const sp = pickSpawn(G.actors, a.id);
   a.pos.x = sp.x; a.pos.y = sp.y; a.pos.z = sp.z;
@@ -5985,8 +6070,6 @@ function setupMatch() {
   G.player = player;
   G.actors.push(player);
 
-  const skills = ['easy', 'normal', 'normal', 'hard', 'normal', 'hard', 'easy', 'normal'];
-  const guns   = ['smg', 'shotgun', 'smg', 'rifle', 'smg', 'shotgun', 'rifle', 'smg'];
   const remoteRoster = typeof netAuthorityRoster === 'function' ? netAuthorityRoster() : [];
   for (let i = 0; i < remoteRoster.length; i++) {
     const member = remoteRoster[i];
@@ -6002,23 +6085,14 @@ function setupMatch() {
     G.actors.push(h);
   }
 
+  /* Humans are seated first, so the jerseys still going spare are exactly the
+     ones the bots may have — and in a room of nine real players there are
+     none, which is the whole point: the bots do not get squeezed down to
+     nothing, they are simply never made. */
   const botCount = typeof netBotCount === 'function' ? netBotCount(remoteRoster.length + 1) : CFG.bots;
-  for (let i = 0; i < botCount; i++) {
-    const col = BOT_COLORS[i % BOT_COLORS.length];
-    const b = makeActor({
-      name: col.name.toUpperCase(),
-      netId: 'bot-' + (i + 1),
-      controller: 'bot',
-      colors: col,
-      weapon: guns[i % guns.length],
-      skill: skills[i % skills.length]
-    });
-    if (G.aiOK) {
-      try { b.brain = AI.createBrain({ id: b.id, seed: 1000 + i * 77, skill: b.skill }); }
-      catch (e) { b.brain = null; G.aiErr = String(e); }
-    }
-    attachCharacter(b);
-    G.actors.push(b);
+  const spare = freeJerseys(G.actors);
+  for (let i = 0; i < botCount && i < spare.length; i++) {
+    G.actors.push(makeBot(spare[i]));
   }
   for (const a of G.actors) respawnActor(a, true);
   // stagger the initial spawns so nobody starts inside someone else
@@ -6920,37 +6994,37 @@ function netIsMultiplayer() { return netIsHost() || netIsGuest(); }
 function netHasTransport() { return NET.mode !== 'solo'; }
 function netSocketOpen() { return NET.socket && NET.socket.readyState === WebSocket.OPEN; }
 
-function netColorForIndex(i) {
-  const c = BOT_COLORS[(i + 7) % BOT_COLORS.length];
-  return { body: c.body, trim: c.trim, name: c.name };
-}
-
-function netMemberWithColor(member, i) {
+/* Every client dresses every player the same way without asking, because the
+   answer is the seat the relay already gave them rather than anything local.
+   That matters most for the one actor a guest builds itself: its own. */
+function netMemberWithColor(member) {
   return {
     id: member.id,
     name: member.name,
     role: member.role,
-    colors: netColorForIndex(i)
+    colors: jerseyForSlot(member.slot)
   };
 }
 
 function netLocalPlayerInfo() {
   if (!netIsMultiplayer()) return { id: null, name: 'YOU', colors: PLAYER_COLOR };
-  const i = Math.max(0, NET.members.findIndex(m => m.id === NET.id));
-  const m = NET.members[i] || { id: NET.id, name: 'PLAYER' };
-  return { id: NET.id, name: m.name, colors: netColorForIndex(i) };
+  const m = NET.members.find(member => member.id === NET.id);
+  if (!m) return { id: NET.id, name: 'PLAYER', colors: PLAYER_COLOR };
+  return { id: NET.id, name: m.name, colors: jerseyForSlot(m.slot) };
 }
 
 function netAuthorityRoster() {
   if (!netIsHost()) return [];
   const out = [];
-  for (let i = 0; i < NET.members.length; i++) {
-    const m = NET.members[i];
-    if (m.id !== NET.id) out.push(netMemberWithColor(m, i));
+  for (const m of NET.members) {
+    if (m.id !== NET.id) out.push(netMemberWithColor(m));
   }
   return out;
 }
 
+/* Bots are the shortfall and nothing else, which is why the room cap and the
+   combatant count are the same number: fill every seat and this returns zero.
+   A guest builds only itself and takes the rest of the map from snapshots. */
 function netBotCount(humanCount) {
   if (netIsGuest()) return 0;
   if (netIsHost()) return Math.max(0, CFG.combatants - humanCount);
@@ -7266,18 +7340,20 @@ function netSend(msg, lossy) {
 function netCleanMembers(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > NETP.MAX_PLAYERS) return null;
   const ids = new Set();
+  const slots = new Set();
   const members = [];
   let hosts = 0;
   for (const raw of value) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
         typeof raw.id !== 'string' || !raw.id || raw.id.length > 80 ||
         typeof raw.name !== 'string' || (raw.role !== 'host' && raw.role !== 'guest') ||
-        ids.has(raw.id)) return null;
+        ids.has(raw.id) || !NETP.validSlot(raw.slot) || slots.has(raw.slot)) return null;
     const name = NETP.cleanPlayerName(raw.name);
     if (!name) return null;
     ids.add(raw.id);
+    slots.add(raw.slot);
     if (raw.role === 'host') hosts++;
-    members.push({ id: raw.id, name: name, role: raw.role });
+    members.push({ id: raw.id, name: name, role: raw.role, slot: raw.slot });
   }
   return hosts === 1 ? members : null;
 }
@@ -7428,8 +7504,8 @@ function netRenderMembers() {
   for (const member of NET.members) {
     const li = document.createElement('li');
     const sw = document.createElement('i');
-    const i = NET.members.indexOf(member);
-    sw.style.background = '#' + netColorForIndex(i).body.toString(16).padStart(6, '0');
+    sw.style.background =
+      '#' + jerseyForSlot(member.slot).body.toString(16).padStart(6, '0');
     li.appendChild(sw);
     const name = document.createElement('span');
     name.textContent = member.name + (member.id === NET.id ? ' (YOU)' : '');
@@ -7440,7 +7516,7 @@ function netRenderMembers() {
     list.appendChild(li);
   }
   const count = document.getElementById('rosterCount');
-  if (count) count.textContent = NET.members.length + ' / ' + (NETP ? NETP.MAX_PLAYERS : 4);
+  if (count) count.textContent = NET.members.length + ' / ' + (NETP ? NETP.MAX_PLAYERS : 9);
 }
 
 function netResetTransport() {
@@ -8245,25 +8321,27 @@ function netEndSession(message) {
    needs no world handed to it — the next snapshot is the world, and until the
    host has seated them their client ignores snapshots it is not in. */
 
-/* Which bot pays for the seat. A dead one is already off the map, so taking
-   it costs nobody a target mid-duel; failing that the one doing least, which
-   is the closest thing to "nobody will miss this". Kept to CFG.combatants so
-   a match that people are already playing does not quietly get busier. */
-function netEvictBotForArrival() {
-  if (G.actors.length < CFG.combatants) return;
-  const bots = G.actors.filter(a => a.controller === 'bot');
-  if (!bots.length) return;
+/* The bot wearing the arrival's jersey is the bot that leaves, because the
+   room has exactly as many seats as jerseys: whoever has the colour is
+   sitting in the chair. That it is a specific bot rather than the least
+   missed one is the price of never putting two players in the same colour,
+   and in a firefight the colour matters more.
 
-  const dead = bots.filter(b => !b.alive);
-  const pool = dead.length ? dead : bots;
-  let spare = pool[0];
-  for (const b of pool) if (b.kills < spare.kills) spare = b;
-  detachActor(spare);
+   Nobody may be wearing it — a match that already lost players has jerseys
+   going spare — and then the arrival costs nothing. */
+function netEvictBotForArrival(slot) {
+  const jersey = jerseyForSlot(slot).name;
+  for (const a of G.actors) {
+    if (a.controller === 'bot' && a.colors && a.colors.name === jersey) {
+      detachActor(a);
+      return;
+    }
+  }
 }
 
-function netSeatArrival(member, index) {
-  netEvictBotForArrival();
-  const info = netMemberWithColor(member, index);
+function netSeatArrival(member) {
+  netEvictBotForArrival(member.slot);
+  const info = netMemberWithColor(member);
   const actor = makeActor({
     name: info.name,
     netId: info.id,
@@ -8288,20 +8366,39 @@ function netAdmitArrivals() {
 
   const seated = new Set(G.actors.map(a => a.netId));
   let added = 0;
-  for (let i = 0; i < NET.members.length; i++) {
-    const member = NET.members[i];
+  for (const member of NET.members) {
     if (member.id === NET.id || seated.has(member.id)) continue;
-    netSeatArrival(member, i);
+    netSeatArrival(member);
     added++;
   }
   if (!added) return;
 
+  /* An arrival always costs the bot in its jersey, even in a match that had
+     room to spare — so top the match back up here as well as on departure,
+     or a half-empty room would stay half-empty however many people joined. */
+  netBackfillBots();
   NET.manifestVersion++;
   NET.checkpointDirty = true;
   refreshBoard();
   /* Publish now rather than on the next 20Hz beat: until a snapshot carries
      them, the arrival is staring at an empty map. */
   netAfterSimulation(0, true);
+}
+
+/* The other half of drop-in, and the half a nine-seat room cannot do without.
+   A leaver used to just be subtracted: four seats meant a match could lose at
+   most three people and still have five bots in it, so nobody noticed. Nine
+   seats means a full room can empty out to two players and an empty map, so
+   the bots that stood aside for the humans come back when they go. */
+function netBackfillBots() {
+  if (!netIsHost() || NET.phase !== 'playing' || G.over) return;
+  const spare = freeJerseys(G.actors);
+  const missing = Math.min(CFG.combatants - G.actors.length, spare.length);
+  for (let i = 0; i < missing; i++) {
+    const bot = makeBot(spare[i]);
+    G.actors.push(bot);
+    respawnActor(bot, true);
+  }
 }
 
 function netPruneDepartedPlayers() {
@@ -8313,6 +8410,9 @@ function netPruneDepartedPlayers() {
       changed = true;
     }
   }
+  /* Only once the departed are actually gone: the backfill reads the jerseys
+     nobody is wearing, and a leaver still on the list is still wearing one. */
+  if (changed) netBackfillBots();
   if (changed && netIsHost()) {
     NET.manifestVersion++;
     NET.checkpointDirty = true;

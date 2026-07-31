@@ -124,6 +124,34 @@ function detachActor(a) {
   if (i >= 0) G.actors.splice(i, 1);
 }
 
+/* Indexed by jersey slot, so there are as many entries as there are jerseys.
+   The first eight are what the solo eight have always been. */
+const BOT_SKILLS = ['easy', 'normal', 'normal', 'hard', 'normal', 'hard', 'easy', 'normal', 'normal'];
+const BOT_GUNS   = ['smg', 'shotgun', 'smg', 'rifle', 'smg', 'shotgun', 'rifle', 'smg', 'shotgun'];
+
+/* One number decides everything about a bot: its jersey, its name, its gun,
+   how well it shoots and the id the network knows it by. Bots are made and
+   unmade mid-match now — evicted when somebody drops in, put back when
+   somebody leaves — and a bot whose identity came from its position in the
+   build loop would come back as a different bot each time. */
+function makeBot(slot) {
+  const colors = jerseyForSlot(slot);
+  const b = makeActor({
+    name: colors.name.toUpperCase(),
+    netId: 'bot-' + slot,
+    controller: 'bot',
+    colors: colors,
+    weapon: BOT_GUNS[slot % BOT_GUNS.length],
+    skill: BOT_SKILLS[slot % BOT_SKILLS.length]
+  });
+  if (G.aiOK) {
+    try { b.brain = AI.createBrain({ id: b.id, seed: 1000 + slot * 77, skill: b.skill }); }
+    catch (e) { b.brain = null; G.aiErr = String(e); }
+  }
+  attachCharacter(b);
+  return b;
+}
+
 function respawnActor(a, instant) {
   const sp = pickSpawn(G.actors, a.id);
   a.pos.x = sp.x; a.pos.y = sp.y; a.pos.z = sp.z;
@@ -173,8 +201,6 @@ function setupMatch() {
   G.player = player;
   G.actors.push(player);
 
-  const skills = ['easy', 'normal', 'normal', 'hard', 'normal', 'hard', 'easy', 'normal'];
-  const guns   = ['smg', 'shotgun', 'smg', 'rifle', 'smg', 'shotgun', 'rifle', 'smg'];
   const remoteRoster = typeof netAuthorityRoster === 'function' ? netAuthorityRoster() : [];
   for (let i = 0; i < remoteRoster.length; i++) {
     const member = remoteRoster[i];
@@ -190,23 +216,14 @@ function setupMatch() {
     G.actors.push(h);
   }
 
+  /* Humans are seated first, so the jerseys still going spare are exactly the
+     ones the bots may have — and in a room of nine real players there are
+     none, which is the whole point: the bots do not get squeezed down to
+     nothing, they are simply never made. */
   const botCount = typeof netBotCount === 'function' ? netBotCount(remoteRoster.length + 1) : CFG.bots;
-  for (let i = 0; i < botCount; i++) {
-    const col = BOT_COLORS[i % BOT_COLORS.length];
-    const b = makeActor({
-      name: col.name.toUpperCase(),
-      netId: 'bot-' + (i + 1),
-      controller: 'bot',
-      colors: col,
-      weapon: guns[i % guns.length],
-      skill: skills[i % skills.length]
-    });
-    if (G.aiOK) {
-      try { b.brain = AI.createBrain({ id: b.id, seed: 1000 + i * 77, skill: b.skill }); }
-      catch (e) { b.brain = null; G.aiErr = String(e); }
-    }
-    attachCharacter(b);
-    G.actors.push(b);
+  const spare = freeJerseys(G.actors);
+  for (let i = 0; i < botCount && i < spare.length; i++) {
+    G.actors.push(makeBot(spare[i]));
   }
   for (const a of G.actors) respawnActor(a, true);
   // stagger the initial spawns so nobody starts inside someone else

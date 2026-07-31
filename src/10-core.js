@@ -91,7 +91,10 @@ const PAL = {
   leaf2:    0xffd6e8
 };
 
-/* bot jersey colours — all pastel, all clearly separable at distance */
+/* Jersey colours — all pastel, all clearly separable at distance. One per
+   combatant, and humans draw from the same nine as the bots do: a room that
+   fills up with real players should look like the same match it was when half
+   of them were bots, not like a different game with a second palette. */
 const BOT_COLORS = [
   { body: 0xffb7c5, trim: 0xff8fa8, name: 'Bubblegum' },
   { body: 0xa8dcf0, trim: 0x7cc6e6, name: 'Sky' },
@@ -104,6 +107,26 @@ const BOT_COLORS = [
   { body: 0xdff2b8, trim: 0xbfe08a, name: 'Pistachio' }
 ];
 const PLAYER_COLOR = { body: 0xfff8f0, trim: 0xffc9d6, name: 'You' };
+
+/* A fresh copy every time: an actor's colours get read all over the renderer
+   and handed to snapshot packing, and one shared object per jersey is a
+   mutation away from redressing everyone wearing it. */
+function jerseyForSlot(slot) {
+  const c = BOT_COLORS[slot % BOT_COLORS.length];
+  return { body: c.body, trim: c.trim, name: c.name };
+}
+
+/* The jerseys nobody on the map has on, in palette order. Bots wear whatever
+   the humans left, which is what keeps a mixed match free of twins — and what
+   makes an all-human room simply run out of bots. */
+function freeJerseys(actors) {
+  const worn = new Set(actors.map(a => a.colors && a.colors.name));
+  const free = [];
+  for (let slot = 0; slot < BOT_COLORS.length; slot++) {
+    if (!worn.has(BOT_COLORS[slot].name)) free.push(slot);
+  }
+  return free;
+}
 
 /* ---------------------------------------------------------------------
    YAW CONVENTIONS — these differ on purpose, so convert at the border.

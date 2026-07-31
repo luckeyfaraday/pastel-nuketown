@@ -763,8 +763,11 @@ test('between rounds the clock lands on the rematch button', () => {
    --------------------------------------------------------------------- */
 
 const LATE_ID = 'late-0001';
+/* Slot 2 is the seat the relay would hand out next: the fixture's two humans
+   hold 0 and 1, so a bot is wearing this jersey and has to give it up. */
 const ARRIVE = `
-  NET.members.push({ id: '${LATE_ID}', name: 'Latecomer', role: 'guest' });
+  NET.members.push(
+    { id: '${LATE_ID}', name: 'Latecomer', role: 'guest', slot: 2 });
   netAdmitArrivals();
 `;
 
@@ -815,6 +818,81 @@ test('the arrival reaches a guest on the ordinary snapshot stream', () => {
   assert.strictEqual(match.link.stats.staleEpoch, 0);
 });
 
+test('nobody ends up dressed as anybody else', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5, combatants: 9 });
+  match.run(1.0);
+
+  const jerseys = () => match.host.get('G.actors.map(a => a.colors.name)');
+  const before = jerseys();
+  assert.strictEqual(new Set(before).size, before.length,
+    'nine combatants, nine jerseys, before anyone drops in');
+  /* Slot 2 is a bot right now, and that specific bot is the one that pays —
+     not whichever bot is doing worst, which is what would leave the arrival
+     wearing a colour somebody on the map still has on. */
+  assert.ok(before.includes('Sherbet'), 'the fixture needs slot 2 occupied');
+
+  match.host.run(ARRIVE);
+
+  const after = jerseys();
+  assert.strictEqual(new Set(after).size, after.length,
+    'and nine again afterwards: the arrival took a jersey, it did not copy one');
+  assert.strictEqual(
+    match.host.get(`G.actors.find(a => a.netId === '${LATE_ID}').colors.name`),
+    'Sherbet', 'the arrival wears the seat the relay reserved for it');
+  assert.strictEqual(
+    match.host.get("G.actors.filter(a => a.colors.name === 'Sherbet').length"), 1,
+    'and the bot that was wearing it is the bot that left');
+});
+
+test('bots come back when the people they stood aside for leave', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5, combatants: 9 });
+  match.run(1.0);
+  match.host.run(ARRIVE);
+
+  const bots = () => match.host.get("G.actors.filter(a => a.controller === 'bot').length");
+  const seated = bots();
+
+  /* Both guests go: the roster the host is handed no longer has them on it,
+     which is the only signal a departure ever gives. */
+  match.host.run(`
+    NET.members = NET.members.filter(m => m.id === NET.id);
+    netPruneDepartedPlayers();
+  `);
+
+  assert.strictEqual(match.host.get('G.actors.length'), 9,
+    'a match that lost two players is still a match, not a two-handed one');
+  assert.strictEqual(bots(), seated + 2, 'the seats went back to bots');
+  const jerseys = match.host.get('G.actors.map(a => a.colors.name)');
+  assert.strictEqual(new Set(jerseys).size, 9,
+    'wearing the jerseys the leavers gave back, not copies of one still worn');
+  assert.strictEqual(
+    match.host.get("G.actors.filter(a => !a.alive).length"), 0,
+    'and standing on spawns rather than wherever they were constructed');
+});
+
+test('a room of nine real players is built with no bots in it at all', () => {
+  const client = SIM.createInstance({ ms: 0 });
+  const roster = Array.from({ length: 9 }, (unused, slot) => ({
+    id: `p-${slot}`, name: `PLAYER${slot}`,
+    role: slot === 0 ? 'host' : 'guest', slot: slot
+  }));
+
+  client.run(`
+    initViewmodel(); initFX(); initInput(); initAI();
+    NET.mode = 'host';
+    NET.id = 'p-0';
+    NET.members = ${JSON.stringify(roster)};
+    setupMatch();
+  `);
+
+  assert.strictEqual(client.get('G.actors.length'), 9);
+  assert.strictEqual(client.get("G.actors.filter(a => a.controller === 'bot').length"), 0,
+    'the whole point: a full room is nine people, and the bots are simply never made');
+  assert.strictEqual(client.get('G.actors.filter(a => a.isHuman).length'), 9);
+  assert.strictEqual(client.get('new Set(G.actors.map(a => a.colors.name)).size'), 9,
+    'nine real players still get nine distinguishable jerseys');
+});
+
 test('a decided round seats nobody', () => {
   const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5, combatants: 9 });
   match.run(1.0);
@@ -852,8 +930,8 @@ test('the deploy card a drop-in lands on can actually be clicked', () => {
     NET.id = 'late-0001';
     NET.room = 'ABCDEF';
     NET.members = [
-      { id: 'host-0001', name: 'Host', role: 'host' },
-      { id: 'late-0001', name: 'Latecomer', role: 'guest' }
+      { id: 'host-0001', name: 'Host', role: 'host', slot: 0 },
+      { id: 'late-0001', name: 'Latecomer', role: 'guest', slot: 1 }
     ];
   `);
 

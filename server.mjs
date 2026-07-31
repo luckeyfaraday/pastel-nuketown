@@ -29,8 +29,26 @@ function memberList(room) {
   return Array.from(room.members.values(), (peer) => ({
     id: peer.id,
     name: peer.name,
-    role: peer.role
+    role: peer.role,
+    slot: peer.slot
   }));
+}
+
+/* The lowest jersey nobody in the room is wearing. Seats are a room resource
+   rather than a roster position because both ends of the roster move: people
+   drop in mid-round and people leave mid-round, and a colour derived from
+   position would follow them, redressing half the map every time. Held for as
+   long as its occupant is in the room, free the moment they are not.
+
+   The room is capped at exactly as many seats as there are jerseys, so the
+   scan always finds one; the fallback is there to have an answer, not because
+   it can be reached. */
+function claimSlot(room) {
+  const taken = new Set(Array.from(room.members.values(), (peer) => peer.slot));
+  for (let slot = 0; slot < Protocol.MAX_PLAYERS; slot++) {
+    if (!taken.has(slot)) return slot;
+  }
+  return 0;
 }
 
 export function createRelayServer(options = {}) {
@@ -46,9 +64,10 @@ export function createRelayServer(options = {}) {
     ? 0
     : positiveInteger(options.heartbeatMs, 30_000);
   /* How long a guest may hold a seat in a running match without playing.
-     Four seats and drop-in together make an idle body expensive: it is not
-     just a body doing nothing, it is a body somebody else could be. Zero
-     disables the sweep entirely. */
+     A capped room and drop-in together make an idle body expensive: it is
+     not just a body doing nothing, it is a body somebody else could be, and
+     the fuller the room the more true that gets. Zero disables the sweep
+     entirely. */
   const idleKickMs = options.idleKickMs === 0
     ? 0
     : positiveInteger(options.idleKickMs, 60_000);
@@ -590,6 +609,7 @@ export function createRelayServer(options = {}) {
     peer.name = name;
     peer.role = role;
     peer.room = room;
+    peer.slot = claimSlot(room);
     peer.lastSeq = -1;
     /* Arriving is activity. A drop-in gets the full grace period to find the
        deploy card, and nobody is judged on time spent before they were here. */
@@ -1204,6 +1224,7 @@ export function createRelayServer(options = {}) {
       name: '',
       role: null,
       room: null,
+      slot: -1,
       lastSeq: -1,
       alive: true,
       cleanedUp: false,
