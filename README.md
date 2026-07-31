@@ -61,7 +61,7 @@ A guest who stops playing for a minute during a match is removed and told why, s
 
 Drop-in needs no message of its own. The actor manifest is versioned and guests already accept it changing mid-round — the same machinery host migration uses — so seating an arrival is `netPruneDepartedPlayers` run backwards. The relay hands over no world state; it tells the arrival the round is live and tells the host the roster changed, and the host's next snapshot does the rest.
 
-An invite link (`?room=CODE`, produced by **COPY INVITE**) joins that room on arrival rather than typing the code into the box for you. **ROOM OPTIONS** holds the manual controls: join by code, create a room, and whether that room is listed publicly.
+An invite link (`?room=CODE`, produced by **COPY INVITE**) joins that room on arrival rather than typing the code into the box for you. **CREATE OR JOIN A ROOM** holds the manual controls: join by code, create a room, and whether that room is listed publicly.
 
 ## Controls
 
