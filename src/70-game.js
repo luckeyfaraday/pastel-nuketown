@@ -176,9 +176,83 @@ function respawnActor(a, instant) {
 }
 
 /* =====================================================================
+   KILLCAM
+   What the player who killed you is looking at, for the rest of your
+   respawn. It follows them live rather than replaying the death, because
+   the client keeps nothing a replay could be built from: the only actor
+   history here is netRecordActorHistory, which exists for lag compensation
+   — position and nothing else, over a 0.3s window (NETP.MAX_REWIND_SECONDS)
+   — and no angles means no viewpoint. Replaying would also mean rewinding
+   every actor's mesh, which animateAll drives straight from live state, for
+   three seconds during which eight other people are still playing.
+
+   The cut is held off for a moment first. Cutting on the same frame as the
+   kill burst reads as a glitch rather than as a cut, and the burst is the
+   feedback that tells you what just happened.
+
+   This is state, not rendering: placeKillcam and the per-frame tick are in
+   90-main.js with the rest of the camera.
+   ===================================================================== */
+const KILLCAM_HOLD = 0.55;
+const KILLCAM = { killer: null, t: 0, shown: null };
+
+function killcamBegin(killer) {
+  /* A world death — or a shot with no attacker left to credit — arrives here
+     as a null killer and simply never leaves the death cam. */
+  KILLCAM.killer = killer && killer !== G.player ? killer : null;
+  KILLCAM.t = 0;
+}
+
+function killcamEnd() {
+  KILLCAM.killer = null;
+  KILLCAM.t = 0;
+  killcamShow(null);
+}
+
+/* The camera sits inside the killer's head, so their body has to come off or
+   the view is the inside of their own skull. Every hide and every restore is
+   routed through here, so the actor that was hidden is always the actor that
+   gets put back — including when the view falls back part-way through because
+   the killer died or left.
+
+   Setting `shown` is what does the hiding, not the assignment below: animateAll
+   re-asserts visibility for every live actor once a frame, so it reads `shown`
+   and keeps this one off. That is also what makes the restore here safe rather
+   than merely likely — the next frame puts a live body back on its own. */
+function killcamShow(a) {
+  if (KILLCAM.shown === a) return;
+  if (KILLCAM.shown && KILLCAM.shown.char) KILLCAM.shown.char.root.visible = true;
+  KILLCAM.shown = a;
+  if (a && a.char) a.char.root.visible = false;
+  /* Thinning the death card's wash is part of showing the killcam, so it is
+     driven from the same transition rather than from a second timer that
+     could disagree about when one is running. */
+  const card = document.getElementById('dead');
+  if (card) card.classList.toggle('killcam', !!a);
+}
+
+/* Re-decided every frame rather than trusted from the moment of death. Over
+   three seconds the killer can leave the room, be pruned and replaced by the
+   bot wearing their jersey, or be killed themselves — and a camera inside a
+   corpse mid-ragdoll is worse than no killcam at all. Anything unresolved
+   falls back to the death cam, which is what played here before. */
+function killcamActor() {
+  const k = KILLCAM.killer;
+  if (!k || G.over) return null;
+  if (KILLCAM.t < KILLCAM_HOLD) return null;
+  if (k === G.player || !k.alive || !k.char) return null;
+  if (G.actors.indexOf(k) < 0) return null;
+  return k;
+}
+
+/* =====================================================================
    SETUP
    ===================================================================== */
 function setupMatch() {
+  /* Before the disposal below, not after: the killcam has a body hidden and
+     has to put it back while there is still a mesh to put back, and it must
+     not carry a reference to an actor this rebuild is about to discard. */
+  killcamEnd();
   for (const a of G.actors) disposeActorVisuals(a);
   G.actors.length = 0;
   _nextId = 1;

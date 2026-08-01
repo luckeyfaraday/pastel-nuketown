@@ -183,11 +183,16 @@ function refreshBoard() {
 }
 
 /* ---- death + match-over screens ---- */
+/* Both ways a local player can die converge here already, carrying the killer:
+   solo and host through killActor, a guest through the snapshot that first
+   reports it dead. So this is the one place the killcam has to be told, and
+   the only place that cannot miss a death. */
 function showDeadScreen(from) {
   $('deadBy').textContent = from && from !== G.player ? ('taken out by ' + from.name) : 'you went down';
   $('dead').classList.remove('off');
+  killcamBegin(from);
 }
-function hideDeadScreen() { $('dead').classList.add('off'); if (!G.over) restoreBoard(); }
+function hideDeadScreen() { $('dead').classList.add('off'); killcamEnd(); if (!G.over) restoreBoard(); }
 function updateDeadScreen() {
   if (G.player && !G.player.alive) $('deadCd').textContent = String(Math.max(1, Math.ceil(G.player.respawnT)));
 }

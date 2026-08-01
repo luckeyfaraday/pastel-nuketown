@@ -297,6 +297,14 @@ body.touch .sens{display:none}
   .keys span{font-size:10px;padding:2px 7px 3px}
 }
 
+/* .screen's wash is tuned for the title and match-over cards, where there is
+   nothing behind it worth reading. A killcam you cannot see through is not a
+   killcam, so pull it back to a vignette for as long as one is running. The
+   death cam keeps the full wash — there the blur is ambience over your own
+   corpse, not something you are being shown on purpose. */
+#dead.killcam{background:radial-gradient(ellipse at 50% 38%,rgba(255,248,240,0),rgba(180,198,238,.2));
+  backdrop-filter:none}
+
 #dead .big{font-family:var(--disp);font-size:clamp(40px,8vw,84px);font-weight:800;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 14px 28px rgba(74,63,92,.3)}
 #dead .by{margin-top:8px;font-family:var(--disp);font-size:20px;font-weight:600;color:var(--ink)}
@@ -6054,9 +6062,83 @@ function respawnActor(a, instant) {
 }
 
 /* =====================================================================
+   KILLCAM
+   What the player who killed you is looking at, for the rest of your
+   respawn. It follows them live rather than replaying the death, because
+   the client keeps nothing a replay could be built from: the only actor
+   history here is netRecordActorHistory, which exists for lag compensation
+   — position and nothing else, over a 0.3s window (NETP.MAX_REWIND_SECONDS)
+   — and no angles means no viewpoint. Replaying would also mean rewinding
+   every actor's mesh, which animateAll drives straight from live state, for
+   three seconds during which eight other people are still playing.
+
+   The cut is held off for a moment first. Cutting on the same frame as the
+   kill burst reads as a glitch rather than as a cut, and the burst is the
+   feedback that tells you what just happened.
+
+   This is state, not rendering: placeKillcam and the per-frame tick are in
+   90-main.js with the rest of the camera.
+   ===================================================================== */
+const KILLCAM_HOLD = 0.55;
+const KILLCAM = { killer: null, t: 0, shown: null };
+
+function killcamBegin(killer) {
+  /* A world death — or a shot with no attacker left to credit — arrives here
+     as a null killer and simply never leaves the death cam. */
+  KILLCAM.killer = killer && killer !== G.player ? killer : null;
+  KILLCAM.t = 0;
+}
+
+function killcamEnd() {
+  KILLCAM.killer = null;
+  KILLCAM.t = 0;
+  killcamShow(null);
+}
+
+/* The camera sits inside the killer's head, so their body has to come off or
+   the view is the inside of their own skull. Every hide and every restore is
+   routed through here, so the actor that was hidden is always the actor that
+   gets put back — including when the view falls back part-way through because
+   the killer died or left.
+
+   Setting `shown` is what does the hiding, not the assignment below: animateAll
+   re-asserts visibility for every live actor once a frame, so it reads `shown`
+   and keeps this one off. That is also what makes the restore here safe rather
+   than merely likely — the next frame puts a live body back on its own. */
+function killcamShow(a) {
+  if (KILLCAM.shown === a) return;
+  if (KILLCAM.shown && KILLCAM.shown.char) KILLCAM.shown.char.root.visible = true;
+  KILLCAM.shown = a;
+  if (a && a.char) a.char.root.visible = false;
+  /* Thinning the death card's wash is part of showing the killcam, so it is
+     driven from the same transition rather than from a second timer that
+     could disagree about when one is running. */
+  const card = document.getElementById('dead');
+  if (card) card.classList.toggle('killcam', !!a);
+}
+
+/* Re-decided every frame rather than trusted from the moment of death. Over
+   three seconds the killer can leave the room, be pruned and replaced by the
+   bot wearing their jersey, or be killed themselves — and a camera inside a
+   corpse mid-ragdoll is worse than no killcam at all. Anything unresolved
+   falls back to the death cam, which is what played here before. */
+function killcamActor() {
+  const k = KILLCAM.killer;
+  if (!k || G.over) return null;
+  if (KILLCAM.t < KILLCAM_HOLD) return null;
+  if (k === G.player || !k.alive || !k.char) return null;
+  if (G.actors.indexOf(k) < 0) return null;
+  return k;
+}
+
+/* =====================================================================
    SETUP
    ===================================================================== */
 function setupMatch() {
+  /* Before the disposal below, not after: the killcam has a body hidden and
+     has to put it back while there is still a mesh to put back, and it must
+     not carry a reference to an actor this rebuild is about to discard. */
+  killcamEnd();
   for (const a of G.actors) disposeActorVisuals(a);
   G.actors.length = 0;
   _nextId = 1;
@@ -9968,11 +10050,16 @@ function refreshBoard() {
 }
 
 /* ---- death + match-over screens ---- */
+/* Both ways a local player can die converge here already, carrying the killer:
+   solo and host through killActor, a guest through the snapshot that first
+   reports it dead. So this is the one place the killcam has to be told, and
+   the only place that cannot miss a death. */
 function showDeadScreen(from) {
   $('deadBy').textContent = from && from !== G.player ? ('taken out by ' + from.name) : 'you went down';
   $('dead').classList.remove('off');
+  killcamBegin(from);
 }
-function hideDeadScreen() { $('dead').classList.add('off'); if (!G.over) restoreBoard(); }
+function hideDeadScreen() { $('dead').classList.add('off'); killcamEnd(); if (!G.over) restoreBoard(); }
 function updateDeadScreen() {
   if (G.player && !G.player.alive) $('deadCd').textContent = String(Math.max(1, Math.ceil(G.player.respawnT)));
 }
@@ -10033,6 +10120,18 @@ const FIXED = 1 / 60;
 let lastT = 0, titleOrbit = 0;
 const PROF = { sim: 0, anim: 0, render: 0, frames: 0 };
 
+/* Killcam placement. The state machine that decides WHOSE eyes these are
+   lives in 70-game.js, next to the death and respawn it hangs off — and,
+   more to the point, inside the part of the client net-sim.js actually
+   loads, so its fallbacks can be tested. This is only the camera.
+
+   Built exactly like the live first-person camera below, +PI and all, so what
+   you see is framed the way the killer is seeing it and not a near-miss. */
+function placeKillcam(k) {
+  camera.position.set(k.pos.x, k.pos.y + ACT.eye, k.pos.z);
+  camera.rotation.set(k.pitch, k.yaw + Math.PI, 0);
+}
+
 /* Death cam: up and BEHIND (forward is (sin yaw, cos yaw), so behind is the
    negative of that), and shortened if a wall is in the way — otherwise you
    die next to a house and spend the respawn staring at flat siding. */
@@ -10052,6 +10151,17 @@ function updateCamera(dt) {
   if (G.frozen) return;                       // screenshotPose owns the camera
   const p = G.player;
 
+  /* Resolved ahead of the early returns below, and the hidden body put back
+     through the same call, so a match that ends or pauses mid-killcam does not
+     leave one player invisible to somebody who can still see the world. The
+     clock stops while paused for the same reason the simulation does. */
+  let kc = null;
+  if (p && !p.alive && G.started && !G.paused && !G.over) {
+    KILLCAM.t += dt;
+    kc = killcamActor();
+  }
+  killcamShow(kc);
+
   if (!G.started || G.paused) {               // slow orbit behind the title card
     titleOrbit += dt * 0.055;
     const r = 46, y = 19;
@@ -10061,7 +10171,7 @@ function updateCamera(dt) {
   }
   if (!p) return;
 
-  if (!p.alive) { placeDeathCam(p); return; }
+  if (!p.alive) { if (kc) placeKillcam(kc); else placeDeathCam(p); return; }
 
   const spd = Math.hypot(p.vel.x, p.vel.z);
   const bobA = p.onGround ? Math.min(spd / 7, 1) * 0.045 : 0;
@@ -10095,7 +10205,13 @@ function animateAll(dt) {
     if (a.isPlayer || !a.char) continue;
     a.char.root.position.set(a.pos.x, a.pos.y, a.pos.z);
     animateCharacter(a.char, a, dt, G.time);
-    if (!a.alive && a.deathT > 2.0) a.char.root.visible = false;
+    /* The killcam is looking out of this one's head, so it has to stay off.
+       This runs after updateCamera every frame and re-asserts visibility for
+       anything alive, which is exactly what makes the restore in killcamShow
+       safe — and, before this branch existed, exactly what filled the killcam
+       with the inside of the killer's own skull. */
+    if (a === KILLCAM.shown) a.char.root.visible = false;
+    else if (!a.alive && a.deathT > 2.0) a.char.root.visible = false;
     else if (a.alive) a.char.root.visible = true;
   }
   updateMotes(G.time);
