@@ -501,6 +501,17 @@ function setSensMultiplier(mult) {
   return m;
 }
 
+/* Held as the multiplier the maths wants rather than the boolean the checkbox
+   has, so applyLook stays one multiply and no second site has to remember
+   which way round the flag reads. Applies to both input sources, unlike
+   sensitivity: a thumb drag can be upside down just as a mouse can. */
+let invertY = 1;
+
+function setInvertY(on) {
+  invertY = on ? -1 : 1;
+  return !!on;
+}
+
 /* Firing is an edge, not a level: `fireSeq` is how the host names a shot and
    how a guest matches the answer back to it. So pressing has to go through a
    call that owns the increment, not a flag another input source can set behind
@@ -556,6 +567,11 @@ function readLocalInput(accepts) {
 /* Shared by mouse-look and touch-drag; they differ only in sensitivity. */
 function applyLook(dx, dy, sens) {
   if (!G.player) return;
+  /* Flipped here rather than on the pitch line below, because IN.lookDY is
+     also what the viewmodel sways against -- the gun trailing the camera it
+     is attached to. Invert the pitch alone and an inverted player's gun
+     swings the wrong way on every vertical flick. */
+  dy *= invertY;
   G.player.yaw -= dx * sens;
   G.player.pitch = clamp(G.player.pitch - dy * sens, -1.45, 1.45);
   IN.lookDX = clamp(IN.lookDX + dx * 0.006, -1, 1);
@@ -608,6 +624,7 @@ function initInput() {
   });
 
   initSensSlider();
+  initInvertToggle();
 }
 
 /* The slider lives in #menu without `setup-only`, so the same control serves
@@ -626,6 +643,22 @@ function initSensSlider() {
     const m = setSensMultiplier(el.value);
     if (out) out.textContent = m.toFixed(2) + '×';
     try { localStorage.setItem('pastel-nuketown-sens', String(m)); } catch (e) {}
+  });
+}
+
+/* Sits against the slider for the same reason it sits in #menu at all: this is
+   a setting you go looking for next to the other aim setting, and the moment
+   you notice you want it is mid-match, with the pause card up. Anything that
+   is not '1' reads as off, so a hand-edited value can only ever mean normal. */
+function initInvertToggle() {
+  const el = document.getElementById('invertY');
+  if (!el) return;
+  let saved = null;
+  try { saved = localStorage.getItem('pastel-nuketown-invert-y'); } catch (e) {}
+  el.checked = setInvertY(saved === '1');
+  el.addEventListener('change', () => {
+    setInvertY(el.checked);
+    try { localStorage.setItem('pastel-nuketown-invert-y', el.checked ? '1' : '0'); } catch (e) {}
   });
 }
 /* Pointer Lock throws if there was no user gesture (autostart, headless).
