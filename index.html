@@ -6080,7 +6080,10 @@ function respawnActor(a, instant) {
    90-main.js with the rest of the camera.
    ===================================================================== */
 const KILLCAM_HOLD = 0.55;
-const KILLCAM = { killer: null, t: 0, shown: null };
+const KILLCAM = {
+  killer: null, t: 0, shown: null,
+  lastYaw: 0, lastPitch: 0, lastReloadT: 0   // for reconstructing viewmodel input
+};
 
 function killcamBegin(killer) {
   /* A world death — or a shot with no attacker left to credit — arrives here
@@ -6095,26 +6098,93 @@ function killcamEnd() {
   killcamShow(null);
 }
 
-/* The camera sits inside the killer's head, so their body has to come off or
-   the view is the inside of their own skull. Every hide and every restore is
-   routed through here, so the actor that was hidden is always the actor that
-   gets put back — including when the view falls back part-way through because
-   the killer died or left.
-
-   Setting `shown` is what does the hiding, not the assignment below: animateAll
-   re-asserts visibility for every live actor once a frame, so it reads `shown`
-   and keeps this one off. That is also what makes the restore here safe rather
-   than merely likely — the next frame puts a live body back on its own. */
+/* Every hide and every restore is routed through here, so the actor that was
+   undressed is always the actor that gets put back — including when the view
+   falls back part-way through because the killer died or left. animateAll
+   re-asserts the same thing once a frame from `shown`, so a body left behind
+   by any path this one misses comes back on its own. */
 function killcamShow(a) {
   if (KILLCAM.shown === a) return;
-  if (KILLCAM.shown && KILLCAM.shown.char) KILLCAM.shown.char.root.visible = true;
+  killcamDressActor(KILLCAM.shown, false);
   KILLCAM.shown = a;
-  if (a && a.char) a.char.root.visible = false;
+  killcamDressActor(a, true);
+  if (a) killcamAdoptViewmodel(a); else killcamReleaseViewmodel();
   /* Thinning the death card's wash is part of showing the killcam, so it is
      driven from the same transition rather than from a second timer that
      could disagree about when one is running. */
   const card = document.getElementById('dead');
   if (card) card.classList.toggle('killcam', !!a);
+}
+
+/* The whole body comes off, not a selection of parts. Leaving the arms on to
+   show the third-person gun was tried and does not work: that mesh is built
+   to be seen from outside, held at the end of an arm ~0.65m below the eye, so
+   from inside its owner's head it is a corner sliver at the frame edge — and
+   it is one generic shape for all three weapons. The viewmodel below supplies
+   a real gun instead. The nameplate is parented to root and goes with it.
+
+   The spawn bubble is not: it is scene-level, so hiding the body never
+   covered it, and it is drawn BackSide with the camera inside, so a killer
+   who had just respawned would have the whole view glowing. */
+function killcamDressActor(a, lookedThrough) {
+  if (!a || !a.char) return;
+  a.char.root.visible = !lookedThrough;
+  if (a.bubble && lookedThrough) a.bubble.visible = false;   // updateBubble re-asserts it
+}
+
+/* =====================================================================
+   KILLCAM VIEWMODEL
+   The first-person viewmodel is a singleton built for the local player, so
+   the killcam borrows it rather than getting one of its own. Everything it
+   is lent has to be given back, or the player respawns holding the gun that
+   shot them: nothing else would put it right, because the two places that
+   call vmSetWeapon both key off the local actor's weapon CHANGING, and the
+   local actor's weapon never changed.
+   ===================================================================== */
+function killcamAdoptViewmodel(a) {
+  vmSetWeapon(a.weapon, true);
+  vmCancelReload();
+  if (a.reloadT > 0) vmStartReload(a.reloadT);
+  KILLCAM.lastYaw = a.yaw;
+  KILLCAM.lastPitch = a.pitch;
+  KILLCAM.lastReloadT = a.reloadT;
+}
+
+function killcamReleaseViewmodel() {
+  vmCancelReload();
+  if (G.player) vmSetWeapon(G.player.weapon, true);
+}
+
+/* The viewmodel is animated from local input — mouse deltas, the sprint key,
+   the trigger. None of that exists for somebody else, so it is reconstructed
+   from what does cross the wire: where they are looking and how fast they are
+   moving. */
+function killcamViewmodelState(a, dt) {
+  const dYaw = angDelta(KILLCAM.lastYaw, a.yaw);
+  const dPitch = a.pitch - KILLCAM.lastPitch;
+  KILLCAM.lastYaw = a.yaw;
+  KILLCAM.lastPitch = a.pitch;
+
+  /* A weapon switch mid-killcam, and a reload, both read off replicated
+     state — reloadT jumping up is a reload starting, on the host where
+     tryReload set it and on a guest where the snapshot delivered it. */
+  if (a.weapon !== VM.cur) vmSetWeapon(a.weapon);
+  if (a.reloadT > KILLCAM.lastReloadT + 1e-6) vmStartReload(a.reloadT);
+  KILLCAM.lastReloadT = a.reloadT;
+
+  const speed = Math.hypot(a.vel.x, a.vel.z);
+  return {
+    vel: a.vel,
+    onGround: a.onGround,
+    /* Sway follows the mouse for the local player; here it follows how fast
+       they are actually turning, scaled to land in the same rough range. */
+    lookDX: dt > 0 ? clamp(dYaw / dt * 0.02, -1, 1) : 0,
+    lookDY: dt > 0 ? clamp(dPitch / dt * 0.02, -1, 1) : 0,
+    /* No sprint flag crosses the wire, so infer it — only a sprint gets an
+       actor above the walk speed. */
+    sprinting: speed > CFG.playerSpeed * 1.12,
+    firing: a.fireCd > 0
+  };
 }
 
 /* Re-decided every frame rather than trusted from the moment of death. Over
@@ -6343,6 +6413,11 @@ function fireWeapon(a, fireSeq, renderTime) {
     setCrosshairPunch(w.id === 'shotgun' ? 14 : 7);
   } else {
     SFX.shoot(w.id, a.pos.x, a.pos.y + 1.3, a.pos.z);
+    /* Somebody dead is holding this actor's gun through the killcam, so the
+       shot has to kick the viewmodel they are being shown. This is the host
+       and solo path; a guest never runs fireWeapon for a remote player and
+       is hooked where its `shot` events land instead. */
+    if (a === KILLCAM.shown) vmFire(w);
   }
   if (!visualOnly && typeof netOnAuthoritativeShot === 'function')
     netOnAuthoritativeShot(a, w, shotLines);
@@ -9395,6 +9470,11 @@ function netApplyEvent(e) {
     if (e.from === NET.id) return;
     if (from) { from.recoil = 1; from.aiming = true; }
     const w = WBY[e.weapon] || WBY.smg;
+    /* A guest never runs fireWeapon for a remote player -- this event IS the
+       shot as far as it is concerned -- so a guest watching its killer through
+       the killcam gets the viewmodel's kick from here rather than from the
+       hook in fireWeapon. */
+    if (from && from === KILLCAM.shown) vmFire(w);
     if (Array.isArray(e.lines)) {
       for (let i = 0; i < e.lines.length; i++) {
         const l = e.lines[i];
@@ -10205,14 +10285,19 @@ function animateAll(dt) {
     if (a.isPlayer || !a.char) continue;
     a.char.root.position.set(a.pos.x, a.pos.y, a.pos.z);
     animateCharacter(a.char, a, dt, G.time);
-    /* The killcam is looking out of this one's head, so it has to stay off.
-       This runs after updateCamera every frame and re-asserts visibility for
-       anything alive, which is exactly what makes the restore in killcamShow
-       safe — and, before this branch existed, exactly what filled the killcam
-       with the inside of the killer's own skull. */
-    if (a === KILLCAM.shown) a.char.root.visible = false;
-    else if (!a.alive && a.deathT > 2.0) a.char.root.visible = false;
+    /* Re-asserted here, after updateCamera has decided whose eyes these are
+       and after animateCharacter has posed the arms. This loop runs every
+       frame and would otherwise put the head and torso straight back — which
+       is what once filled the killcam with the inside of the killer's own
+       skull. It is also what makes the restore in killcamShow safe. */
+    if (!a.alive && a.deathT > 2.0) a.char.root.visible = false;
     else if (a.alive) a.char.root.visible = true;
+    /* Deliberately last. The line above re-shows every live actor once a
+       frame, so anything that hides one has to come after it or be undone
+       before the frame is drawn — which is what once filled the killcam with
+       the inside of the killer's own head. It is also what makes the restore
+       in killcamShow safe: a body it misses comes back here on its own. */
+    killcamDressActor(a, a === KILLCAM.shown);
   }
   updateMotes(G.time);
   updateMagic(G.time);
@@ -10223,7 +10308,9 @@ function animateAll(dt) {
 function renderAll() {
   renderer.autoClear = true;
   renderer.render(scene, camera);
-  if (G.started && !G.paused && G.player && G.player.alive && !G.frozenNoVM) {
+  /* Dead normally means no viewmodel, because a corpse holds no gun. The
+     killcam is the exception: the gun on screen is the killer's. */
+  if (G.started && !G.paused && G.player && (G.player.alive || KILLCAM.shown) && !G.frozenNoVM) {
     renderer.autoClear = false;
     renderer.clearDepth();
     renderer.render(vmScene, vmCam);
@@ -10296,7 +10383,9 @@ function frame(now) {
     IN.lookDX = damp(IN.lookDX, 0, 9, dt);
     IN.lookDY = damp(IN.lookDY, 0, 9, dt);
     updateCamera(dt);
-    updateViewmodel(dt, {
+    /* Whoever the camera belongs to this frame is whoever the gun belongs to.
+       updateCamera ran just above, so KILLCAM.shown is already settled. */
+    updateViewmodel(dt, KILLCAM.shown ? killcamViewmodelState(KILLCAM.shown, dt) : {
       vel: G.player ? G.player.vel : { x: 0, y: 0, z: 0 },
       onGround: G.player ? G.player.onGround : true,
       lookDX: IN.lookDX, lookDY: IN.lookDY,
