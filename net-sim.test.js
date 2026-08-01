@@ -1077,3 +1077,53 @@ test('rebuilding the match drops the killcam reference to the old roster', () =>
   assert.strictEqual(match.host.get('KILLCAM.shown'), null,
     'a discarded actor held here is a discarded actor kept alive');
 });
+
+test('the weapon card follows the killcam to the gun on screen', () => {
+  const match = killcamMatch();
+  match.host.run(`
+    G.player.weapon = 'smg'; G.player.ammo = 7; G.player.reserve = 21;
+    G.actors[1].weapon = 'rifle'; G.actors[1].ammo = 4; G.actors[1].reserve = 40;
+    updateHUD();
+  `);
+  assert.strictEqual(match.host.get('elWName.textContent'), 'BUBBLEGUN');
+  assert.match(match.host.get('elAmmo.innerHTML'), /^7</);
+
+  match.host.run('killActor(G.player, G.actors[1]);');
+  killcamHeld(match.host);
+  match.host.run('killcamShow(killcamActor()); updateHUD();');
+
+  assert.strictEqual(match.host.get('elWName.textContent'), 'LOLLIPOP',
+    'a card counting your own magazine contradicts the gun being drawn');
+  assert.match(match.host.get('elAmmo.innerHTML'), /^4</);
+});
+
+test('the killcam weapon card names its owner instead of telling you to reload', () => {
+  const match = killcamMatch();
+  match.host.run(`
+    G.actors[1].weapon = 'rifle'; G.actors[1].ammo = 0; G.actors[1].reserve = 40;
+    killActor(G.player, G.actors[1]);
+  `);
+  killcamHeld(match.host);
+  match.host.run('killcamShow(killcamActor()); updateHUD();');
+
+  const caption = match.host.get('elReload.textContent');
+  assert.notStrictEqual(caption, 'PRESS R',
+    'there is nothing the player can do about somebody else\'s empty magazine');
+  assert.strictEqual(caption, match.host.get('G.actors[1].name'));
+});
+
+test('the weapon card comes back to your own gun when the killcam ends', () => {
+  const match = killcamMatch();
+  match.host.run(`
+    G.player.weapon = 'shotgun'; G.player.ammo = 5; G.player.reserve = 30;
+    G.actors[1].weapon = 'rifle';
+    killActor(G.player, G.actors[1]);
+  `);
+  killcamHeld(match.host);
+  match.host.run('killcamShow(killcamActor()); updateHUD();');
+  assert.strictEqual(match.host.get('elWName.textContent'), 'LOLLIPOP');
+
+  match.host.run('hideDeadScreen(); updateHUD();');
+  assert.strictEqual(match.host.get('elWName.textContent'), 'MARSHMALLOW');
+  assert.match(match.host.get('elAmmo.innerHTML'), /^5</);
+});

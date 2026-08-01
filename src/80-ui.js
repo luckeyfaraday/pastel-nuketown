@@ -27,14 +27,26 @@ function updateHUD() {
   elHp.classList.toggle('low', f <= 0.35);
   elHpN.textContent = String(Math.max(0, Math.ceil(p.health)));
 
-  const w = WBY[p.weapon];
+  /* The weapon card belongs to whoever the camera does. Through a killcam the
+     gun on screen is the killer's, and a card still counting your own
+     magazine next to it is a straight contradiction. Ammo and reserve are
+     replicated per actor, so a guest is reading their real magazine and not a
+     guess. Everything else on the HUD stays yours — health and score are
+     about you, and you being dead is the whole context. */
+  const gunOwner = KILLCAM.shown || p;
+  const w = WBY[gunOwner.weapon];
   elWName.textContent = w.name;
-  elAmmo.innerHTML = p.ammo + '<small>/' + p.reserve + '</small>';
-  elAmmo.classList.toggle('empty', p.ammo === 0);
-  elReload.textContent = p.reloadT > 0 ? 'RELOADING' : (p.ammo === 0 ? 'PRESS R' : '');
+  elAmmo.innerHTML = gunOwner.ammo + '<small>/' + gunOwner.reserve + '</small>';
+  elAmmo.classList.toggle('empty', gunOwner.ammo === 0);
+  /* PRESS R is an instruction, and there is nothing you can do about somebody
+     else's empty magazine. The line names whose gun this is instead, which is
+     also what stops the borrowed card from reading as your own. */
+  elReload.textContent = KILLCAM.shown
+    ? (gunOwner.reloadT > 0 ? 'RELOADING' : gunOwner.name)
+    : (p.reloadT > 0 ? 'RELOADING' : (p.ammo === 0 ? 'PRESS R' : ''));
 
   const order = ['smg', 'shotgun', 'rifle'];
-  for (let i = 0; i < elSlots.length; i++) elSlots[i].classList.toggle('on', order[i] === p.weapon);
+  for (let i = 0; i < elSlots.length; i++) elSlots[i].classList.toggle('on', order[i] === gunOwner.weapon);
 
   elScore.textContent = String(p.kills);
   elGoal.textContent = String(CFG.killsToWin);
