@@ -229,7 +229,8 @@ function boot() {
   initAI();        set(96);
   initNetworkUI();
   const requestedMode = QS.get('mode');
-  setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
+  setGameMode(requestedMode === 'kc' || requestedMode === 'dm'
+    ? requestedMode : 'dm');
 
   setupMatch();
   camera.position.set(40, 20, 30); camera.lookAt(0, 3, 0);

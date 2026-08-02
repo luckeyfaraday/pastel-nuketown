@@ -428,11 +428,16 @@ function createMatch(opts = {}) {
   }
 
   function begin(instance, mode) {
+    const requestedGameMode = mode === 'host'
+      ? (opts.hostMode || opts.mode)
+      : (opts.guestMode || opts.mode);
+    const gameMode = requestedGameMode === 'kc' ? 'kc' : 'dm';
     instance.context.__socket = socketFor(mode);
     instance.context.__members = members;
     instance.run(SIM_BOOT);
     instance.run(`
       CFG.combatants = ${combatants};
+      setGameMode(${JSON.stringify(gameMode)});
       NET.mode = ${JSON.stringify(mode)};
       NET.id = ${JSON.stringify(mode === 'host' ? HOST_ID : GUEST_ID)};
       NET.room = 'SIMRUN';

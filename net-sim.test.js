@@ -216,6 +216,411 @@ test('the harness runs the real client and converges host and guest', () => {
     `guest replica should track the host (truth ${truth}, seen ${seen})`);
 });
 
+function spawnDonutForGuest(match, age = 0) {
+  match.host.run(`
+    {
+      const owner = G.player;
+      const killer = G.actors.find(a => a.controller === 'remote');
+      owner.pos.x = 0; owner.pos.y = 0; owner.pos.z = 0;
+      killer.pos.x = -3; killer.pos.y = 0; killer.pos.z = 0;
+      const donut = spawnDonut(owner, killer);
+      donut.t = ${age};
+      owner.alive = false;
+      owner.respawnT = 10;
+      netAfterSimulation(0, true);
+    }
+  `);
+}
+
+test('a host donut reaches a guest at the same position and establishes match mode', () => {
+  const match = SIM.createMatch({
+    latencyMs: LIVE_LATENCY_MS, seed: 12, hostMode: 'kc', guestMode: 'dm'
+  });
+  spawnDonutForGuest(match);
+  const authority = match.link.latestSnapshot().donuts[0];
+  match.run(0.35);
+
+  assert.strictEqual(match.guest.get('G.mode'), 'kc',
+    'the snapshot, not the guest URL, owns match mode');
+  assert.strictEqual(match.guest.get(`JSON.stringify((() => {
+    const d = G.donuts[0];
+    return d && { id: d.id, x: d.x, y: d.y, z: d.z };
+  })())`), JSON.stringify({
+    id: authority.id, x: authority.x, y: authority.y, z: authority.z
+  }));
+});
+
+test('a guest walking onto a donut earns exactly one host-credited confirm', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 13, mode: 'kc' });
+  spawnDonutForGuest(match);
+  match.run(0.35);
+  match.guest.run(`
+    G.player.yaw = Math.PI / 2;
+    G.player.aimYaw = G.player.yaw;
+    KEY.KeyW = true;
+  `);
+  match.run(1.2);
+  match.guest.run('KEY.KeyW = false;');
+  match.run(0.5);
+
+  const hostScore = () => match.host.get(
+    `G.actors.find(a => a.netId === ${JSON.stringify(SIM.GUEST_ID)}).confirms`);
+  assert.strictEqual(hostScore(), 1, 'only the host may award the pickup');
+  assert.strictEqual(match.guest.get('G.player.confirms'), 1,
+    'the score should return to the collector by snapshot');
+  assert.strictEqual(match.host.get('G.donuts.length'), 0);
+  match.run(1.0);
+  assert.strictEqual(hostScore(), 1, 'continued contact must not collect it again');
+  assert.strictEqual(match.guest.get('G.player.confirms'), 1);
+});
+
+test('a replayed confirm event renders once and never changes a guest score', () => {
+  const match = SIM.createMatch({ latencyMs: 5, seed: 14, mode: 'kc' });
+  match.run(0.4);
+  match.guest.run(`
+    globalThis.__confirmFeedback = 0;
+    const __realRenderDonutOutcome = renderDonutOutcome;
+    renderDonutOutcome = function () {
+      __confirmFeedback++;
+      return __realRenderDonutOutcome.apply(null, arguments);
+    };
+  `);
+  const before = match.guest.get('G.player.confirms');
+  const event = {
+    id: 1000,
+    kind: 'confirm',
+    collector: SIM.GUEST_ID,
+    owner: SIM.HOST_ID,
+    killer: SIM.GUEST_ID,
+    deny: false,
+    at: [0, 0.35, 0]
+  };
+  match.guest.context.__wire = JSON.stringify({
+    t: 'event', v: SIM.NETP.VERSION,
+    authorityEpoch: 1, round: 1, events: [event]
+  });
+  match.guest.run('netHandleWire(__wire)');
+  match.guest.run('NET.authorityEpoch = 2;');
+  match.guest.context.__wire = JSON.stringify({
+    t: 'event', v: SIM.NETP.VERSION,
+    authorityEpoch: 2, round: 1, events: [event]
+  });
+  match.guest.run('netHandleWire(__wire)');
+
+  assert.strictEqual(match.guest.get('__confirmFeedback'), 1,
+    'event sequence deduplication must span authority epochs');
+  assert.strictEqual(match.guest.get('G.player.confirms'), before,
+    'confirm events are feedback, not scoring authority');
+});
+
+test('departed donut owners and killers cannot poison feedback or host migration', () => {
+  const match = SIM.createMatch({ latencyMs: 20, seed: 19, combatants: 4, mode: 'kc' });
+  match.run(0.3);
+  match.guest.run(`
+    globalThis.__departedConfirmFeedback = 0;
+    const __realDepartedOutcome = renderDonutOutcome;
+    renderDonutOutcome = function () {
+      __departedConfirmFeedback++;
+      return __realDepartedOutcome.apply(null, arguments);
+    };
+  `);
+
+  match.host.run(`
+    {
+      NET.members.push({ id: 'departed-1', name: 'LEAVER', role: 'guest', slot: 2 });
+      netAdmitArrivals();
+      const departed = G.actors.find(actor => actor.netId === 'departed-1');
+      G.player.pos.x = departed.pos.x = 0;
+      G.player.pos.y = departed.pos.y = 0;
+      G.player.pos.z = departed.pos.z = 0;
+      const staleOwner = spawnDonut(departed, G.player);
+      const staleKiller = spawnDonut(G.player, departed);
+      staleOwner.x = staleKiller.x = 0;
+      staleOwner.y = staleKiller.y = 0.35;
+      staleOwner.z = staleKiller.z = 0;
+
+      NET.members = NET.members.filter(member => member.id !== 'departed-1');
+      netPruneDepartedPlayers();
+      netAfterSimulation(0, true);
+    }
+  `);
+
+  const postDeparture = match.link.latestSnapshot();
+  assert.strictEqual(postDeparture.donuts.length, 2,
+    'the pickup must outlive the connection that created it');
+  assert.ok(postDeparture.donuts.some(donut =>
+    donut.owner === null && donut.ownerNetId === null),
+  'a departed owner must be removed from the replicated actor reference');
+  assert.ok(postDeparture.donuts.some(donut =>
+    donut.killer === null && donut.killerNetId === null),
+  'a departed killer must be removed from the replicated actor reference');
+  match.guest.context.__candidateSnapshot = JSON.stringify(postDeparture);
+  assert.strictEqual(match.guest.get('netValidSnapshot(JSON.parse(__candidateSnapshot))'), true,
+    'an otherwise valid snapshot must survive stale donut references');
+
+  match.host.run(`
+    {
+      G.actors.forEach((actor, index) => {
+        actor.pos.x = 20 + index; actor.pos.y = 0; actor.pos.z = 18;
+        actor.vel.x = actor.vel.y = actor.vel.z = 0;
+      });
+      const collector = G.actors.find(actor => actor.netId === 'bot-2');
+      collector.pos.x = 0; collector.pos.y = 0; collector.pos.z = 0;
+      updateDonuts(0);
+      netAfterSimulation(0, true);
+    }
+  `);
+
+  const checkpoint = match.link.latestCheckpoint();
+  match.run(0.15);
+  match.migrateHost();
+  for (let i = 0; i < 60 && match.guest.get('NET.phase') !== 'migrating'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'migrating',
+    'the relay-cached checkpoint must remain safe to hydrate');
+  for (let i = 0; i < 60 && match.guest.get('NET.phase') !== 'playing'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'playing',
+    'the cached checkpoint must remain safe for seamless promotion');
+  assert.strictEqual(match.guest.get('G.started'), true,
+    'the round and its scores must not be abandoned to the lobby');
+
+  assert.strictEqual(checkpoint.confirmEvents.length, 2);
+  assert.ok(checkpoint.confirmEvents.some(event => event.owner === null),
+    'the stale owner must not enter the checkpoint event');
+  assert.ok(checkpoint.confirmEvents.some(event => event.killer === null),
+    'the stale killer must not enter the checkpoint event');
+  assert.strictEqual(Object.hasOwn(checkpoint, 'donuts'), false,
+    'checkpoint donuts duplicate the fresher snapshot cache');
+  assert.ok(checkpoint.actors.every(actor => !Object.hasOwn(actor, 'confirms')),
+    'checkpoint confirms duplicate the fresher snapshot actor state');
+  assert.strictEqual(match.guest.get('__departedConfirmFeedback'), 2,
+    'both host-awarded pickups need guest-side feedback');
+  assert.strictEqual(match.guest.get('NET.lastCheckpoint.confirmEvents.length'), 2,
+    'the stale references must not invalidate the whole checkpoint');
+});
+
+test('one malformed donut rejects its whole snapshot before any state is applied', () => {
+  const match = SIM.createMatch({ latencyMs: 5, seed: 15, mode: 'kc' });
+  spawnDonutForGuest(match);
+  match.run(0.25);
+  const before = {
+    tick: match.guest.get('NET.lastSnapshotTick'),
+    kills: match.guest.get(`G.actors.find(a => a.netId === ${JSON.stringify(SIM.HOST_ID)}).kills`),
+    donuts: match.guest.get('JSON.stringify(G.donuts)')
+  };
+  const bad = structuredClone(match.link.latestSnapshot());
+  bad.tick = before.tick + 100;
+  bad.time += 1;
+  bad.actors.find(actor => actor.netId === SIM.HOST_ID).kills += 10;
+  bad.donuts.push({ ...bad.donuts[0], id: bad.donuts[0].id + 1, x: 1000 });
+  match.guest.context.__wire = JSON.stringify(bad);
+  match.guest.run('netHandleWire(__wire)');
+
+  assert.strictEqual(match.guest.get('NET.lastSnapshotTick'), before.tick);
+  assert.strictEqual(match.guest.get(
+    `G.actors.find(a => a.netId === ${JSON.stringify(SIM.HOST_ID)}).kills`), before.kills);
+  assert.strictEqual(match.guest.get('JSON.stringify(G.donuts)'), before.donuts,
+    'the valid donut beside the malformed one must not be half-applied');
+});
+
+test('snapshot validation enforces donut capacity, mode, and actor references', () => {
+  const match = SIM.createMatch({ latencyMs: 5, seed: 20, mode: 'kc' });
+  spawnDonutForGuest(match);
+  const base = structuredClone(match.link.latestSnapshot());
+  const donut = base.donuts[0];
+  const accepted = candidate => {
+    match.guest.context.__candidateSnapshot = JSON.stringify(candidate);
+    return match.guest.get('netValidSnapshot(JSON.parse(__candidateSnapshot))');
+  };
+
+  const atCapacity = structuredClone(base);
+  atCapacity.donuts = Array.from({ length: 24 }, (_, index) => ({
+    ...donut, id: index + 1
+  }));
+  assert.strictEqual(accepted(atCapacity), true);
+
+  const overCapacity = structuredClone(atCapacity);
+  overCapacity.donuts.push({ ...donut, id: 25 });
+  assert.strictEqual(accepted(overCapacity), false,
+    'a snapshot may not exceed the fixed render and simulation pool');
+
+  const dmWithDonut = structuredClone(base);
+  dmWithDonut.mode = 'dm';
+  assert.strictEqual(accepted(dmWithDonut), false,
+    'deathmatch snapshots cannot smuggle kill-confirmed pickups');
+  dmWithDonut.donuts = [];
+  assert.strictEqual(accepted(dmWithDonut), true);
+
+  const foreignOwner = structuredClone(base);
+  foreignOwner.donuts[0].owner = 99_999;
+  foreignOwner.donuts[0].ownerNetId = 'nobody-at-all';
+  assert.strictEqual(accepted(foreignOwner), false,
+    'each live donut reference must match an actor in the same snapshot');
+});
+
+test('an authoritative snapshot removes donuts the host no longer lists', () => {
+  const match = SIM.createMatch({ latencyMs: 20, seed: 21, mode: 'kc' });
+  spawnDonutForGuest(match);
+  match.run(0.15);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 1);
+
+  match.host.run(`
+    G.actors.forEach((actor, index) => {
+      actor.pos.x = 20 + index; actor.pos.y = 0; actor.pos.z = 18;
+    });
+    G.donuts[0].t = DONUT_LIFETIME;
+    updateDonuts(0);
+    netAfterSimulation(0, true);
+  `);
+  match.run(0.15);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 0,
+    'reconciliation is by id, including the removal half');
+});
+
+test('donut ids, remaining lifetime, and every surviving confirm score migrate', () => {
+  const match = SIM.createMatch({
+    latencyMs: LIVE_LATENCY_MS, seed: 16, combatants: 4, mode: 'kc'
+  });
+  match.run(0.5);
+  match.host.run(`
+    {
+      const owner = G.actors.find(a => a.controller === 'bot');
+      const killer = G.actors.find(a => a.controller === 'remote');
+      owner.pos.x = 0; owner.pos.y = 0; owner.pos.z = 0;
+      const donut = spawnDonut(owner, killer);
+      donut.t = 10.5;
+      G.actors.forEach((actor, index) => {
+        actor.pos.x = 25; actor.pos.y = 0; actor.pos.z = 18;
+        actor.vel.x = actor.vel.y = actor.vel.z = 0;
+        actor.confirms = index + 3;
+      });
+      netOnAuthoritativeConfirm(donut, killer, 'CONFIRMED');
+      NET.checkpointDirty = true;
+      netAfterSimulation(0, true);
+    }
+  `);
+  const cached = match.link.latestSnapshot();
+  const expectedScores = Object.fromEntries(cached.actors
+    .filter(actor => actor.netId !== SIM.HOST_ID)
+    .map(actor => [actor.netId, actor.confirms]));
+  assert.strictEqual(match.link.latestCheckpoint().confirmEvents.length, 1,
+    'pending confirm feedback must be cached without entering the relay legacy event list');
+
+  match.migrateHost();
+  for (let i = 0; i < 30 && match.guest.get('NET.phase') !== 'migrating'; i++)
+    match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'migrating');
+  assert.strictEqual(match.guest.get('JSON.stringify(G.donuts.map(d => d.id))'),
+    JSON.stringify(cached.donuts.map(donut => donut.id)));
+  assert.strictEqual(match.guest.get('G.donuts[0].t'), cached.donuts[0].t,
+    'hydration must retain elapsed lifetime rather than start another twelve seconds');
+  assert.ok(match.guest.get(`NET.eventQueue.some(event =>
+    event.kind === 'confirm' && event.id === ${match.link.latestCheckpoint().confirmEvents[0].id})`),
+  'the promoted host must re-queue confirm feedback cached at handover');
+
+  for (let i = 0; i < 30 && match.guest.get('NET.phase') !== 'playing'; i++)
+    match.tick();
+  assert.strictEqual(match.guest.get('NET.mode'), 'host');
+  assert.strictEqual(match.guest.get('G.mode'), 'kc');
+  assert.strictEqual(match.guest.get(`JSON.stringify(Object.fromEntries(
+    G.actors.map(actor => [actor.netId, actor.confirms])))`), JSON.stringify(expectedScores));
+  match.run(1.8);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 0,
+    'the restored donut must expire after its remaining lifetime, not a reset lifetime');
+});
+
+test('a mid-round joiner promoted before its first snapshot adopts the cached mode', () => {
+  const match = SIM.createMatch({
+    latencyMs: LIVE_LATENCY_MS, seed: 22, combatants: 4,
+    hostMode: 'kc', guestMode: 'dm'
+  });
+  match.guest.run('NET.lastSnapshotTick = 1e9;');
+  match.host.run(`
+    {
+      const owner = G.player;
+      const killer = G.actors.find(actor => actor.controller === 'remote');
+      owner.pos.x = 0; owner.pos.y = 0; owner.pos.z = 0;
+      const donut = spawnDonut(owner, killer);
+      donut.t = 10.5;
+      G.actors.forEach((actor, index) => {
+        actor.pos.x = 20 + index; actor.pos.y = 0; actor.pos.z = 18;
+        actor.vel.x = actor.vel.y = actor.vel.z = 0;
+      });
+      netAfterSimulation(0, true);
+    }
+  `);
+  assert.strictEqual(match.guest.get('G.mode'), 'dm',
+    'the joiner has not accepted any authoritative snapshot yet');
+  assert.strictEqual(match.link.latestSnapshot().donuts.length, 1);
+
+  match.migrateHost();
+  for (let i = 0; i < 90 && match.guest.get('NET.phase') !== 'migrating'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'migrating');
+  for (let i = 0; i < 90 && match.guest.get('NET.phase') !== 'playing'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'playing');
+  assert.strictEqual(match.guest.get('G.mode'), 'kc',
+    'migration hydration must establish mode independently of ordinary snapshots');
+  assert.strictEqual(match.guest.get('G.donuts.length'), 1);
+  match.run(1.8);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 0,
+    'the promoted host must run kill-confirmed pickup expiry');
+});
+
+test('guest contact predicts a hide but never a confirm', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 17, mode: 'kc' });
+  match.run(0.4);
+  match.host.run(`
+    {
+      const owner = G.player;
+      const killer = G.actors.find(a => a.controller === 'remote');
+      owner.pos.x = 0; owner.pos.y = 0; owner.pos.z = 0;
+      spawnDonut(owner, killer);
+      G.actors.forEach(actor => {
+        actor.pos.x = 25; actor.pos.y = 0; actor.pos.z = 18;
+        actor.vel.x = actor.vel.y = actor.vel.z = 0;
+      });
+      netAfterSimulation(0, true);
+    }
+  `);
+  match.run(0.25);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 1);
+  const before = match.guest.get('G.player.confirms');
+  match.guest.run(`
+    G.player.pos.x = 0; G.player.pos.y = 0; G.player.pos.z = 0;
+    updateDonuts(${SIM.FIXED});
+  `);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 0,
+    'contact should hide the local replica immediately');
+  assert.strictEqual(match.guest.get('G.player.confirms'), before,
+    'prediction must not promise the score');
+  assert.strictEqual(match.host.get(
+    `G.actors.find(a => a.netId === ${JSON.stringify(SIM.GUEST_ID)}).confirms`), 0);
+
+  match.run(0.3);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 1,
+    'an authoritative snapshot that still contains it should bring it back');
+  assert.strictEqual(match.guest.get('G.player.confirms'), before);
+});
+
+test('a guest URL mode neither defines the match nor authorizes donut spawning', () => {
+  const match = SIM.createMatch({
+    latencyMs: LIVE_LATENCY_MS, seed: 18, hostMode: 'dm', guestMode: 'kc'
+  });
+  assert.strictEqual(match.guest.get('G.mode'), 'kc',
+    'the harness starts with the mismatched URL mode this regression exposed');
+  assert.strictEqual(match.guest.get('spawnDonut(G.player, G.player)'), null);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 0);
+
+  match.run(0.35);
+  assert.strictEqual(match.guest.get('G.mode'), 'dm',
+    'the first host snapshot must replace the guest-local choice');
+  match.guest.run(`
+    setGameMode('kc');
+    killActor(G.actors.find(actor => !actor.isPlayer), G.player);
+  `);
+  assert.strictEqual(match.guest.get('G.donuts.length'), 0,
+    'even a stale local kc flag cannot mint network scoring currency');
+});
+
 test('a stale authority epoch gets the guest\'s input dropped', () => {
   const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5 });
   match.run(1.0);

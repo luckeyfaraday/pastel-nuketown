@@ -101,7 +101,8 @@ function donutGroundY(x, y, z) {
 }
 
 function spawnDonut(owner, killer) {
-  if (!owner || G.mode !== 'kc') return null;
+  if (!owner || G.mode !== 'kc' ||
+      (typeof netIsGuest === 'function' && netIsGuest())) return null;
   if (G.donuts.length >= DONUT_MAX) {
     let oldest = 0;
     for (let i = 1; i < G.donuts.length; i++) {
@@ -137,14 +138,7 @@ function donutOutcome(donut, collector) {
   return collector.id === donut.killer ? 'CONFIRMED' : 'STOLEN';
 }
 
-function reportDonutOutcome(donut, collector, outcome) {
-  const owner = donutActor(donut.owner) || collector;
-  const killer = donutActor(donut.killer);
-  if (outcome === 'CONFIRMED' || outcome === 'STOLEN') collector.confirms++;
-  if (outcome === 'CONFIRMED') G.donutStats.confirmed++;
-  else if (outcome === 'DENIED') G.donutStats.denied++;
-  else if (outcome === 'STOLEN') G.donutStats.stolen++;
-
+function renderDonutOutcome(donut, collector, owner, killer, outcome) {
   if (typeof addKillFeed === 'function') addKillFeed(collector, owner, outcome);
   const x = donut.x, y = donut.y + 0.45, z = donut.z;
   if (collector.isPlayer) {
@@ -161,8 +155,47 @@ function reportDonutOutcome(donut, collector, outcome) {
   }
 }
 
+function reportDonutOutcome(donut, collector, outcome) {
+  const owner = donutActor(donut.owner) || collector;
+  const killer = donutActor(donut.killer);
+  if (outcome === 'CONFIRMED' || outcome === 'STOLEN') collector.confirms++;
+  if (outcome === 'CONFIRMED') G.donutStats.confirmed++;
+  else if (outcome === 'DENIED') G.donutStats.denied++;
+  else if (outcome === 'STOLEN') G.donutStats.stolen++;
+  if (typeof netOnAuthoritativeConfirm === 'function')
+    netOnAuthoritativeConfirm(donut, collector, outcome);
+  renderDonutOutcome(donut, collector, owner, killer, outcome);
+}
+
+function donutTouchesActor(donut, actor) {
+  if (!actor || !actor.alive) return false;
+  const horizontal = Math.hypot(actor.pos.x - donut.x, actor.pos.z - donut.z);
+  const vertical = Math.abs(actor.pos.y - donut.y);
+  return horizontal <= DONUT_PICKUP_RADIUS && vertical <= DONUT_PICKUP_HEIGHT;
+}
+
+function animateDonuts() {
+  for (const donut of G.donuts) {
+    const slot = DONUT_RENDER.slots.get(donut.id);
+    const mesh = slot === undefined ? null : DONUT_RENDER.meshes[slot];
+    if (!mesh) continue;
+    mesh.position.set(donut.x, donut.y + Math.sin((G.time + donut.id) * 2.1) * 0.08, donut.z);
+    mesh.rotation.y = (G.time * 0.75 + donut.id * 0.7) % TAU;
+    mesh.rotation.z = Math.sin((G.time + donut.id) * 1.4) * 0.12;
+  }
+}
+
 function updateDonuts(dt) {
-  if (G.mode !== 'kc' || (typeof netIsGuest === 'function' && netIsGuest())) return;
+  if (G.mode !== 'kc') return;
+  if (typeof netIsGuest === 'function' && netIsGuest()) {
+    /* The host may disagree because it has not received this movement yet.
+       Removing only the local replica makes contact feel immediate without
+       promising a score; a still-present donut returns in the next snapshot. */
+    for (let i = G.donuts.length - 1; i >= 0; i--)
+      if (donutTouchesActor(G.donuts[i], G.player)) removeDonut(i);
+    animateDonuts();
+    return;
+  }
   for (let i = G.donuts.length - 1; i >= 0; i--) {
     const donut = G.donuts[i];
     donut.t += dt;
@@ -176,10 +209,7 @@ function updateDonuts(dt) {
     const donut = G.donuts[i];
     let collector = null;
     for (const actor of G.actors) {
-      if (!actor.alive) continue;
-      const horizontal = Math.hypot(actor.pos.x - donut.x, actor.pos.z - donut.z);
-      const vertical = Math.abs(actor.pos.y - donut.y);
-      if (horizontal <= DONUT_PICKUP_RADIUS && vertical <= DONUT_PICKUP_HEIGHT) {
+      if (donutTouchesActor(donut, actor)) {
         collector = actor;
         break;
       }
@@ -193,12 +223,5 @@ function updateDonuts(dt) {
     if (G.over) break;
   }
 
-  for (const donut of G.donuts) {
-    const slot = DONUT_RENDER.slots.get(donut.id);
-    const mesh = slot === undefined ? null : DONUT_RENDER.meshes[slot];
-    if (!mesh) continue;
-    mesh.position.set(donut.x, donut.y + Math.sin((G.time + donut.id) * 2.1) * 0.08, donut.z);
-    mesh.rotation.y = (G.time * 0.75 + donut.id * 0.7) % TAU;
-    mesh.rotation.z = Math.sin((G.time + donut.id) * 1.4) * 0.12;
-  }
+  animateDonuts();
 }
