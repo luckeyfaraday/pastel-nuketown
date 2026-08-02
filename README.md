@@ -9,6 +9,7 @@ Pastel Nuketown is a free-to-play first-person shooter (FPS) game that runs enti
 - **Browser-based FPS** — runs in any modern browser (Chrome, Firefox, Edge, Safari) with no install
 - **One-button matchmaking** — PLAY joins the busiest room with a seat free, opens one when there is nothing to join, and starts the match on a countdown instead of waiting for someone to click
 - **Drop-in join** — walk into a round already in progress; you spawn shielded and a bot gives up its slot, so nobody waits out somebody else's match
+- **Killcam** — the respawn is spent looking out of the eyes of whoever killed you, live, holding their weapon, falling back to the death cam if they leave, die, or the match ends
 - **Plays on a phone** — on-screen thumbstick, look-drag and button cluster appear automatically on touch devices, with an analog stick the netcode carries as-is
 - **Multiplayer rooms** — host-authoritative relay server supports up to 9 players per room with client-side interpolation and prediction
 - **AI bots** — three difficulty levels (easy, normal, hard) with navigation mesh pathfinding, burst-fire combat, and retreat behaviour
@@ -173,6 +174,9 @@ Press PLAY. It picks the busiest room with a seat free and opens one for you if 
 
 **Can I join a match that has already started?**
 Yes. Running rooms appear in the browser marked `IN PROGRESS` with a DROP IN button, and PLAY will pick one. You spawn with a shield and the bot wearing your jersey gives up its seat, so the match keeps its nine combatants. Leave and a bot takes the seat back.
+
+**What happens when I die?**
+You spend the three-second respawn watching the match through the eyes of whoever killed you, holding the weapon they killed you with — it recoils when they fire and tilts over when they reload. It follows them live rather than replaying your death: the client keeps no orientation history a replay could be built from. If the killer leaves the room, is killed themselves, or the match ends first, the view drops back to the third-person death cam over your own body.
 
 **Can I play without other people?**
 Yes. Solo mode fills the arena with 8 AI bots across three difficulty levels. Bots use A* pathfinding on a navigation mesh and exhibit patrol, hunt, engage, reposition, and retreat behaviours.

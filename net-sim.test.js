@@ -943,3 +943,187 @@ test('the deploy card a drop-in lands on can actually be clicked', () => {
   assert.strictEqual(client.get("SIM_ELS.get('play').disabled"), false,
     'a deploy card nobody can click is a player frozen at the door');
 });
+
+/* ---------------------------------------------------------------------
+   Killcam
+
+   These drive killcamActor() directly. The per-frame clock that advances
+   KILLCAM.t lives in updateCamera, which is in src/90-main.js and therefore
+   outside this harness by design (see FILES in net-sim.js) -- so the tests
+   set the elapsed time themselves and assert the decision, which is where
+   every fallback lives. What is being guarded is that three seconds is long
+   enough for the thing you are looking through to stop existing.
+   --------------------------------------------------------------------- */
+
+function killcamMatch() {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 5 });
+  match.host.run('showHint = function () {};');
+  return match;
+}
+
+/* Past the opening hold, so the decision under test is the fallback and not
+   the deliberate delay before the cut. */
+function killcamHeld(client) {
+  client.run('KILLCAM.t = KILLCAM_HOLD;');
+}
+
+test('the killcam looks through whoever killed you', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, G.actors[1]);');
+  killcamHeld(match.host);
+
+  assert.strictEqual(match.host.get('killcamActor() === G.actors[1]'), true);
+});
+
+test('the killcam holds on the death cam before it cuts', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, G.actors[1]);');
+
+  assert.strictEqual(match.host.get('KILLCAM.t'), 0);
+  assert.strictEqual(match.host.get('killcamActor()'), null,
+    'cutting on the same frame as the kill burst reads as a glitch');
+
+  match.host.run('KILLCAM.t = KILLCAM_HOLD - 0.01;');
+  assert.strictEqual(match.host.get('killcamActor()'), null);
+  killcamHeld(match.host);
+  assert.notStrictEqual(match.host.get('killcamActor()'), null);
+});
+
+test('a death with nobody to credit stays on the death cam', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, null);');
+  killcamHeld(match.host);
+
+  assert.strictEqual(match.host.get('KILLCAM.killer'), null);
+  assert.strictEqual(match.host.get('killcamActor()'), null);
+});
+
+test('you are never handed a killcam through your own eyes', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, G.player);');
+  killcamHeld(match.host);
+
+  assert.strictEqual(match.host.get('KILLCAM.killer'), null);
+  assert.strictEqual(match.host.get('killcamActor()'), null);
+});
+
+test('a killer who leaves the room mid-killcam drops the view, not the frame', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, G.actors[1]);');
+  killcamHeld(match.host);
+  assert.notStrictEqual(match.host.get('killcamActor()'), null);
+
+  /* The reference the killcam holds outlives the roster it came from: a guest
+     that disconnects is spliced out of G.actors by netPruneDepartedPlayers. */
+  match.host.run('detachActor(G.actors[1]);');
+  assert.strictEqual(match.host.get('killcamActor()'), null);
+});
+
+test('a killer who dies mid-killcam drops the view rather than ride the corpse', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, G.actors[1]);');
+  killcamHeld(match.host);
+  assert.notStrictEqual(match.host.get('killcamActor()'), null);
+
+  match.host.run('killActor(G.actors[1], G.actors[2]);');
+  assert.strictEqual(match.host.get('killcamActor()'), null);
+});
+
+test('the killcam gives the camera back when the match ends', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, G.actors[1]);');
+  killcamHeld(match.host);
+
+  match.host.run('G.over = true;');
+  assert.strictEqual(match.host.get('killcamActor()'), null,
+    'endMatch hides the death card without going through hideDeadScreen');
+});
+
+test('respawning ends the killcam and puts the hidden body back', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, G.actors[1]);');
+  killcamHeld(match.host);
+  match.host.run('killcamShow(killcamActor());');
+  assert.strictEqual(match.host.get('KILLCAM.shown === G.actors[1]'), true);
+
+  match.host.run('hideDeadScreen();');
+  assert.strictEqual(match.host.get('KILLCAM.killer'), null);
+  assert.strictEqual(match.host.get('KILLCAM.shown'), null,
+    'a body hidden to look through it has to come back');
+});
+
+test('killcamShow always restores the actor it hid, not the one it meant to', () => {
+  const match = killcamMatch();
+  match.host.run('killcamShow(G.actors[1]);');
+  assert.strictEqual(match.host.get('KILLCAM.shown === G.actors[1]'), true);
+
+  /* Falling back mid-window swaps the target; the previous body is the one
+     owed a restore, and pairing hide with restore is the whole point of
+     routing both through one function. */
+  match.host.run('killcamShow(G.actors[2]);');
+  assert.strictEqual(match.host.get('KILLCAM.shown === G.actors[2]'), true);
+  match.host.run('killcamShow(null);');
+  assert.strictEqual(match.host.get('KILLCAM.shown'), null);
+});
+
+test('rebuilding the match drops the killcam reference to the old roster', () => {
+  const match = killcamMatch();
+  match.host.run('killActor(G.player, G.actors[1]);');
+  killcamHeld(match.host);
+  match.host.run('killcamShow(killcamActor());');
+
+  match.host.run('setupMatch();');
+  assert.strictEqual(match.host.get('KILLCAM.killer'), null);
+  assert.strictEqual(match.host.get('KILLCAM.shown'), null,
+    'a discarded actor held here is a discarded actor kept alive');
+});
+
+test('the weapon card follows the killcam to the gun on screen', () => {
+  const match = killcamMatch();
+  match.host.run(`
+    G.player.weapon = 'smg'; G.player.ammo = 7; G.player.reserve = 21;
+    G.actors[1].weapon = 'rifle'; G.actors[1].ammo = 4; G.actors[1].reserve = 40;
+    updateHUD();
+  `);
+  assert.strictEqual(match.host.get('elWName.textContent'), 'BUBBLEGUN');
+  assert.match(match.host.get('elAmmo.innerHTML'), /^7</);
+
+  match.host.run('killActor(G.player, G.actors[1]);');
+  killcamHeld(match.host);
+  match.host.run('killcamShow(killcamActor()); updateHUD();');
+
+  assert.strictEqual(match.host.get('elWName.textContent'), 'LOLLIPOP',
+    'a card counting your own magazine contradicts the gun being drawn');
+  assert.match(match.host.get('elAmmo.innerHTML'), /^4</);
+});
+
+test('the killcam weapon card names its owner instead of telling you to reload', () => {
+  const match = killcamMatch();
+  match.host.run(`
+    G.actors[1].weapon = 'rifle'; G.actors[1].ammo = 0; G.actors[1].reserve = 40;
+    killActor(G.player, G.actors[1]);
+  `);
+  killcamHeld(match.host);
+  match.host.run('killcamShow(killcamActor()); updateHUD();');
+
+  const caption = match.host.get('elReload.textContent');
+  assert.notStrictEqual(caption, 'PRESS R',
+    'there is nothing the player can do about somebody else\'s empty magazine');
+  assert.strictEqual(caption, match.host.get('G.actors[1].name'));
+});
+
+test('the weapon card comes back to your own gun when the killcam ends', () => {
+  const match = killcamMatch();
+  match.host.run(`
+    G.player.weapon = 'shotgun'; G.player.ammo = 5; G.player.reserve = 30;
+    G.actors[1].weapon = 'rifle';
+    killActor(G.player, G.actors[1]);
+  `);
+  killcamHeld(match.host);
+  match.host.run('killcamShow(killcamActor()); updateHUD();');
+  assert.strictEqual(match.host.get('elWName.textContent'), 'LOLLIPOP');
+
+  match.host.run('hideDeadScreen(); updateHUD();');
+  assert.strictEqual(match.host.get('elWName.textContent'), 'MARSHMALLOW');
+  assert.match(match.host.get('elAmmo.innerHTML'), /^5</);
+});

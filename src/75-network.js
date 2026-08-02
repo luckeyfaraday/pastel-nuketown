@@ -2385,6 +2385,11 @@ function netApplyEvent(e) {
     if (e.from === NET.id) return;
     if (from) { from.recoil = 1; from.aiming = true; }
     const w = WBY[e.weapon] || WBY.smg;
+    /* A guest never runs fireWeapon for a remote player -- this event IS the
+       shot as far as it is concerned -- so a guest watching its killer through
+       the killcam gets the viewmodel's kick from here rather than from the
+       hook in fireWeapon. */
+    if (from && from === KILLCAM.shown) vmFire(w);
     if (Array.isArray(e.lines)) {
       for (let i = 0; i < e.lines.length; i++) {
         const l = e.lines[i];

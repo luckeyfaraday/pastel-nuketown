@@ -6,6 +6,18 @@ const FIXED = 1 / 60;
 let lastT = 0, titleOrbit = 0;
 const PROF = { sim: 0, anim: 0, render: 0, frames: 0 };
 
+/* Killcam placement. The state machine that decides WHOSE eyes these are
+   lives in 70-game.js, next to the death and respawn it hangs off — and,
+   more to the point, inside the part of the client net-sim.js actually
+   loads, so its fallbacks can be tested. This is only the camera.
+
+   Built exactly like the live first-person camera below, +PI and all, so what
+   you see is framed the way the killer is seeing it and not a near-miss. */
+function placeKillcam(k) {
+  camera.position.set(k.pos.x, k.pos.y + ACT.eye, k.pos.z);
+  camera.rotation.set(k.pitch, k.yaw + Math.PI, 0);
+}
+
 /* Death cam: up and BEHIND (forward is (sin yaw, cos yaw), so behind is the
    negative of that), and shortened if a wall is in the way — otherwise you
    die next to a house and spend the respawn staring at flat siding. */
@@ -25,6 +37,17 @@ function updateCamera(dt) {
   if (G.frozen) return;                       // screenshotPose owns the camera
   const p = G.player;
 
+  /* Resolved ahead of the early returns below, and the hidden body put back
+     through the same call, so a match that ends or pauses mid-killcam does not
+     leave one player invisible to somebody who can still see the world. The
+     clock stops while paused for the same reason the simulation does. */
+  let kc = null;
+  if (p && !p.alive && G.started && !G.paused && !G.over) {
+    KILLCAM.t += dt;
+    kc = killcamActor();
+  }
+  killcamShow(kc);
+
   if (!G.started || G.paused) {               // slow orbit behind the title card
     titleOrbit += dt * 0.055;
     const r = 46, y = 19;
@@ -34,7 +57,7 @@ function updateCamera(dt) {
   }
   if (!p) return;
 
-  if (!p.alive) { placeDeathCam(p); return; }
+  if (!p.alive) { if (kc) placeKillcam(kc); else placeDeathCam(p); return; }
 
   const spd = Math.hypot(p.vel.x, p.vel.z);
   const bobA = p.onGround ? Math.min(spd / 7, 1) * 0.045 : 0;
@@ -68,8 +91,19 @@ function animateAll(dt) {
     if (a.isPlayer || !a.char) continue;
     a.char.root.position.set(a.pos.x, a.pos.y, a.pos.z);
     animateCharacter(a.char, a, dt, G.time);
+    /* Re-asserted here, after updateCamera has decided whose eyes these are
+       and after animateCharacter has posed the arms. This loop runs every
+       frame and would otherwise put the head and torso straight back — which
+       is what once filled the killcam with the inside of the killer's own
+       skull. It is also what makes the restore in killcamShow safe. */
     if (!a.alive && a.deathT > 2.0) a.char.root.visible = false;
     else if (a.alive) a.char.root.visible = true;
+    /* Deliberately last. The line above re-shows every live actor once a
+       frame, so anything that hides one has to come after it or be undone
+       before the frame is drawn — which is what once filled the killcam with
+       the inside of the killer's own head. It is also what makes the restore
+       in killcamShow safe: a body it misses comes back here on its own. */
+    killcamDressActor(a, a === KILLCAM.shown);
   }
   updateMotes(G.time);
   updateMagic(G.time);
@@ -80,7 +114,9 @@ function animateAll(dt) {
 function renderAll() {
   renderer.autoClear = true;
   renderer.render(scene, camera);
-  if (G.started && !G.paused && G.player && G.player.alive && !G.frozenNoVM) {
+  /* Dead normally means no viewmodel, because a corpse holds no gun. The
+     killcam is the exception: the gun on screen is the killer's. */
+  if (G.started && !G.paused && G.player && (G.player.alive || KILLCAM.shown) && !G.frozenNoVM) {
     renderer.autoClear = false;
     renderer.clearDepth();
     renderer.render(vmScene, vmCam);
@@ -153,7 +189,9 @@ function frame(now) {
     IN.lookDX = damp(IN.lookDX, 0, 9, dt);
     IN.lookDY = damp(IN.lookDY, 0, 9, dt);
     updateCamera(dt);
-    updateViewmodel(dt, {
+    /* Whoever the camera belongs to this frame is whoever the gun belongs to.
+       updateCamera ran just above, so KILLCAM.shown is already settled. */
+    updateViewmodel(dt, KILLCAM.shown ? killcamViewmodelState(KILLCAM.shown, dt) : {
       vel: G.player ? G.player.vel : { x: 0, y: 0, z: 0 },
       onGround: G.player ? G.player.onGround : true,
       lookDX: IN.lookDX, lookDY: IN.lookDY,

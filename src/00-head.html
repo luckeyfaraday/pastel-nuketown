@@ -295,6 +295,14 @@ body.touch .sens{display:none}
   .keys span{font-size:10px;padding:2px 7px 3px}
 }
 
+/* .screen's wash is tuned for the title and match-over cards, where there is
+   nothing behind it worth reading. A killcam you cannot see through is not a
+   killcam, so pull it back to a vignette for as long as one is running. The
+   death cam keeps the full wash — there the blur is ambience over your own
+   corpse, not something you are being shown on purpose. */
+#dead.killcam{background:radial-gradient(ellipse at 50% 38%,rgba(255,248,240,0),rgba(180,198,238,.2));
+  backdrop-filter:none}
+
 #dead .big{font-family:var(--disp);font-size:clamp(40px,8vw,84px);font-weight:800;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 14px 28px rgba(74,63,92,.3)}
 #dead .by{margin-top:8px;font-family:var(--disp);font-size:20px;font-weight:600;color:var(--ink)}
