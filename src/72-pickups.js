@@ -280,9 +280,16 @@ function donutActor(id) {
   return G.actors.find(actor => actor.id === id) || null;
 }
 
-function donutOutcome(donut, collector) {
-  if (collector.id === donut.owner) return 'DENIED';
-  return collector.id === donut.killer ? 'CONFIRMED' : 'STOLEN';
+function donutReferenceActor(id, netId) {
+  const actor = donutActor(id);
+  if (!actor || typeof netIsMultiplayer !== 'function' || !netIsMultiplayer()) return actor;
+  if (typeof netPackDonutActor !== 'function') return null;
+  return netPackDonutActor(id, netId).id === actor.id ? actor : null;
+}
+
+function donutOutcome(owner, killer, collector) {
+  if (collector === owner) return 'DENIED';
+  return collector === killer ? 'CONFIRMED' : 'STOLEN';
 }
 
 function renderDonutOutcome(donut, collector, owner, killer, outcome) {
@@ -302,16 +309,14 @@ function renderDonutOutcome(donut, collector, owner, killer, outcome) {
   }
 }
 
-function reportDonutOutcome(donut, collector, outcome) {
-  const owner = donutActor(donut.owner) || collector;
-  const killer = donutActor(donut.killer);
+function reportDonutOutcome(donut, collector, owner, killer, outcome) {
   if (outcome === 'CONFIRMED' || outcome === 'STOLEN') collector.confirms++;
   if (outcome === 'CONFIRMED') G.donutStats.confirmed++;
   else if (outcome === 'DENIED') G.donutStats.denied++;
   else if (outcome === 'STOLEN') G.donutStats.stolen++;
   if (typeof netOnAuthoritativeConfirm === 'function')
     netOnAuthoritativeConfirm(donut, collector, outcome);
-  renderDonutOutcome(donut, collector, owner, killer, outcome);
+  renderDonutOutcome(donut, collector, owner || collector, killer, outcome);
 }
 
 function donutTouchesActor(donut, actor) {
@@ -367,9 +372,11 @@ function updateDonuts(dt) {
       }
     }
     if (!collector) continue;
-    const outcome = donutOutcome(donut, collector);
+    const owner = donutReferenceActor(donut.owner, donut.ownerNetId);
+    const killer = donutReferenceActor(donut.killer, donut.killerNetId);
+    const outcome = donutOutcome(owner, killer, collector);
     removeDonut(i);
-    reportDonutOutcome(donut, collector, outcome);
+    reportDonutOutcome(donut, collector, owner, killer, outcome);
     refreshBoard();
     checkMatchWin();
     if (G.over) break;

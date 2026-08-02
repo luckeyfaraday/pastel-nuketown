@@ -398,6 +398,139 @@ test('departed donut owners and killers cannot poison feedback or host migration
     'the stale references must not invalidate the whole checkpoint');
 });
 
+test('a replacement bot cannot inherit an old donut through its recycled netId', () => {
+  const match = SIM.createMatch({ latencyMs: 20, seed: 23, combatants: 4, mode: 'kc' });
+  match.run(0.3);
+  match.guest.run(`
+    globalThis.__replacementConfirmFeedback = 0;
+    const __realReplacementOutcome = renderDonutOutcome;
+    renderDonutOutcome = function () {
+      __replacementConfirmFeedback++;
+      return __realReplacementOutcome.apply(null, arguments);
+    };
+  `);
+
+  match.host.run(`
+    {
+      G.actors.forEach((actor, index) => {
+        actor.pos.x = 20 + index; actor.pos.y = 0; actor.pos.z = 18;
+        actor.vel.x = actor.vel.y = actor.vel.z = 0;
+      });
+      const departedBot = G.actors.find(actor => actor.netId === 'bot-2');
+      departedBot.pos.x = 0; departedBot.pos.y = 0; departedBot.pos.z = 0;
+      const donut = spawnDonut(departedBot, G.player);
+      donut.x = 0; donut.y = 0.35; donut.z = 0;
+      departedBot.alive = false;
+      globalThis.__departedBotId = departedBot.id;
+
+      NET.members.push(
+        { id: 'jersey-2', name: 'JERSEY', role: 'guest', slot: 2 });
+      netAdmitArrivals();
+      NET.members = NET.members.filter(member => member.id !== 'jersey-2');
+      netPruneDepartedPlayers();
+
+      G.actors.forEach((actor, index) => {
+        actor.pos.x = 20 + index; actor.pos.y = 0; actor.pos.z = 18;
+        actor.vel.x = actor.vel.y = actor.vel.z = 0;
+      });
+      const replacement = G.actors.find(actor => actor.netId === 'bot-2');
+      globalThis.__replacementBotId = replacement.id;
+      replacement.pos.x = 0; replacement.pos.y = 0; replacement.pos.z = 0;
+      updateDonuts(0);
+      netAfterSimulation(0, true);
+    }
+  `);
+
+  assert.notStrictEqual(match.host.get('__replacementBotId'),
+    match.host.get('__departedBotId'), 'the fixture must replace, not retain, the bot actor');
+  const checkpoint = match.link.latestCheckpoint();
+  const event = checkpoint.confirmEvents[0];
+  assert.strictEqual(event.collector, 'bot-2');
+  assert.strictEqual(event.owner, null,
+    'a recycled netId is not proof that the replacement owns the old donut');
+  match.host.context.__replacementEvent = JSON.stringify(event);
+  assert.strictEqual(match.host.get(`netValidEvent(JSON.parse(__replacementEvent),
+    new Set(G.actors.map(netActorId)))`), true,
+    'the host must never queue feedback that its own wire validator rejects');
+
+  match.run(0.15);
+  assert.strictEqual(match.guest.get('__replacementConfirmFeedback'), 1,
+    'a peer must render the replacement bot\'s earned stolen confirm');
+  match.migrateHost();
+  for (let i = 0; i < 60 && match.guest.get('NET.phase') !== 'migrating'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'migrating');
+  for (let i = 0; i < 60 && match.guest.get('NET.phase') !== 'playing'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'playing',
+    'the replacement pickup must leave a checkpoint safe for promotion');
+});
+
+test('a post-migration arrival cannot deny a donut by recycling its numeric id', () => {
+  const match = SIM.createMatch({ latencyMs: 20, seed: 24, combatants: 4, mode: 'kc' });
+  match.run(0.3);
+  match.host.run(`
+    {
+      G.actors.forEach((actor, index) => {
+        actor.pos.x = 20 + index; actor.pos.y = 0; actor.pos.z = 18;
+      });
+      NET.members.push({ id: 'drop-1', name: 'FIRST', role: 'guest', slot: 4 });
+      netAdmitArrivals();
+      const owner = G.actors.find(actor => actor.netId === 'drop-1');
+      owner.pos.x = 0; owner.pos.y = 0; owner.pos.z = 0;
+      const donut = spawnDonut(owner, G.player);
+      donut.x = 0; donut.y = 0.35; donut.z = 0;
+      owner.alive = false;
+      NET.checkpointDirty = true;
+      netAfterSimulation(0, true);
+    }
+  `);
+
+  match.migrateHost();
+  for (let i = 0; i < 60 && match.guest.get('NET.phase') !== 'migrating'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'migrating');
+  for (let i = 0; i < 60 && match.guest.get('NET.phase') !== 'playing'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'playing');
+  assert.strictEqual(match.guest.get('G.donuts[0].owner'), 5,
+    'the migration fixture must retain the departed owner\'s numeric id');
+  assert.strictEqual(match.guest.get('G.donuts[0].ownerNetId'), 'drop-1');
+
+  match.guest.run(`
+    {
+      NET.members.push({ id: 'drop-2', name: 'SECOND', role: 'guest', slot: 4 });
+      netAdmitArrivals();
+      G.actors.forEach((actor, index) => {
+        actor.pos.x = 20 + index; actor.pos.y = 0; actor.pos.z = 18;
+        actor.vel.x = actor.vel.y = actor.vel.z = 0;
+      });
+      const collector = G.actors.find(actor => actor.netId === 'drop-2');
+      globalThis.__arrivalId = collector.id;
+      collector.pos.x = 0; collector.pos.y = 0; collector.pos.z = 0;
+      updateDonuts(0);
+    }
+  `);
+
+  assert.strictEqual(match.guest.get('__arrivalId'), 5,
+    'the new arrival must exercise numeric-id reuse');
+  assert.strictEqual(match.guest.get("G.actors.find(actor => actor.netId === 'drop-2').confirms"), 1,
+    'an unrelated arrival earns a stolen confirm instead of a false denial');
+  assert.strictEqual(match.guest.get('G.donutStats.stolen'), 1);
+  assert.strictEqual(match.guest.get('G.donutStats.denied'), 0);
+  const event = match.guest.get("JSON.stringify(NET.eventQueue.find(item => item.kind === 'confirm'))");
+  match.guest.context.__arrivalEvent = event;
+  assert.deepStrictEqual(JSON.parse(event), {
+    id: JSON.parse(event).id,
+    kind: 'confirm', collector: 'drop-2', owner: null, killer: null,
+    deny: false, at: [0, 0.35, 0]
+  });
+  assert.strictEqual(match.guest.get(`netValidEvent(JSON.parse(__arrivalEvent),
+    new Set(G.actors.map(netActorId)))`), true,
+    'numeric-id reuse must not create a malformed denied event');
+  match.guest.run('netAfterSimulation(0, true);');
+  const checkpoint = match.link.latestCheckpoint();
+  match.guest.context.__arrivalCheckpoint = JSON.stringify(checkpoint);
+  assert.strictEqual(match.guest.get('netValidCheckpoint(JSON.parse(__arrivalCheckpoint))'), true,
+    'the earned pickup must remain safe in the promoted host\'s checkpoint');
+});
+
 test('one malformed donut rejects its whole snapshot before any state is applied', () => {
   const match = SIM.createMatch({ latencyMs: 5, seed: 15, mode: 'kc' });
   spawnDonutForGuest(match);
@@ -526,6 +659,50 @@ test('donut ids, remaining lifetime, and every surviving confirm score migrate',
   match.run(1.8);
   assert.strictEqual(match.guest.get('G.donuts.length'), 0,
     'the restored donut must expire after its remaining lifetime, not a reset lifetime');
+});
+
+test('a peer renders chronological confirm feedback replayed by a promoted host', () => {
+  const match = SIM.createMatch({ latencyMs: 20, seed: 25, combatants: 4, mode: 'kc' });
+  match.run(0.3);
+  match.host.run(`
+    {
+      const owner = G.actors.find(actor => actor.netId === 'bot-2');
+      const collector = G.actors.find(actor => actor.netId === ${JSON.stringify(SIM.GUEST_ID)});
+      const donut = spawnDonut(owner, collector);
+      netOnAuthoritativeConfirm(donut, collector, 'CONFIRMED');
+      netOnAuthoritativeRespawn(owner);
+      NET.checkpointDirty = true;
+      netAfterSimulation(0, true);
+    }
+  `);
+  const checkpoint = match.link.latestCheckpoint();
+  assert.strictEqual(checkpoint.confirmEvents.length, 1);
+  assert.strictEqual(checkpoint.events.length, 1);
+  assert.ok(checkpoint.confirmEvents[0].id < checkpoint.events[0].id,
+    'the confirm must chronologically precede the legacy event in the split checkpoint');
+
+  match.migrateHost();
+  for (let i = 0; i < 60 && match.guest.get('NET.phase') !== 'migrating'; i++) match.tick();
+  assert.strictEqual(match.guest.get('NET.phase'), 'migrating');
+  const replay = match.guest.get('JSON.stringify(NET.eventQueue)');
+  assert.deepStrictEqual(JSON.parse(replay).map(event => event.id),
+    [checkpoint.confirmEvents[0].id, checkpoint.events[0].id],
+    'the promoted host must restore the original event chronology');
+
+  match.host.context.__migrationReplay = replay;
+  match.host.run(`
+    globalThis.__migrationConfirmFeedback = 0;
+    const __realMigrationOutcome = renderDonutOutcome;
+    renderDonutOutcome = function () {
+      __migrationConfirmFeedback++;
+      return __realMigrationOutcome.apply(null, arguments);
+    };
+    NET.actorManifest = new Set(G.actors.map(netActorId));
+    NET.lastEventSeq = 0;
+    JSON.parse(__migrationReplay).forEach(netApplyEvent);
+  `);
+  assert.strictEqual(match.host.get('__migrationConfirmFeedback'), 1,
+    'a receiving peer must render the lower-id confirm before advancing past it');
 });
 
 test('a mid-round joiner promoted before its first snapshot adopts the cached mode', () => {

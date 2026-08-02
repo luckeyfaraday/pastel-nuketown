@@ -1148,7 +1148,8 @@ function netCheckpointMetadata(checkpoint) {
 }
 
 function netCheckpointEvents(checkpoint) {
-  return checkpoint.events.concat(checkpoint.confirmEvents);
+  return checkpoint.events.concat(checkpoint.confirmEvents)
+    .sort((a, b) => a.id - b.id);
 }
 
 function netBotOrdinal(netId) {
@@ -2472,14 +2473,12 @@ function netOnAuthoritativeKill(target, from) {
   });
 }
 function netOnAuthoritativeConfirm(donut, collector, outcome) {
-  const owner = donutActor(donut.owner);
-  const killer = donutActor(donut.killer);
-  const manifest = new Set(G.actors.map(netActorId));
-  const live = value => netKnownActor(value, manifest) ? value : null;
+  const owner = netPackDonutActor(donut.owner, donut.ownerNetId);
+  const killer = netPackDonutActor(donut.killer, donut.killerNetId);
   netSendEvent('confirm', {
     collector: netActorId(collector),
-    owner: live(donut.ownerNetId || (owner ? netActorId(owner) : null)),
-    killer: live(donut.killerNetId || (killer ? netActorId(killer) : null)),
+    owner: owner.netId,
+    killer: killer.netId,
     deny: outcome === 'DENIED',
     at: [netRound(donut.x), netRound(donut.y), netRound(donut.z)]
   });
