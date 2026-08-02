@@ -189,6 +189,19 @@ body.touch .sens{display:none}
    pair. Unlike .sens it stays up on touch: drag-look goes through the same
    applyLook, so inverting matters to a thumb exactly as much as to a mouse. */
 .look-invert{width:min(330px,100%);pointer-events:auto}
+.mode-picker{width:min(360px,100%);pointer-events:auto;text-align:center}
+.mode-picker-label{display:block;margin-bottom:6px;font-family:var(--disp);font-size:11px;font-weight:700;
+  letter-spacing:.14em;color:var(--ink-soft)}
+.mode-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mode-option{min-width:0;min-height:58px;padding:8px 7px 9px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:2px;white-space:normal;line-height:1.05;font-size:11px}
+.mode-option span{font-weight:800;letter-spacing:.06em}
+.mode-option small{font-family:var(--ui);font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--ink-soft)}
+.mode-option[aria-pressed="true"]{background:linear-gradient(180deg,#fff2c9,#ffe08a);transform:translateY(-1px);
+  box-shadow:0 4px 0 var(--ink)}
+.mode-option:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+.mode-picker-note{margin-top:6px;font-family:var(--disp);font-size:10px;font-weight:600;line-height:1.15;
+  letter-spacing:.035em;color:var(--ink-soft)}
 /* Hosting a room by hand is a minority path now that PLAY picks one, but as an
    underlined line of fine print it read as a caption and nobody found CREATE
    ROOM behind it. It is a real button now — quieter than PLAY, still a button —
@@ -273,6 +286,8 @@ body.touch .sens{display:none}
   #netStart{flex:1 1 180px}
   .menu-btn{font-size:22px;padding:12px 35px 14px}
   .menu-btn.alt,#menu:not(.pause) #play{font-size:17px;padding:12px 18px 14px}
+  .mode-option{padding-left:4px;padding-right:4px;font-size:10px}
+  .mode-option small{font-size:9px}
   .keys{gap:6px;padding:0 6px}
   .keys span{padding:4px 8px 5px}
 }
@@ -293,6 +308,7 @@ body.touch .sens{display:none}
   .identity{padding-top:3px;padding-bottom:3px}
   .menu-btn{padding-top:8px;padding-bottom:10px}
   .menu-btn.alt,#menu:not(.pause) #play{padding-top:8px;padding-bottom:10px}
+  .mode-option{min-height:48px;padding-top:5px;padding-bottom:6px}
   #roomCode{padding-top:5px;padding-bottom:6px}
   .keys span{font-size:10px;padding:2px 7px 3px}
 }
@@ -518,6 +534,20 @@ body.touch .touch-keys{display:flex}
       <input type="checkbox" id="invertY">
       <span>INVERT LOOK (Y)</span>
     </label>
+    <div class="mode-picker setup-only" id="modePicker" role="group" aria-labelledby="modePickerLabel" aria-describedby="modePickerNote">
+      <span class="mode-picker-label" id="modePickerLabel">MATCH MODE</span>
+      <div class="mode-options">
+        <button class="mini-btn mode-option" id="modeDm" type="button" aria-pressed="true">
+          <span>DEATHMATCH</span>
+          <small>25 KILLS</small>
+        </button>
+        <button class="mini-btn mode-option" id="modeKc" type="button" aria-pressed="false">
+          <span>KILL CONFIRMED</span>
+          <small>20 CONFIRMS</small>
+        </button>
+      </div>
+      <p class="mode-picker-note" id="modePickerNote">KILL CONFIRMED: COLLECT THE DONUT AFTER A KILL TO CONFIRM IT.</p>
+    </div>
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
       <button class="menu-btn" id="play">SOLO</button>
@@ -10822,6 +10852,29 @@ function frame(now) {
   PROF.frames++;
 }
 
+/* The title menu returns after a round, so the pressed state is synchronized
+   from the live mode instead of becoming a stale copy of the last click. */
+function syncModePicker(mode) {
+  const picker = document.getElementById('modePicker');
+  const dm = document.getElementById('modeDm');
+  const kc = document.getElementById('modeKc');
+  if (!picker || !dm || !kc) return;
+
+  const guest = typeof netIsGuest === 'function' && netIsGuest();
+  picker.hidden = guest;
+  if (guest) return;
+
+  const active = mode === undefined ? G.mode : mode;
+  const isKC = active === 'kc';
+  dm.setAttribute('aria-pressed', String(!isKC));
+  kc.setAttribute('aria-pressed', String(isKC));
+}
+
+function chooseMode(mode) {
+  if (typeof netIsGuest === 'function' && netIsGuest()) return;
+  syncModePicker(setGameMode(mode));
+}
+
 /* =====================================================================
    BOOT
    ===================================================================== */
@@ -10868,6 +10921,10 @@ function boot() {
     }
     startMatch();
   });
+
+  document.getElementById('modeDm').addEventListener('click', () => chooseMode('dm'));
+  document.getElementById('modeKc').addEventListener('click', () => chooseMode('kc'));
+  syncModePicker();
 
   requestAnimationFrame(frame);
   if (AUTOSTART) startMatch();

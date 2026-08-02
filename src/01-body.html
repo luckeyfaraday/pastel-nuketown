@@ -81,6 +81,20 @@
       <input type="checkbox" id="invertY">
       <span>INVERT LOOK (Y)</span>
     </label>
+    <div class="mode-picker setup-only" id="modePicker" role="group" aria-labelledby="modePickerLabel" aria-describedby="modePickerNote">
+      <span class="mode-picker-label" id="modePickerLabel">MATCH MODE</span>
+      <div class="mode-options">
+        <button class="mini-btn mode-option" id="modeDm" type="button" aria-pressed="true">
+          <span>DEATHMATCH</span>
+          <small>25 KILLS</small>
+        </button>
+        <button class="mini-btn mode-option" id="modeKc" type="button" aria-pressed="false">
+          <span>KILL CONFIRMED</span>
+          <small>20 CONFIRMS</small>
+        </button>
+      </div>
+      <p class="mode-picker-note" id="modePickerNote">KILL CONFIRMED: COLLECT THE DONUT AFTER A KILL TO CONFIRM IT.</p>
+    </div>
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
       <button class="menu-btn" id="play">SOLO</button>
