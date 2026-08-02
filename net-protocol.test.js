@@ -1956,6 +1956,64 @@ test('the aim limit counts without acting until it is told to act', async (t) =>
   guest.ws.terminate();
 });
 
+test('a single window over the limit is paid back, a client that keeps spinning is not', async (t) => {
+  /* The limit says what is inhuman. This says what is a cheat, and it is the
+     half that matters: the one 175 rad/s window the live logs caught could
+     never be told apart from a spinbot by its rate, because they are the same
+     rate. What separates them is whether it happens again. */
+  const { port } = await startRelay(t, {
+    aimRateStrikes: 3, idleKickMs: 0, roomRandom: () => 0
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await guest.opened;
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Player' });
+  await guest.next('room');
+  await host.next('members');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), guest.next('start')]);
+
+  /* Half the compass between consecutive simulated ticks is about 188 rad/s,
+     comfortably past the shipped 120. Held still is nothing at all. Every
+     count below is a whole window plus the tick that closes it. */
+  let seq = 0;
+  const spin = (windows) => {
+    for (let i = 0; i < windows * 16; i++) {
+      seq++;
+      guest.send(validInput({ seq, round: 1, yaw: seq % 2 ? Math.PI : 0, pitch: 0 }));
+    }
+  };
+  const hold = (windows) => {
+    for (let i = 0; i < windows * 16; i++) {
+      seq++;
+      guest.send(validInput({ seq, round: 1, yaw: 0, pitch: 0 }));
+    }
+  };
+
+  /* One window over, then a clean one. The strike the burst earned is spent
+     paying for itself and its owner never finds out it happened. */
+  spin(1);
+  hold(1);
+  await expectNoMessage(guest, 'error', 300);
+
+  /* Now the same movement without stopping. Three windows in and the seat goes
+     back, which at 60Hz is well under a second of spinning. */
+  spin(4);
+  const kicked = await guest.next('error', 3000);
+  assert.equal(kicked.code, 'aim-rate');
+  assert.match(kicked.message, /impossible aim/i);
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
 test('the relay attests each guest round trip so the host can bound a rewind', async (t) => {
   const { port } = await startRelay(t, { idleKickMs: 0, roomRandom: () => 0 });
 

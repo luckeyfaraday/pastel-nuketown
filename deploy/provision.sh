@@ -16,6 +16,13 @@ REPO="${REPO:-https://github.com/luckeyfaraday/pastel-nuketown.git}"
 #   BRANCH=fix-guest-host-advantage bash provision.sh
 BRANCH="${BRANCH:-main}"
 
+# Aim limit, in radians per second, and how many windows over it cost a seat.
+# Both are documented on the unit below. Set AIM_RATE_STRIKES=0 to put the
+# relay back to watching and logging without ever closing a connection:
+#   AIM_RATE_STRIKES=0 bash provision.sh
+AIM_RATE_LIMIT="${AIM_RATE_LIMIT:-120}"
+AIM_RATE_STRIKES="${AIM_RATE_STRIKES:-3}"
+
 # Origins allowed to open a socket here. WebSockets ignore the same-origin
 # policy, so without this any page on the internet can dial the relay and sit
 # in the rooms. Two entries: the site the game is served from, and the relay
@@ -107,6 +114,17 @@ StateDirectory=nuketown
 Environment=PORT=8080
 Environment=HOST=127.0.0.1
 Environment=ALLOWED_ORIGINS=$ALLOWED_ORIGINS
+# How fast a guest may claim to be turning before the relay stops believing a
+# hand is doing it, and how many windows over that line cost the seat. Measured
+# rather than guessed: honest players in a firefight peak at 30-42 rad/s, so
+# 120 is clear air, and the strike count is what tells a client that spins to
+# stay alive (over on every window, gone inside a second) from one that hitched
+# for a quarter second (one strike, paid back by the next clean window).
+#
+# This catches a spinbot. It cannot catch a bot that tracks smoothly, and no
+# number the relay can measure will -- that needs the world the host simulates.
+Environment=AIM_RATE_LIMIT=$AIM_RATE_LIMIT
+Environment=AIM_RATE_STRIKES=$AIM_RATE_STRIKES
 ExecStart=/usr/bin/node server.mjs
 Restart=always
 RestartSec=3

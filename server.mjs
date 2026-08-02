@@ -94,19 +94,32 @@ export function createRelayServer(options = {}) {
      delivers a whole frame's turn in one tick and neutral turns in the next.
      Averaging over a quarter second puts those back together.
 
-     30 rad/s is roughly a 180-degree flick every 100ms, sustained for the
-     whole window. Deliberately far above what a fast player peaks at: this is
-     here to catch a machine snapping between targets, and a threshold tight
-     enough to argue with good players would be worse than no threshold. */
-  const aimRateLimit = positiveNumber(options.aimRateLimit, 30);
+     30 rad/s was the first guess at "far above what a fast player peaks at",
+     and the first hours of live traffic disagreed: honest players in a
+     firefight measure 30 to 42, crossing that line often enough to log and
+     never often enough to accumulate. A threshold sitting inside normal is not
+     a threshold. 120 is clear of the whole observed cluster and still only a
+     third of what a wrapped yaw and a clamped pitch can express between two
+     ticks, which leaves it pointed at the one thing that does reach it: a
+     client spinning on purpose, some twenty revolutions a second, to make
+     itself hard to shoot. It cannot see a bot that tracks smoothly. Nothing
+     measured from here can -- that needs the world, and the world is on the
+     host. */
+  const aimRateLimit = positiveNumber(options.aimRateLimit, 120);
   const aimRateWindowTicks = positiveInteger(options.aimRateWindowTicks, 15);
-  /* Consecutive windows over the limit before the seat is taken back, or 0 to
-     watch without ever acting on it.
+  /* Windows over the limit, net of the clean windows that pay them back,
+     before the seat is taken back. 0 watches without ever acting.
 
-     Zero is the default on purpose. A false positive here costs an honest
-     player their match on the strength of a number nobody has yet seen
-     against real traffic, and the counter is worth reading for a while before
-     it is worth trusting. Set it once the logs say what normal looks like. */
+     This is the half of the measurement that separates a cheat from a bad
+     quarter of a second, and it is why the limit alone was never enough. One
+     window over is a client that hitched: a phone that dropped frames, a tab
+     that stalled, something unexplained and over before it could be looked
+     at. A client spinning to stay alive is over on every consecutive window,
+     so it reaches a small count inside a second while an isolated burst decays
+     back to nothing and costs its owner a strike they never notice.
+
+     Zero stays the default for a relay nobody has told what its own traffic
+     looks like. */
   const aimRateStrikes = positiveInteger(options.aimRateStrikes, 0);
   const backpressureBytes = positiveInteger(
     options.backpressureBytes,
@@ -657,6 +670,22 @@ export function createRelayServer(options = {}) {
     return null;
   }
 
+  /* Every line the relay writes about a peer names it the same way, so a burst
+     of aim warnings and the join and the leave around it read as one session
+     rather than three unrelated facts. That is the whole point: a single
+     window over the aim limit says nothing until you can see whether its owner
+     played on afterwards or vanished in the same second.
+
+     The name is the player's own text, but cleanPlayerName has already
+     replaced every control character in it, so nothing here can forge a line
+     of its own. */
+  function describePeer(peer) {
+    /* The head of the id rather than all 36 characters of it: this goes on
+       every join, leave and aim warning, and it only has to tell one peer from
+       the eight others that can be in a room with it. */
+    return `"${peer.name}" (${peer.id.slice(0, 8)}, seat ${peer.slot})`;
+  }
+
   function enterRoom(peer, room, role, name) {
     if (peer.joinTimer) clearTimeout(peer.joinTimer);
     peer.joinTimer = null;
@@ -670,6 +699,7 @@ export function createRelayServer(options = {}) {
     peer.activeAt = Date.now();
     room.members.set(peer.id, peer);
     if (role === 'host') room.host = peer;
+    console.log(`Join: ${describePeer(peer)} as ${role} in room ${room.code}`);
     /* Here rather than at connect: this is the point a peer has cleared the
        handshake and taken a seat, so scanners and abandoned tabs never land in
        the total. Host migration reuses the peers already counted — it does not
@@ -843,12 +873,13 @@ export function createRelayServer(options = {}) {
     }
 
     peer.aimStrikes++;
-    /* The whole value of counting without acting is being able to read it. If
-       the threshold is right this line never appears; if it floods, that is
-       the threshold being wrong, which is the thing worth finding out before
-       aimRateStrikes is ever set above zero. */
-    console.warn(`Aim rate ${rate.toFixed(1)} rad/s over ${aimRateLimit} ` +
-      `in room ${peer.room.code} (strike ${peer.aimStrikes})`);
+    /* Written above the gate below, so every strike is logged and not only the
+       ones that end a connection. The near misses are the reading that matters:
+       a peer that keeps reaching one strike and never three is a threshold set
+       wrong, and this line is the only thing that would ever say so. */
+    console.warn(`Aim rate ${rate.toFixed(1)} rad/s over ${aimRateLimit}: ` +
+      `${describePeer(peer)} in room ${peer.room.code} (strike ` +
+      `${peer.aimStrikes}${aimRateStrikes > 0 ? ` of ${aimRateStrikes}` : ', not enforced'})`);
     if (aimRateStrikes <= 0 || peer.aimStrikes < aimRateStrikes) return true;
 
     sendError(peer, 'aim-rate', 'Removed for impossible aim movement.');
@@ -1309,6 +1340,9 @@ export function createRelayServer(options = {}) {
   function leaveRoom(peer) {
     const room = peer.room;
     if (!room) return;
+    /* Before the host branch below, which returns without coming back here,
+       and before clearRoomMembership takes the seat number back. */
+    console.log(`Leave: ${describePeer(peer)} from room ${room.code}`);
 
     if (peer.role === 'host') {
       migrateHostedRoom(room, peer);
@@ -1502,9 +1536,10 @@ if (isMain) {
   const relay = createRelayServer({
     allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(','),
     statsPath: statsPathFromEnvironment(process.env),
-    /* Turning enforcement on is meant to be a decision made after reading the
-       logs, so it is a restart rather than a code change. Unset keeps the
-       counter watching and acting on nothing. */
+    /* Both halves of the aim limit are a decision made after reading the logs,
+       so both are a restart rather than a code change. Unset leaves the
+       defaults, which watch and act on nothing. */
+    aimRateLimit: Number.parseFloat(process.env.AIM_RATE_LIMIT || ''),
     aimRateStrikes: Number.parseInt(process.env.AIM_RATE_STRIKES || '0', 10)
   });
 
