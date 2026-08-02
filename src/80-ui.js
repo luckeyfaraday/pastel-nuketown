@@ -11,6 +11,9 @@ const elCross = { u: $('cU'), d: $('cD'), l: $('cL'), r: $('cR') };
 
 let crossSpread = 8, crossPunch = 0, hitmarkT = 0, dmgFlash = 0, healFlash = 0;
 
+function uiScore(a) { return G.mode === 'kc' ? (a.confirms || 0) : a.kills; }
+function uiTarget() { return G.mode === 'kc' ? CFG.confirmsToWin : CFG.killsToWin; }
+
 /* Where the scoreboard lives when no full-screen card is up. */
 const boardHome = elBoard.parentNode;
 function restoreBoard() {
@@ -48,11 +51,11 @@ function updateHUD() {
   const order = ['smg', 'shotgun', 'rifle'];
   for (let i = 0; i < elSlots.length; i++) elSlots[i].classList.toggle('on', order[i] === gunOwner.weapon);
 
-  elScore.textContent = String(p.kills);
-  elGoal.textContent = String(CFG.killsToWin);
+  elScore.textContent = String(uiScore(p));
+  elGoal.textContent = String(uiTarget());
   let lead = G.actors[0];
-  for (const a of G.actors) if (a.kills > lead.kills) lead = a;
-  elLead.textContent = lead.kills > 0 ? (lead.isPlayer ? 'YOU' : lead.name) : '—';
+  for (const a of G.actors) if (uiScore(a) > uiScore(lead)) lead = a;
+  elLead.textContent = uiScore(lead) > 0 ? (lead.isPlayer ? 'YOU' : lead.name) : '—';
 }
 
 function setCrosshairPunch(px) { crossPunch = Math.max(crossPunch, px); }
@@ -116,7 +119,7 @@ function updateDamageDirs(dt) {
 
 /* ---- killfeed ---- */
 const feedItems = [];
-function addKillFeed(from, target) {
+function addKillFeed(from, target, outcome) {
   const el = document.createElement('div');
   el.className = 'fitem';
   const w = from ? WBY[from.weapon] : null;
@@ -126,7 +129,19 @@ function addKillFeed(from, target) {
     s.style.color = a.isPlayer ? '#d4638f' : '#4a3f5c';
     return s;
   };
-  if (from && from !== target) {
+  if (outcome) {
+    el.dataset.kind = 'donut-' + outcome.toLowerCase();
+    const source = outcome === 'DENIED' ? target : from;
+    el.appendChild(nm(source));
+    const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = '🍩';
+    el.appendChild(ic);
+    if (outcome !== 'DENIED' && target && target !== source) el.appendChild(nm(target));
+    const label = document.createElement('b');
+    label.textContent = outcome;
+    label.style.color = outcome === 'CONFIRMED' ? '#258c6b' :
+      (outcome === 'STOLEN' ? '#c54e7a' : '#8069b0');
+    el.appendChild(label);
+  } else if (from && from !== target) {
     el.appendChild(nm(from));
     const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = w ? w.icon : '💥';
     el.appendChild(ic);
@@ -175,7 +190,20 @@ function setBoard(on) {
   elBoard.classList.toggle('on', on);
 }
 function refreshBoard() {
-  const rows = G.actors.slice().sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+  const head = elBoard.querySelector && elBoard.querySelector('thead tr');
+  if (head && head.children) {
+    let marker = Array.from(head.children).find(th => th.dataset && th.dataset.kcConfirms);
+    if (G.mode === 'kc' && !marker) {
+      marker = document.createElement('th');
+      marker.dataset.kcConfirms = '1';
+      marker.textContent = 'Confirms';
+      head.insertBefore(marker, head.children[1] || null);
+    } else if (G.mode !== 'kc' && marker) {
+      marker.remove();
+    }
+  }
+  const rows = G.actors.slice().sort((a, b) =>
+    uiScore(b) - uiScore(a) || b.kills - a.kills || a.deaths - b.deaths);
   elBoardBody.innerHTML = '';
   for (const a of rows) {
     const tr = document.createElement('tr');
@@ -187,7 +215,10 @@ function refreshBoard() {
     td0.appendChild(sw);
     td0.appendChild(document.createTextNode(a.isPlayer ? 'YOU' : a.name));
     tr.appendChild(td0);
-    for (const v of [a.kills, a.deaths, a.bestStreak]) {
+    const values = G.mode === 'kc'
+      ? [a.confirms || 0, a.kills, a.deaths, a.bestStreak]
+      : [a.kills, a.deaths, a.bestStreak];
+    for (const v of values) {
       const td = document.createElement('td'); td.textContent = String(v); tr.appendChild(td);
     }
     elBoardBody.appendChild(tr);
@@ -209,11 +240,12 @@ function updateDeadScreen() {
   if (G.player && !G.player.alive) $('deadCd').textContent = String(Math.max(1, Math.ceil(G.player.respawnT)));
 }
 function showOverScreen(winner) {
-  const rows = G.actors.slice().sort((a, b) => b.kills - a.kills);
+  const rows = G.actors.slice().sort((a, b) => uiScore(b) - uiScore(a) || b.kills - a.kills);
   const place = rows.indexOf(G.player) + 1;
   $('overBig').textContent = winner.isPlayer ? 'YOU WIN!' : (winner.name + ' WINS');
+  const scoreText = G.mode === 'kc' ? G.player.confirms + ' confirms' : G.player.kills + ' kills';
   $('overRank').textContent = 'You placed #' + place + ' of ' + rows.length +
-    '  ·  ' + G.player.kills + ' kills / ' + G.player.deaths + ' deaths  ·  best streak ' + G.player.bestStreak;
+    '  ·  ' + scoreText + ' / ' + G.player.deaths + ' deaths  ·  best streak ' + G.player.bestStreak;
   refreshBoard();
   const over = $('over');
   over.insertBefore(elBoard, $('again'));

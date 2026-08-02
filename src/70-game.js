@@ -5,7 +5,9 @@
 const CFG = {
   bots: 8,
   combatants: 9,
+  mode: 'dm',
   killsToWin: 25,
+  confirmsToWin: 20,
   respawn: 3.0,
   spawnShield: 1.6,
   playerSpeed: 5.9,
@@ -17,10 +19,33 @@ const CFG = {
 
 const G = {
   actors: [], player: null, nav: null, aiOK: false, aiErr: null,
+  mode: CFG.mode, donuts: [], nextDonutId: 1,
+  donutStats: { spawned: 0, confirmed: 0, stolen: 0, denied: 0, expired: 0, evicted: 0 },
   time: 0, started: false, over: false, paused: false,
   winner: null, frozen: false, hintT: 0,
   fixedAcc: 0, tick: 0
 };
+
+function setGameMode(mode) {
+  G.mode = mode === 'kc' ? 'kc' : 'dm';
+  if (G.started && typeof updateHUD === 'function') updateHUD();
+  return G.mode;
+}
+
+function matchTarget() {
+  return G.mode === 'kc' ? CFG.confirmsToWin : CFG.killsToWin;
+}
+
+function checkMatchWin() {
+  if (!G.actors.length) return;
+  if (G.mode === 'kc') {
+    const top = G.actors.reduce((m, a) => a.confirms > m.confirms ? a : m, G.actors[0]);
+    if (top.confirms >= CFG.confirmsToWin && !G.over) endMatch(top);
+  } else {
+    const top = G.actors.reduce((m, a) => a.kills > m.kills ? a : m, G.actors[0]);
+    if (top.kills >= CFG.killsToWin && !G.over) endMatch(top);
+  }
+}
 
 /* Impact debris takes the colour of what it hit, so sugar dust on a lawn is
    green and on a roof is pink. The material tag rides along on the raycast
@@ -64,7 +89,7 @@ function makeActor(opts) {
     health: 100, maxHealth: 100, alive: true,
     deathT: 0, deathDir: 1, spawnT: 0, respawnT: 0,
     weapon: opts.weapon || 'smg', ammo: 0, reserve: 0, reloadT: 0, fireCd: 0,
-    kills: 0, deaths: 0, streak: 0, bestStreak: 0,
+    kills: 0, deaths: 0, streak: 0, bestStreak: 0, confirms: 0,
     onGround: false, stepPhase: 0,
     lastHitBy: null, lastHitT: -99, shield: 0,
     brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
@@ -323,6 +348,7 @@ function setupMatch() {
      has to put it back while there is still a mesh to put back, and it must
      not carry a reference to an actor this rebuild is about to discard. */
   killcamEnd();
+  resetDonuts();
   for (const a of G.actors) disposeActorVisuals(a);
   G.actors.length = 0;
   _nextId = 1;
@@ -594,17 +620,18 @@ function killActor(target, from) {
     from.bestStreak = Math.max(from.bestStreak, from.streak);
     if (from.isPlayer) {
       SFX.kill();
-      addFloater('+1', target.pos.x, target.pos.y + 1.6, target.pos.z, '#b8f2d8', true);
+      addFloater(G.mode === 'kc' ? 'KILL' : '+1', target.pos.x, target.pos.y + 1.6,
+                 target.pos.z, '#b8f2d8', true);
       if (from.streak >= 3) showHint(from.streak + ' IN A ROW!');
     }
   }
+  if (G.mode === 'kc') spawnDonut(target, from);
   addKillFeed(from, target);
   if (typeof netOnAuthoritativeKill === 'function') netOnAuthoritativeKill(target, from);
   if (target.isPlayer) { SFX.die(); showDeadScreen(from); }
   refreshBoard();
 
-  const top = G.actors.reduce((m, a) => a.kills > m.kills ? a : m, G.actors[0]);
-  if (top.kills >= CFG.killsToWin && !G.over) endMatch(top);
+  checkMatchWin();
 }
 
 function endMatch(winner) {
@@ -1084,7 +1111,10 @@ function stepRemotePlayer(a, dt) {
 const _viewSelf = { id: 0, pos: null, vel: null, yaw: 0, pitch: 0, health: 0, maxHealth: 0,
                     ammo: 0, magSize: 0, reserve: 0, onGround: false, reloading: false };
 const _viewOthers = [];
-const _view = { time: 0, nav: null, rng: rng, self: _viewSelf, actors: _viewOthers, canSee: canSee };
+const _view = {
+  time: 0, nav: null, rng: rng, self: _viewSelf, actors: _viewOthers,
+  donuts: [], mode: 'dm', canSee: canSee
+};
 
 function stepBot(a, dt) {
   if (!a.alive) {
@@ -1101,7 +1131,9 @@ function stepBot(a, dt) {
   _viewSelf.health = a.health; _viewSelf.maxHealth = a.maxHealth;
   _viewSelf.ammo = a.ammo; _viewSelf.magSize = w.mag; _viewSelf.reserve = a.reserve;
   _viewSelf.onGround = a.onGround; _viewSelf.reloading = a.reloadT > 0;
-  _view.time = G.time; _view.nav = G.nav;
+  _view.time = G.time; _view.nav = G.nav; _view.mode = G.mode;
+  _view.donuts.length = 0;
+  if (G.mode === 'kc') for (const donut of G.donuts) _view.donuts.push(donut);
 
   let it;
   if (a.brain && G.aiOK) {
@@ -1157,6 +1189,7 @@ function simulate(dt) {
       stepBot(a, dt);
     }
   }
+  updateDonuts(dt);
 
   // mannequins settle back upright after being shot
   for (const m of WORLD.mannequins) {
@@ -1195,7 +1228,7 @@ function startMatch() {
   const again = document.getElementById('again');
   again.disabled = false;
   again.textContent = 'REMATCH';
-  showHint('FIRST TO ' + CFG.killsToWin + ' KILLS');
+  showHint('FIRST TO ' + matchTarget() + (G.mode === 'kc' ? ' CONFIRMS' : ' KILLS'));
   touchEnterImmersive();                  // no-op unless this is a phone
   requestLock();
 }

@@ -9,7 +9,7 @@
   'use strict';
 
   const TAU = Math.PI * 2;
-  const MOVING_STATES = new Set(['patrol', 'hunt', 'engage', 'reposition', 'retreat']);
+  const MOVING_STATES = new Set(['patrol', 'hunt', 'engage', 'reposition', 'retreat', 'donut']);
   const SKILLS = {
     easy: {
       reaction: 0.62, turn: 2.35, error: 0.145, minError: 0.035,
@@ -27,6 +27,7 @@
       burstMax: 1.05, pauseMin: 0.08, pauseMax: 0.24, preferred: 13.0
     }
   };
+  const DONUT_RADIUS = { easy: 12.0, normal: 18.0, hard: 18.0 };
 
   function finite(n, fallback) {
     return Number.isFinite(n) ? n : fallback;
@@ -560,6 +561,7 @@
       pathIndex: 0,
       goal: null,
       goalKind: null,
+      donutId: null,
       nextTargetEval: (hashSeed(id) % 12) * 0.01,
       targetScan: 0,
       nextDecision: 0,
@@ -637,6 +639,35 @@
           finite(actors[i].health, 1) > 0 && actors[i].pos) return actors[i];
     }
     return null;
+  }
+
+  function findDonut(view, id) {
+    const donuts = Array.isArray(view.donuts) ? view.donuts : [];
+    for (let i = 0; i < donuts.length; i++) {
+      if (donuts[i] && donuts[i].id === id) return donuts[i];
+    }
+    return null;
+  }
+
+  function nearestDonut(brain, view, self) {
+    const donuts = Array.isArray(view.donuts) ? view.donuts : [];
+    const radius = DONUT_RADIUS[brain.skill] || DONUT_RADIUS.normal;
+    let best = null;
+    let bestDistance = Infinity;
+    for (let i = 0; i < donuts.length; i++) {
+      const donut = donuts[i];
+      if (!donut) continue;
+      const dx = finite(donut.x, 0) - finite(self.pos.x, 0);
+      const dz = finite(donut.z, 0) - finite(self.pos.z, 0);
+      const distance = Math.hypot(dx, dz);
+      if (distance > radius || Math.abs(finite(donut.y, 0) - finite(self.pos.y, 0)) > 4.2)
+        continue;
+      if (distance < bestDistance) {
+        best = donut;
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 
   function evaluateTarget(brain, view, now) {
@@ -962,6 +993,12 @@
     const magSize = Math.max(1, finite(self.magSize, 1));
     const reserve = Math.max(0, finite(self.reserve, 0));
     const inContact = !!target && (visible || now - brain.targetSeenAt < 1.0);
+    const canCollect = view.mode === 'kc' ||
+      (view.mode == null && Array.isArray(view.donuts) && view.donuts.length > 0);
+    let donut = brain.state === 'donut' && brain.donutId != null
+      ? findDonut(view, brain.donutId) : null;
+    if (!donut) brain.donutId = null;
+    if (canCollect && !donut) donut = nearestDonut(brain, view, self);
     let reload = false;
 
     if (brain.state === 'spawn' && now - brain.stateSince > 0.18) {
@@ -977,6 +1014,11 @@
       setState(brain, 'reload', now);
     } else if (target && healthRatio < 0.25) {
       setState(brain, 'retreat', now);
+    } else if (brain.state === 'donut' && donut && brain.goal &&
+      brain.donutId === donut.id && dist2D(self.pos, brain.goal) >= 1.0 &&
+      now - brain.stateSince < 8.0) {
+      // Keep a pickup goal briefly so a new kill elsewhere cannot make a bot
+      // turn around before it reaches the donut it already chose.
     } else if (brain.state === 'reposition' && brain.goal &&
       dist2D(self.pos, brain.goal) >= 1.0 && now - brain.stateSince < 12.0) {
       // Commit long enough to actually reach cover or change floors instead of
@@ -988,6 +1030,10 @@
       } else {
         setState(brain, 'engage', now);
       }
+    } else if (canCollect && donut) {
+      brain.donutId = donut.id;
+      setGoal(brain, { x: finite(donut.x, 0), y: finite(donut.y, 0), z: finite(donut.z, 0) }, 'donut');
+      setState(brain, 'donut', now);
     } else if (target && brain.lastKnown && now - brain.targetSeenAt <= 3.6) {
       setState(brain, 'hunt', now);
     } else if (brain.state === 'reload' && !self.reloading && !reload) {
@@ -1022,6 +1068,15 @@
       if (dist2D(self.pos, huntGoal) < 1.2) {
         brain.targetId = null;
         brain.lastKnown = null;
+        setState(brain, 'patrol', now);
+      }
+    } else if (brain.state === 'donut' && brain.goal) {
+      ensurePath(brain, view, brain.goal);
+      movement = followPath(brain, view);
+      if (!donut || (dist2D(self.pos, donut) < 0.95 &&
+          Math.abs(finite(self.pos.y, 0) - finite(donut.y, 0)) < 2.0)) {
+        brain.donutId = null;
+        setGoal(brain, null, null);
         setState(brain, 'patrol', now);
       }
     } else if ((brain.state === 'retreat' || brain.state === 'reposition') &&

@@ -823,7 +823,7 @@ if (typeof THREE === "undefined") {
   'use strict';
 
   const TAU = Math.PI * 2;
-  const MOVING_STATES = new Set(['patrol', 'hunt', 'engage', 'reposition', 'retreat']);
+  const MOVING_STATES = new Set(['patrol', 'hunt', 'engage', 'reposition', 'retreat', 'donut']);
   const SKILLS = {
     easy: {
       reaction: 0.62, turn: 2.35, error: 0.145, minError: 0.035,
@@ -841,6 +841,7 @@ if (typeof THREE === "undefined") {
       burstMax: 1.05, pauseMin: 0.08, pauseMax: 0.24, preferred: 13.0
     }
   };
+  const DONUT_RADIUS = { easy: 12.0, normal: 18.0, hard: 18.0 };
 
   function finite(n, fallback) {
     return Number.isFinite(n) ? n : fallback;
@@ -1374,6 +1375,7 @@ if (typeof THREE === "undefined") {
       pathIndex: 0,
       goal: null,
       goalKind: null,
+      donutId: null,
       nextTargetEval: (hashSeed(id) % 12) * 0.01,
       targetScan: 0,
       nextDecision: 0,
@@ -1451,6 +1453,35 @@ if (typeof THREE === "undefined") {
           finite(actors[i].health, 1) > 0 && actors[i].pos) return actors[i];
     }
     return null;
+  }
+
+  function findDonut(view, id) {
+    const donuts = Array.isArray(view.donuts) ? view.donuts : [];
+    for (let i = 0; i < donuts.length; i++) {
+      if (donuts[i] && donuts[i].id === id) return donuts[i];
+    }
+    return null;
+  }
+
+  function nearestDonut(brain, view, self) {
+    const donuts = Array.isArray(view.donuts) ? view.donuts : [];
+    const radius = DONUT_RADIUS[brain.skill] || DONUT_RADIUS.normal;
+    let best = null;
+    let bestDistance = Infinity;
+    for (let i = 0; i < donuts.length; i++) {
+      const donut = donuts[i];
+      if (!donut) continue;
+      const dx = finite(donut.x, 0) - finite(self.pos.x, 0);
+      const dz = finite(donut.z, 0) - finite(self.pos.z, 0);
+      const distance = Math.hypot(dx, dz);
+      if (distance > radius || Math.abs(finite(donut.y, 0) - finite(self.pos.y, 0)) > 4.2)
+        continue;
+      if (distance < bestDistance) {
+        best = donut;
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 
   function evaluateTarget(brain, view, now) {
@@ -1776,6 +1807,12 @@ if (typeof THREE === "undefined") {
     const magSize = Math.max(1, finite(self.magSize, 1));
     const reserve = Math.max(0, finite(self.reserve, 0));
     const inContact = !!target && (visible || now - brain.targetSeenAt < 1.0);
+    const canCollect = view.mode === 'kc' ||
+      (view.mode == null && Array.isArray(view.donuts) && view.donuts.length > 0);
+    let donut = brain.state === 'donut' && brain.donutId != null
+      ? findDonut(view, brain.donutId) : null;
+    if (!donut) brain.donutId = null;
+    if (canCollect && !donut) donut = nearestDonut(brain, view, self);
     let reload = false;
 
     if (brain.state === 'spawn' && now - brain.stateSince > 0.18) {
@@ -1791,6 +1828,11 @@ if (typeof THREE === "undefined") {
       setState(brain, 'reload', now);
     } else if (target && healthRatio < 0.25) {
       setState(brain, 'retreat', now);
+    } else if (brain.state === 'donut' && donut && brain.goal &&
+      brain.donutId === donut.id && dist2D(self.pos, brain.goal) >= 1.0 &&
+      now - brain.stateSince < 8.0) {
+      // Keep a pickup goal briefly so a new kill elsewhere cannot make a bot
+      // turn around before it reaches the donut it already chose.
     } else if (brain.state === 'reposition' && brain.goal &&
       dist2D(self.pos, brain.goal) >= 1.0 && now - brain.stateSince < 12.0) {
       // Commit long enough to actually reach cover or change floors instead of
@@ -1802,6 +1844,10 @@ if (typeof THREE === "undefined") {
       } else {
         setState(brain, 'engage', now);
       }
+    } else if (canCollect && donut) {
+      brain.donutId = donut.id;
+      setGoal(brain, { x: finite(donut.x, 0), y: finite(donut.y, 0), z: finite(donut.z, 0) }, 'donut');
+      setState(brain, 'donut', now);
     } else if (target && brain.lastKnown && now - brain.targetSeenAt <= 3.6) {
       setState(brain, 'hunt', now);
     } else if (brain.state === 'reload' && !self.reloading && !reload) {
@@ -1836,6 +1882,15 @@ if (typeof THREE === "undefined") {
       if (dist2D(self.pos, huntGoal) < 1.2) {
         brain.targetId = null;
         brain.lastKnown = null;
+        setState(brain, 'patrol', now);
+      }
+    } else if (brain.state === 'donut' && brain.goal) {
+      ensurePath(brain, view, brain.goal);
+      movement = followPath(brain, view);
+      if (!donut || (dist2D(self.pos, donut) < 0.95 &&
+          Math.abs(finite(self.pos.y, 0) - finite(donut.y, 0)) < 2.0)) {
+        brain.donutId = null;
+        setGoal(brain, null, null);
         setState(brain, 'patrol', now);
       }
     } else if ((brain.state === 'retreat' || brain.state === 'reposition') &&
@@ -5891,7 +5946,9 @@ const SFX = {
 const CFG = {
   bots: 8,
   combatants: 9,
+  mode: 'dm',
   killsToWin: 25,
+  confirmsToWin: 20,
   respawn: 3.0,
   spawnShield: 1.6,
   playerSpeed: 5.9,
@@ -5903,10 +5960,33 @@ const CFG = {
 
 const G = {
   actors: [], player: null, nav: null, aiOK: false, aiErr: null,
+  mode: CFG.mode, donuts: [], nextDonutId: 1,
+  donutStats: { spawned: 0, confirmed: 0, stolen: 0, denied: 0, expired: 0, evicted: 0 },
   time: 0, started: false, over: false, paused: false,
   winner: null, frozen: false, hintT: 0,
   fixedAcc: 0, tick: 0
 };
+
+function setGameMode(mode) {
+  G.mode = mode === 'kc' ? 'kc' : 'dm';
+  if (G.started && typeof updateHUD === 'function') updateHUD();
+  return G.mode;
+}
+
+function matchTarget() {
+  return G.mode === 'kc' ? CFG.confirmsToWin : CFG.killsToWin;
+}
+
+function checkMatchWin() {
+  if (!G.actors.length) return;
+  if (G.mode === 'kc') {
+    const top = G.actors.reduce((m, a) => a.confirms > m.confirms ? a : m, G.actors[0]);
+    if (top.confirms >= CFG.confirmsToWin && !G.over) endMatch(top);
+  } else {
+    const top = G.actors.reduce((m, a) => a.kills > m.kills ? a : m, G.actors[0]);
+    if (top.kills >= CFG.killsToWin && !G.over) endMatch(top);
+  }
+}
 
 /* Impact debris takes the colour of what it hit, so sugar dust on a lawn is
    green and on a roof is pink. The material tag rides along on the raycast
@@ -5950,7 +6030,7 @@ function makeActor(opts) {
     health: 100, maxHealth: 100, alive: true,
     deathT: 0, deathDir: 1, spawnT: 0, respawnT: 0,
     weapon: opts.weapon || 'smg', ammo: 0, reserve: 0, reloadT: 0, fireCd: 0,
-    kills: 0, deaths: 0, streak: 0, bestStreak: 0,
+    kills: 0, deaths: 0, streak: 0, bestStreak: 0, confirms: 0,
     onGround: false, stepPhase: 0,
     lastHitBy: null, lastHitT: -99, shield: 0,
     brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
@@ -6209,6 +6289,7 @@ function setupMatch() {
      has to put it back while there is still a mesh to put back, and it must
      not carry a reference to an actor this rebuild is about to discard. */
   killcamEnd();
+  resetDonuts();
   for (const a of G.actors) disposeActorVisuals(a);
   G.actors.length = 0;
   _nextId = 1;
@@ -6480,17 +6561,18 @@ function killActor(target, from) {
     from.bestStreak = Math.max(from.bestStreak, from.streak);
     if (from.isPlayer) {
       SFX.kill();
-      addFloater('+1', target.pos.x, target.pos.y + 1.6, target.pos.z, '#b8f2d8', true);
+      addFloater(G.mode === 'kc' ? 'KILL' : '+1', target.pos.x, target.pos.y + 1.6,
+                 target.pos.z, '#b8f2d8', true);
       if (from.streak >= 3) showHint(from.streak + ' IN A ROW!');
     }
   }
+  if (G.mode === 'kc') spawnDonut(target, from);
   addKillFeed(from, target);
   if (typeof netOnAuthoritativeKill === 'function') netOnAuthoritativeKill(target, from);
   if (target.isPlayer) { SFX.die(); showDeadScreen(from); }
   refreshBoard();
 
-  const top = G.actors.reduce((m, a) => a.kills > m.kills ? a : m, G.actors[0]);
-  if (top.kills >= CFG.killsToWin && !G.over) endMatch(top);
+  checkMatchWin();
 }
 
 function endMatch(winner) {
@@ -6970,7 +7052,10 @@ function stepRemotePlayer(a, dt) {
 const _viewSelf = { id: 0, pos: null, vel: null, yaw: 0, pitch: 0, health: 0, maxHealth: 0,
                     ammo: 0, magSize: 0, reserve: 0, onGround: false, reloading: false };
 const _viewOthers = [];
-const _view = { time: 0, nav: null, rng: rng, self: _viewSelf, actors: _viewOthers, canSee: canSee };
+const _view = {
+  time: 0, nav: null, rng: rng, self: _viewSelf, actors: _viewOthers,
+  donuts: [], mode: 'dm', canSee: canSee
+};
 
 function stepBot(a, dt) {
   if (!a.alive) {
@@ -6987,7 +7072,9 @@ function stepBot(a, dt) {
   _viewSelf.health = a.health; _viewSelf.maxHealth = a.maxHealth;
   _viewSelf.ammo = a.ammo; _viewSelf.magSize = w.mag; _viewSelf.reserve = a.reserve;
   _viewSelf.onGround = a.onGround; _viewSelf.reloading = a.reloadT > 0;
-  _view.time = G.time; _view.nav = G.nav;
+  _view.time = G.time; _view.nav = G.nav; _view.mode = G.mode;
+  _view.donuts.length = 0;
+  if (G.mode === 'kc') for (const donut of G.donuts) _view.donuts.push(donut);
 
   let it;
   if (a.brain && G.aiOK) {
@@ -7043,6 +7130,7 @@ function simulate(dt) {
       stepBot(a, dt);
     }
   }
+  updateDonuts(dt);
 
   // mannequins settle back upright after being shot
   for (const m of WORLD.mannequins) {
@@ -7081,9 +7169,215 @@ function startMatch() {
   const again = document.getElementById('again');
   again.disabled = false;
   again.textContent = 'REMATCH';
-  showHint('FIRST TO ' + CFG.killsToWin + ' KILLS');
+  showHint('FIRST TO ' + matchTarget() + (G.mode === 'kc' ? ' CONFIRMS' : ' KILLS'));
   touchEnterImmersive();                  // no-op unless this is a phone
   requestLock();
+}
+</script>
+<script>/* ===== src/72-pickups.js ===== */
+/* =====================================================================
+   PASTEL NUKETOWN — kill-confirmed donuts
+   ===================================================================== */
+
+const DONUT_MAX = 24;
+const DONUT_LIFETIME = 12.0;
+const DONUT_LIFT = 0.35;
+const DONUT_PICKUP_RADIUS = 1.1;
+const DONUT_PICKUP_HEIGHT = 2.0;
+
+/* One shared torus and a fixed mesh pool keep a busy match from allocating a
+   new GPU object for every death. The pool is deliberately separate from the
+   gameplay list, so collection and eviction never leave a mesh behind. */
+const DONUT_RENDER = {
+  geometry: null, material: null, meshes: [], used: [], slots: new Map(), ready: false
+};
+
+function resetDonuts() {
+  for (const donut of G.donuts) hideDonutVisual(donut);
+  G.donuts.length = 0;
+  G.nextDonutId = 1;
+  if (!G.donutStats) G.donutStats = {};
+  G.donutStats.spawned = 0;
+  G.donutStats.confirmed = 0;
+  G.donutStats.stolen = 0;
+  G.donutStats.denied = 0;
+  G.donutStats.expired = 0;
+  G.donutStats.evicted = 0;
+}
+
+function ensureDonutPool() {
+  if (DONUT_RENDER.ready || typeof scene === 'undefined' || !scene) return;
+  try {
+    DONUT_RENDER.geometry = new THREE.TorusGeometry(0.34, 0.11, 10, 20);
+    DONUT_RENDER.material = new THREE.MeshLambertMaterial({
+      color: C(0xff9dcc), emissive: C(0xfff4df), emissiveIntensity: 0.28
+    });
+    for (let i = 0; i < DONUT_MAX; i++) {
+      const mesh = new THREE.Mesh(DONUT_RENDER.geometry, DONUT_RENDER.material);
+      mesh.visible = false;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      DONUT_RENDER.meshes.push(mesh);
+      DONUT_RENDER.used.push(false);
+    }
+    DONUT_RENDER.ready = true;
+  } catch (e) {
+    /* A headless or partially booted renderer should not stop the simulation. */
+    DONUT_RENDER.geometry = null;
+    DONUT_RENDER.material = null;
+    DONUT_RENDER.meshes.length = 0;
+    DONUT_RENDER.used.length = 0;
+  }
+}
+
+function hideDonutVisual(donut) {
+  if (!donut) return;
+  const slot = DONUT_RENDER.slots.get(donut.id);
+  if (slot === undefined) return;
+  const mesh = DONUT_RENDER.meshes[slot];
+  if (mesh) mesh.visible = false;
+  DONUT_RENDER.used[slot] = false;
+  DONUT_RENDER.slots.delete(donut.id);
+}
+
+function showDonutVisual(donut) {
+  ensureDonutPool();
+  if (!DONUT_RENDER.ready) return;
+  let slot = -1;
+  for (let i = 0; i < DONUT_RENDER.used.length; i++) {
+    if (!DONUT_RENDER.used[i]) { slot = i; break; }
+  }
+  if (slot < 0) return;
+  const mesh = DONUT_RENDER.meshes[slot];
+  DONUT_RENDER.used[slot] = true;
+  DONUT_RENDER.slots.set(donut.id, slot);
+  mesh.visible = true;
+  mesh.position.set(donut.x, donut.y, donut.z);
+  mesh.rotation.set(0, 0, 0);
+}
+
+function removeDonut(index) {
+  const donut = G.donuts[index];
+  if (!donut) return null;
+  hideDonutVisual(donut);
+  G.donuts.splice(index, 1);
+  return donut;
+}
+
+function donutGroundY(x, y, z) {
+  const ox = Number.isFinite(x) ? x : 0;
+  const oy = Number.isFinite(y) ? y + 0.05 : 0.05;
+  const oz = Number.isFinite(z) ? z : 0;
+  const hit = raycastMap(ox, oy, oz, 0, -1, 0, 64);
+  if (hit && Number.isFinite(hit.py)) return hit.py + DONUT_LIFT;
+  /* The ground plane is the safest fallback for an off-map death: it keeps
+     the pickup visible and prevents a missed ray from creating an unreachable
+     floating entity. */
+  return DONUT_LIFT;
+}
+
+function spawnDonut(owner, killer) {
+  if (!owner || G.mode !== 'kc') return null;
+  if (G.donuts.length >= DONUT_MAX) {
+    let oldest = 0;
+    for (let i = 1; i < G.donuts.length; i++) {
+      if (G.donuts[i].t > G.donuts[oldest].t) oldest = i;
+    }
+    removeDonut(oldest);
+    G.donutStats.evicted++;
+  }
+
+  const donut = {
+    id: G.nextDonutId++,
+    owner: owner.id,
+    killer: killer ? killer.id : null,
+    ownerNetId: owner.netId || null,
+    killerNetId: killer ? (killer.netId || null) : null,
+    x: Number.isFinite(owner.pos.x) ? owner.pos.x : 0,
+    y: donutGroundY(owner.pos.x, owner.pos.y, owner.pos.z),
+    z: Number.isFinite(owner.pos.z) ? owner.pos.z : 0,
+    t: 0
+  };
+  G.donuts.push(donut);
+  G.donutStats.spawned++;
+  showDonutVisual(donut);
+  return donut;
+}
+
+function donutActor(id) {
+  return G.actors.find(actor => actor.id === id) || null;
+}
+
+function donutOutcome(donut, collector) {
+  if (collector.id === donut.owner) return 'DENIED';
+  return collector.id === donut.killer ? 'CONFIRMED' : 'STOLEN';
+}
+
+function reportDonutOutcome(donut, collector, outcome) {
+  const owner = donutActor(donut.owner) || collector;
+  const killer = donutActor(donut.killer);
+  if (outcome === 'CONFIRMED' || outcome === 'STOLEN') collector.confirms++;
+  if (outcome === 'CONFIRMED') G.donutStats.confirmed++;
+  else if (outcome === 'DENIED') G.donutStats.denied++;
+  else if (outcome === 'STOLEN') G.donutStats.stolen++;
+
+  if (typeof addKillFeed === 'function') addKillFeed(collector, owner, outcome);
+  const x = donut.x, y = donut.y + 0.45, z = donut.z;
+  if (collector.isPlayer) {
+    if (typeof addFloater === 'function') {
+      const color = outcome === 'CONFIRMED' ? '#b8f2d8' :
+        (outcome === 'STOLEN' ? '#ff9dcc' : '#d8baff');
+      addFloater(outcome, x, y, z, color, true);
+    }
+    if (outcome === 'CONFIRMED') SFX.kill();
+    else SFX.ui();
+  } else if (killer && killer.isPlayer && outcome === 'STOLEN') {
+    if (typeof addFloater === 'function') addFloater('STOLEN', x, y, z, '#ff9dcc', true);
+    SFX.ui();
+  }
+}
+
+function updateDonuts(dt) {
+  if (G.mode !== 'kc' || (typeof netIsGuest === 'function' && netIsGuest())) return;
+  for (let i = G.donuts.length - 1; i >= 0; i--) {
+    const donut = G.donuts[i];
+    donut.t += dt;
+    if (donut.t >= DONUT_LIFETIME) {
+      removeDonut(i);
+      G.donutStats.expired++;
+    }
+  }
+
+  for (let i = G.donuts.length - 1; i >= 0; i--) {
+    const donut = G.donuts[i];
+    let collector = null;
+    for (const actor of G.actors) {
+      if (!actor.alive) continue;
+      const horizontal = Math.hypot(actor.pos.x - donut.x, actor.pos.z - donut.z);
+      const vertical = Math.abs(actor.pos.y - donut.y);
+      if (horizontal <= DONUT_PICKUP_RADIUS && vertical <= DONUT_PICKUP_HEIGHT) {
+        collector = actor;
+        break;
+      }
+    }
+    if (!collector) continue;
+    const outcome = donutOutcome(donut, collector);
+    removeDonut(i);
+    reportDonutOutcome(donut, collector, outcome);
+    refreshBoard();
+    checkMatchWin();
+    if (G.over) break;
+  }
+
+  for (const donut of G.donuts) {
+    const slot = DONUT_RENDER.slots.get(donut.id);
+    const mesh = slot === undefined ? null : DONUT_RENDER.meshes[slot];
+    if (!mesh) continue;
+    mesh.position.set(donut.x, donut.y + Math.sin((G.time + donut.id) * 2.1) * 0.08, donut.z);
+    mesh.rotation.y = (G.time * 0.75 + donut.id * 0.7) % TAU;
+    mesh.rotation.z = Math.sin((G.time + donut.id) * 1.4) * 0.12;
+  }
 }
 </script>
 <script>/* ===== src/75-network.js ===== */
@@ -10037,6 +10331,9 @@ const elCross = { u: $('cU'), d: $('cD'), l: $('cL'), r: $('cR') };
 
 let crossSpread = 8, crossPunch = 0, hitmarkT = 0, dmgFlash = 0, healFlash = 0;
 
+function uiScore(a) { return G.mode === 'kc' ? (a.confirms || 0) : a.kills; }
+function uiTarget() { return G.mode === 'kc' ? CFG.confirmsToWin : CFG.killsToWin; }
+
 /* Where the scoreboard lives when no full-screen card is up. */
 const boardHome = elBoard.parentNode;
 function restoreBoard() {
@@ -10074,11 +10371,11 @@ function updateHUD() {
   const order = ['smg', 'shotgun', 'rifle'];
   for (let i = 0; i < elSlots.length; i++) elSlots[i].classList.toggle('on', order[i] === gunOwner.weapon);
 
-  elScore.textContent = String(p.kills);
-  elGoal.textContent = String(CFG.killsToWin);
+  elScore.textContent = String(uiScore(p));
+  elGoal.textContent = String(uiTarget());
   let lead = G.actors[0];
-  for (const a of G.actors) if (a.kills > lead.kills) lead = a;
-  elLead.textContent = lead.kills > 0 ? (lead.isPlayer ? 'YOU' : lead.name) : '—';
+  for (const a of G.actors) if (uiScore(a) > uiScore(lead)) lead = a;
+  elLead.textContent = uiScore(lead) > 0 ? (lead.isPlayer ? 'YOU' : lead.name) : '—';
 }
 
 function setCrosshairPunch(px) { crossPunch = Math.max(crossPunch, px); }
@@ -10142,7 +10439,7 @@ function updateDamageDirs(dt) {
 
 /* ---- killfeed ---- */
 const feedItems = [];
-function addKillFeed(from, target) {
+function addKillFeed(from, target, outcome) {
   const el = document.createElement('div');
   el.className = 'fitem';
   const w = from ? WBY[from.weapon] : null;
@@ -10152,7 +10449,19 @@ function addKillFeed(from, target) {
     s.style.color = a.isPlayer ? '#d4638f' : '#4a3f5c';
     return s;
   };
-  if (from && from !== target) {
+  if (outcome) {
+    el.dataset.kind = 'donut-' + outcome.toLowerCase();
+    const source = outcome === 'DENIED' ? target : from;
+    el.appendChild(nm(source));
+    const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = '🍩';
+    el.appendChild(ic);
+    if (outcome !== 'DENIED' && target && target !== source) el.appendChild(nm(target));
+    const label = document.createElement('b');
+    label.textContent = outcome;
+    label.style.color = outcome === 'CONFIRMED' ? '#258c6b' :
+      (outcome === 'STOLEN' ? '#c54e7a' : '#8069b0');
+    el.appendChild(label);
+  } else if (from && from !== target) {
     el.appendChild(nm(from));
     const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = w ? w.icon : '💥';
     el.appendChild(ic);
@@ -10201,7 +10510,20 @@ function setBoard(on) {
   elBoard.classList.toggle('on', on);
 }
 function refreshBoard() {
-  const rows = G.actors.slice().sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+  const head = elBoard.querySelector && elBoard.querySelector('thead tr');
+  if (head && head.children) {
+    let marker = Array.from(head.children).find(th => th.dataset && th.dataset.kcConfirms);
+    if (G.mode === 'kc' && !marker) {
+      marker = document.createElement('th');
+      marker.dataset.kcConfirms = '1';
+      marker.textContent = 'Confirms';
+      head.insertBefore(marker, head.children[1] || null);
+    } else if (G.mode !== 'kc' && marker) {
+      marker.remove();
+    }
+  }
+  const rows = G.actors.slice().sort((a, b) =>
+    uiScore(b) - uiScore(a) || b.kills - a.kills || a.deaths - b.deaths);
   elBoardBody.innerHTML = '';
   for (const a of rows) {
     const tr = document.createElement('tr');
@@ -10213,7 +10535,10 @@ function refreshBoard() {
     td0.appendChild(sw);
     td0.appendChild(document.createTextNode(a.isPlayer ? 'YOU' : a.name));
     tr.appendChild(td0);
-    for (const v of [a.kills, a.deaths, a.bestStreak]) {
+    const values = G.mode === 'kc'
+      ? [a.confirms || 0, a.kills, a.deaths, a.bestStreak]
+      : [a.kills, a.deaths, a.bestStreak];
+    for (const v of values) {
       const td = document.createElement('td'); td.textContent = String(v); tr.appendChild(td);
     }
     elBoardBody.appendChild(tr);
@@ -10235,11 +10560,12 @@ function updateDeadScreen() {
   if (G.player && !G.player.alive) $('deadCd').textContent = String(Math.max(1, Math.ceil(G.player.respawnT)));
 }
 function showOverScreen(winner) {
-  const rows = G.actors.slice().sort((a, b) => b.kills - a.kills);
+  const rows = G.actors.slice().sort((a, b) => uiScore(b) - uiScore(a) || b.kills - a.kills);
   const place = rows.indexOf(G.player) + 1;
   $('overBig').textContent = winner.isPlayer ? 'YOU WIN!' : (winner.name + ' WINS');
+  const scoreText = G.mode === 'kc' ? G.player.confirms + ' confirms' : G.player.kills + ' kills';
   $('overRank').textContent = 'You placed #' + place + ' of ' + rows.length +
-    '  ·  ' + G.player.kills + ' kills / ' + G.player.deaths + ' deaths  ·  best streak ' + G.player.bestStreak;
+    '  ·  ' + scoreText + ' / ' + G.player.deaths + ' deaths  ·  best streak ' + G.player.bestStreak;
   refreshBoard();
   const over = $('over');
   over.insertBefore(elBoard, $('again'));
@@ -10513,6 +10839,8 @@ function boot() {
   initTouch();     set(88);
   initAI();        set(96);
   initNetworkUI();
+  const requestedMode = QS.get('mode');
+  setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 
   setupMatch();
   camera.position.set(40, 20, 30); camera.lookAt(0, 3, 0);
@@ -10757,6 +11085,7 @@ window.NUKETOWN_DEBUG = {
     const p = G.player;
     p.pos.x = 0; p.pos.y = 60; p.pos.z = 0;      // park the player out of the fight
     const k0 = G.actors.map(a => a.kills);
+    const d0 = Object.assign({}, G.donutStats);
     const n = Math.round((seconds || 45) / FIXED);
     const seen = new Set(); const levels = new Set(); const moved = [];
     const start = G.actors.map(a => ({ x: a.pos.x, z: a.pos.z, d: 0 }));
@@ -10772,7 +11101,7 @@ window.NUKETOWN_DEBUG = {
       });
     }
     G.actors.forEach((a, j) => { if (!a.isPlayer) moved.push({ name: a.name, dist: +start[j].d.toFixed(1), kills: a.kills - k0[j] }); });
-    return {
+    const report = {
       simSeconds: seconds || 45,
       botKills: moved.reduce((s, m) => s + m.kills, 0),
       statesSeen: Array.from(seen),
@@ -10780,6 +11109,29 @@ window.NUKETOWN_DEBUG = {
       perBot: moved,
       nan: G.actors.some(a => !Number.isFinite(a.pos.x) || !Number.isFinite(a.pos.y) || !Number.isFinite(a.pos.z))
     };
+    if (G.mode === 'kc') {
+      const donutsSpawned = G.donutStats.spawned - (d0.spawned || 0);
+      const donutsConfirmed = G.donutStats.confirmed - (d0.confirmed || 0);
+      const donutsStolen = G.donutStats.stolen - (d0.stolen || 0);
+      const donutsDenied = G.donutStats.denied - (d0.denied || 0);
+      const donutsExpired = G.donutStats.expired - (d0.expired || 0);
+      const donutsEvicted = G.donutStats.evicted - (d0.evicted || 0);
+      const donutsCollected = donutsConfirmed + donutsStolen + donutsDenied;
+      report.donutsSpawned = donutsSpawned;
+      report.donutsConfirmed = donutsConfirmed;
+      report.donutsStolen = donutsStolen;
+      report.donutsDenied = donutsDenied;
+      report.donutsExpired = donutsExpired;
+      report.donutsEvicted = donutsEvicted;
+      report.collectionRate = donutsSpawned ? donutsCollected / donutsSpawned : 0;
+      report.donuts = {
+        spawned: donutsSpawned, confirmed: donutsConfirmed, stolen: donutsStolen,
+        denied: donutsDenied, expired: donutsExpired, evicted: donutsEvicted,
+        collected: donutsCollected,
+        collectionRate: report.collectionRate
+      };
+    }
+    return report;
   }
 };
 
