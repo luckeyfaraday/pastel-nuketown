@@ -35,6 +35,25 @@ ALLOWED_ORIGINS="${ALLOWED_ORIGINS-https://$SITE,https://$DOMAIN}"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$1"; }
 
+# A stale copy of this script is the worst way for a deploy to go wrong, because
+# it does not look like one. It rewrites the systemd unit with whatever that
+# version believed production was and restarts into it, reporting success the
+# whole way. On 2026-08-02 an old copy left in /tmp reverted the origin allowlist
+# to "commented out" and dropped StateDirectory, which silently opened the relay
+# to any origin and stopped the match counter persisting; the run printed no
+# error at any point. `curl -o` is how it happens: it fails silently on an HTTP
+# error and leaves whatever was already at that path.
+#
+# So keep a copy of what is genuinely executing, taken before the checkout below
+# can rewrite it, and compare that against the repo once the checkout is current.
+SELF="${BASH_SOURCE[0]:-}"
+SELF_SNAPSHOT=""
+if [ -f "$SELF" ]; then
+  SELF_SNAPSHOT="$(mktemp)"
+  cp "$SELF" "$SELF_SNAPSHOT"
+  trap 'rm -f "$SELF_SNAPSHOT"' EXIT
+fi
+
 say "admin user: $ADMIN"
 if ! id -u "$ADMIN" >/dev/null 2>&1; then
   adduser --disabled-password --gecos "" "$ADMIN"
@@ -88,6 +107,37 @@ if [ -d "$APP_DIR/.git" ]; then
 else
   git clone --branch "$BRANCH" "$REPO" "$APP_DIR"
 fi
+# Deliberately here: after the checkout, so there is something current to
+# compare against, and before the first thing that touches the box outside the
+# repo. An abort at this point has updated the checkout and changed nothing
+# else, so the running relay is exactly as it was found.
+if [ -n "$SELF_SNAPSHOT" ] && [ "${SKIP_SELF_CHECK:-0}" != "1" ]; then
+  if ! cmp -s "$SELF_SNAPSHOT" "$APP_DIR/deploy/provision.sh"; then
+    cat >&2 <<MSG
+
+This script is not the one on $BRANCH.
+
+  running: $SELF
+  repo:    $APP_DIR/deploy/provision.sh
+
+Refusing to rewrite the systemd unit from it. An out-of-date copy will replace a
+working unit with an older one and restart into it without complaining.
+
+The checkout is now current, so run the version that came with it:
+
+    cp $APP_DIR/deploy/provision.sh /tmp/prov-current.sh
+    sudo bash /tmp/prov-current.sh
+
+Copied out to /tmp rather than run in place, because updating the checkout
+rewrites this file, and bash reads a script by byte offset as it executes.
+
+If the difference is deliberate — a local edit you are testing — re-run with
+SKIP_SELF_CHECK=1.
+MSG
+    exit 1
+  fi
+fi
+
 cd "$APP_DIR"
 npm ci --silent
 npm run build
