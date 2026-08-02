@@ -127,9 +127,17 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 #board .sw{width:15px;height:15px;border:2.5px solid var(--ink);border-radius:5px;display:inline-block}
 
 /* ---------- title / overlays ---------- */
-.screen{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;
+/* Centred by auto margins rather than by justify-content. A centred column
+   that overflows spills equally past both ends, and the half above the top is
+   unreachable -- no amount of scrolling brings it back, so the title crops.
+   Auto margins collapse to nothing once the content is taller than the
+   viewport, which leaves the overflow entirely at the bottom where scrolling
+   can actually reach it. Looks identical whenever the card does fit. */
+.screen{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:flex-start;
   flex-direction:column;background:radial-gradient(ellipse at 50% 38%,rgba(255,248,240,.26),rgba(180,198,238,.5));
   backdrop-filter:blur(2px);pointer-events:auto;overflow-y:auto;overflow-x:hidden}
+.screen>*:first-child{margin-top:auto}
+.screen>*:last-child{margin-bottom:auto}
 .screen.off{display:none}
 #title{z-index:34}          /* always above the death / match-over cards */
 #title h1{font-family:var(--disp);font-size:clamp(46px,10vw,116px);font-weight:800;line-height:.86;
@@ -193,14 +201,14 @@ body.touch .sens{display:none}
 .mode-picker-label{display:block;margin-bottom:6px;font-family:var(--disp);font-size:11px;font-weight:700;
   letter-spacing:.14em;color:var(--ink-soft)}
 .mode-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.mode-option{min-width:0;min-height:58px;padding:8px 7px 9px;display:flex;flex-direction:column;
+.mode-option{min-width:0;min-height:50px;padding:6px 7px 7px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:2px;white-space:normal;line-height:1.05;font-size:11px}
 .mode-option span{font-weight:800;letter-spacing:.06em}
 .mode-option small{font-family:var(--ui);font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--ink-soft)}
 .mode-option[aria-pressed="true"]{background:linear-gradient(180deg,#fff2c9,#ffe08a);transform:translateY(-1px);
   box-shadow:0 4px 0 var(--ink)}
 .mode-option:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
-.mode-picker-note{margin-top:6px;font-family:var(--disp);font-size:10px;font-weight:600;line-height:1.15;
+.mode-picker-note{margin-top:4px;font-family:var(--disp);font-size:10px;font-weight:600;line-height:1.15;
   letter-spacing:.035em;color:var(--ink-soft)}
 /* Hosting a room by hand is a minority path now that PLAY picks one, but as an
    underlined line of fine print it read as a caption and nobody found CREATE
@@ -267,6 +275,8 @@ body.touch .sens{display:none}
   border-radius:11px;background:rgba(255,255,255,.72);box-shadow:0 3px 0 var(--ink)}
 .keys span b{font-weight:800;color:#d4638f}
 @media(max-height:760px){
+  .mode-option{min-height:44px;padding-top:5px;padding-bottom:6px}
+  .mode-picker-note{margin-top:3px;font-size:9px}
   #title h1{font-size:clamp(42px,8vw,78px)}
   #title .sub{margin-top:9px}
   #menu,#lobby{margin-top:14px}
