@@ -812,6 +812,10 @@ function netHandleWire(raw) {
     NET.id = msg.id;
     NET.room = room;
     NET.mode = msg.role === 'host' ? 'host' : 'guest';
+    /* A guest has not learned the match mode yet. Keep the lobby neutral until
+       the authority's first snapshot arrives, regardless of the URL that led
+       this browser here; a host keeps the mode it chose before creating. */
+    if (netIsGuest()) setGameMode(CFG.mode);
     NET.phase = 'lobby';
     NET.members = members;
     NET.authorityEpoch = msg.authorityEpoch;
@@ -1132,30 +1136,20 @@ function netReturnToLobbyAfterHostChange(hostId) {
 
 function netValidMigrationSnapshot(snapshot, previousEpoch, round) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) ||
-      snapshot.t !== 'snapshot' || snapshot.v !== NETP.VERSION ||
       snapshot.authorityEpoch !== previousEpoch || snapshot.round !== round ||
-      !Number.isSafeInteger(snapshot.tick) || snapshot.tick < 0 ||
-      !netFiniteIn(snapshot.time, 0, 100_000_000) ||
-      !Number.isSafeInteger(snapshot.eventSeq) || snapshot.eventSeq < 0 ||
-      !Number.isSafeInteger(snapshot.manifestVersion) ||
-      snapshot.manifestVersion < 1 || typeof snapshot.over !== 'boolean' ||
-      !Array.isArray(snapshot.actors) || snapshot.actors.length < 1 ||
-      snapshot.actors.length > 16) return false;
-  const ids = new Set();
-  for (const actor of snapshot.actors) {
-    if (!netValidActorState(actor) || ids.has(actor.netId)) return false;
-    ids.add(actor.netId);
-  }
+      !netValidSnapshot(snapshot)) return false;
+  const ids = new Set(snapshot.actors.map(actor => actor.netId));
   if (!ids.has(NET.id)) return false;
-  if (snapshot.winner !== null &&
-      (typeof snapshot.winner !== 'string' || !ids.has(snapshot.winner))) return false;
-  if (snapshot.over &&
-      (typeof snapshot.winner !== 'string' || !ids.has(snapshot.winner))) return false;
   return true;
 }
 
 function netCheckpointMetadata(checkpoint) {
   return new Map(checkpoint.actors.map(actor => [actor.netId, actor]));
+}
+
+function netCheckpointEvents(checkpoint) {
+  return checkpoint.events.concat(checkpoint.confirmEvents)
+    .sort((a, b) => a.id - b.id);
 }
 
 function netBotOrdinal(netId) {
@@ -1199,6 +1193,7 @@ function netHydrateActor(actor, state, metadata, local) {
   actor.reloadT = state.reloadT;
   actor.fireCd = 0;
   actor.kills = state.kills; actor.deaths = state.deaths;
+  actor.confirms = state.confirms;
   actor.streak = state.streak; actor.bestStreak = state.bestStreak;
   actor.lastHitBy = state.lastHitBy;
   actor.stepPhase = 0;
@@ -1286,6 +1281,8 @@ function netHydrateMigration(snapshot, checkpoint) {
     : null;
   if (snapshot.over && !G.winner) return false;
   G.fixedAcc = 0;
+  setGameMode(snapshot.mode);
+  netReconcileDonuts(snapshot.donuts);
 
   NET.actorManifest = manifest;
   NET.manifestVersion = snapshot.manifestVersion + (pruned ? 1 : 0);
@@ -1298,12 +1295,13 @@ function netHydrateMigration(snapshot, checkpoint) {
   NET.pendingSteps = [];
   NET.inputSentTimes.clear();
   NET.lastInputAck = NET.inputSeq;
+  const checkpointEvents = netCheckpointEvents(checkpoint);
   NET.eventSeq = Math.max(
     snapshot.eventSeq,
-    ...checkpoint.events.map(event => event.id)
+    ...checkpointEvents.map(event => event.id)
   );
   NET.eventQueue = netIsHost()
-    ? checkpoint.events.filter(event => netValidEvent(event, manifest))
+    ? checkpointEvents.filter(event => netValidEvent(event, manifest))
     : [];
   NET.checkpointDirty = pruned;
   NET.snapshotAcc = 0;
@@ -1348,6 +1346,7 @@ function netBeginSeamlessMigration(change, previousEpoch) {
       !netValidCheckpoint(checkpoint) ||
       checkpoint.authorityEpoch !== sourceEpoch ||
       checkpoint.round !== change.round ||
+      checkpoint.mode !== snapshot.mode ||
       checkpoint.manifestVersion !== snapshot.manifestVersion) return false;
   const metadata = netCheckpointMetadata(checkpoint);
   if (metadata.size !== snapshot.actors.length ||
@@ -1576,6 +1575,34 @@ function netOnAuthoritySlowStateChanged() {
 }
 
 function netRound(v) { return Math.round(v * 1000) / 1000; }
+function netPackDonutActor(id, netId) {
+  const actor = G.actors.find(item => item.id === id && netActorId(item) === netId);
+  return actor ? { id: id, netId: netId } : { id: null, netId: null };
+}
+
+function netPackDonut(donut) {
+  /* Donuts survive their owners. Preserve a reference only while both halves
+     still name the same live actor; this also prevents a recycled numeric id
+     from changing a stale donut's outcome after host migration. */
+  const owner = netPackDonutActor(donut.owner, donut.ownerNetId);
+  const killer = netPackDonutActor(donut.killer, donut.killerNetId);
+  return {
+    id: donut.id,
+    owner: owner.id,
+    killer: killer.id,
+    ownerNetId: owner.netId,
+    killerNetId: killer.netId,
+    x: netRound(donut.x),
+    y: netRound(donut.y),
+    z: netRound(donut.z),
+    t: netRound(donut.t)
+  };
+}
+
+function netPackDonuts() {
+  return G.donuts.slice(0, DONUT_MAX).map(netPackDonut);
+}
+
 function netPackActor(a) {
   const remote = a.controller === 'remote';
   return {
@@ -1607,6 +1634,7 @@ function netPackActor(a) {
     weaponSeq: remote ? a.weaponAck : 0,
     kills: a.kills,
     deaths: a.deaths,
+    confirms: a.confirms,
     streak: a.streak,
     bestStreak: a.bestStreak,
     lastHitBy: a.lastHitBy
@@ -1640,9 +1668,14 @@ function netSendCheckpoint() {
     round: NET.round,
     tick: G.tick,
     time: G.time,
+    mode: G.mode,
     manifestVersion: NET.manifestVersion,
     actors: G.actors.map(netPackCheckpointActor),
-    events: NET.eventQueue.slice()
+    /* The unchanged relay validates the legacy checkpoint event list itself.
+       Keeping v8 confirm feedback beside that list lets the relay forward it
+       into migration without mistaking a new display event for bad state. */
+    events: NET.eventQueue.filter(event => event.kind !== 'confirm'),
+    confirmEvents: NET.eventQueue.filter(event => event.kind === 'confirm')
   });
 }
 
@@ -1807,9 +1840,11 @@ function netAfterSimulation(dt, force) {
       round: NET.round,
       tick: G.tick,
       time: G.time,
+      mode: G.mode,
       eventSeq: NET.eventSeq,
       manifestVersion: NET.manifestVersion,
       actors: G.actors.map(netPackActor),
+      donuts: netPackDonuts(),
       over: !!G.over,
       winner: G.winner ? netActorId(G.winner) : null
     }, !force);
@@ -2002,15 +2037,69 @@ function netSafeCount(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
 }
 
+function netValidDonutState(donut) {
+  const b = MAP.bounds;
+  const actorId = value => Number.isSafeInteger(value) && value > 0 && value <= 100_000;
+  const netId = value => typeof value === 'string' && value.length > 0 && value.length <= 80;
+  const actorRef = (id, identity) =>
+    (id === null && identity === null) || (actorId(id) && netId(identity));
+  return !!(donut && typeof donut === 'object' && !Array.isArray(donut) &&
+    Number.isSafeInteger(donut.id) && donut.id > 0 && donut.id <= 1_000_000 &&
+    actorRef(donut.owner, donut.ownerNetId) &&
+    actorRef(donut.killer, donut.killerNetId) &&
+    netFiniteIn(donut.x, b.minX - 3, b.maxX + 3) &&
+    netFiniteIn(donut.y, -2, 20) &&
+    netFiniteIn(donut.z, b.minZ - 3, b.maxZ + 3) &&
+    netFiniteIn(donut.t, 0, DONUT_LIFETIME));
+}
+
+function netValidSnapshot(message) {
+  if (!message || typeof message !== 'object' || Array.isArray(message) ||
+      message.t !== 'snapshot' || message.v !== NETP.VERSION ||
+      !NETP.isAuthorityEpoch(message.authorityEpoch) ||
+      !Number.isSafeInteger(message.round) || message.round < 1 ||
+      !Number.isSafeInteger(message.tick) || message.tick < 0 ||
+      !netFiniteIn(message.time, 0, 100_000_000) ||
+      !Number.isSafeInteger(message.eventSeq) || message.eventSeq < 0 ||
+      !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
+      (message.mode !== 'dm' && message.mode !== 'kc') ||
+      typeof message.over !== 'boolean' ||
+      !Array.isArray(message.actors) || message.actors.length < 1 ||
+      message.actors.length > 16 ||
+      !Array.isArray(message.donuts) || message.donuts.length > DONUT_MAX ||
+      (message.mode === 'dm' && message.donuts.length > 0)) return false;
+
+  const netIds = new Set();
+  const actorIds = new Map();
+  for (const actor of message.actors) {
+    if (!netValidActorState(actor) || netIds.has(actor.netId) || actorIds.has(actor.id))
+      return false;
+    netIds.add(actor.netId);
+    actorIds.set(actor.id, actor.netId);
+  }
+  const donutIds = new Set();
+  for (const donut of message.donuts) {
+    if (!netValidDonutState(donut) || donutIds.has(donut.id) ||
+        (donut.owner !== null && actorIds.get(donut.owner) !== donut.ownerNetId) ||
+        (donut.killer !== null && actorIds.get(donut.killer) !== donut.killerNetId)) return false;
+    donutIds.add(donut.id);
+  }
+  if (message.winner !== null &&
+      (typeof message.winner !== 'string' || !netIds.has(message.winner))) return false;
+  return !message.over || typeof message.winner === 'string';
+}
+
 function netValidCheckpoint(message) {
   if (!message || typeof message !== 'object' || Array.isArray(message) ||
       message.t !== 'checkpoint' || message.v !== NETP.VERSION ||
       !Number.isSafeInteger(message.tick) || message.tick < 0 ||
       !netFiniteIn(message.time, 0, 100_000_000) ||
+      (message.mode !== 'dm' && message.mode !== 'kc') ||
       !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
       !Array.isArray(message.actors) || message.actors.length < 1 ||
       message.actors.length > 16 ||
-      !Array.isArray(message.events) || message.events.length > 128) return false;
+      !Array.isArray(message.events) || message.events.length > 128 ||
+      !Array.isArray(message.confirmEvents) || message.confirmEvents.length > 128) return false;
   const ids = new Set();
   for (const actor of message.actors) {
     if (!actor || typeof actor !== 'object' || Array.isArray(actor) ||
@@ -2032,7 +2121,8 @@ function netValidCheckpoint(message) {
     }
     ids.add(actor.netId);
   }
-  return message.events.every(event => netValidEvent(event, ids));
+  return message.events.every(event => event.kind !== 'confirm' && netValidEvent(event, ids)) &&
+    message.confirmEvents.every(event => event.kind === 'confirm' && netValidEvent(event, ids));
 }
 
 function netValidActorState(s) {
@@ -2065,6 +2155,7 @@ function netValidActorState(s) {
     Number.isSafeInteger(s.ack) && s.ack >= 0 &&
     Number.isSafeInteger(s.weaponSeq) && s.weaponSeq >= 0 &&
     netSafeCount(s.kills) && netSafeCount(s.deaths) &&
+    netSafeCount(s.confirms) &&
     netSafeCount(s.streak) && netSafeCount(s.bestStreak) &&
     (s.lastHitBy === null ||
       (Number.isSafeInteger(s.lastHitBy) && s.lastHitBy > 0 &&
@@ -2089,6 +2180,34 @@ function netCreateReplica(s) {
   attachCharacter(a);
   G.actors.push(a);
   return a;
+}
+
+function netReconcileDonuts(states) {
+  const incoming = new Map(states.map(state => [state.id, state]));
+  for (let i = G.donuts.length - 1; i >= 0; i--)
+    if (!incoming.has(G.donuts[i].id)) removeDonut(i);
+
+  let nextId = 1;
+  for (const state of states) {
+    let donut = G.donuts.find(item => item.id === state.id);
+    const fresh = !donut;
+    if (!donut) donut = {};
+    donut.id = state.id;
+    donut.owner = state.owner;
+    donut.killer = state.killer;
+    donut.ownerNetId = state.ownerNetId;
+    donut.killerNetId = state.killerNetId;
+    donut.x = state.x;
+    donut.y = state.y;
+    donut.z = state.z;
+    donut.t = state.t;
+    if (fresh) {
+      G.donuts.push(donut);
+      showDonutVisual(donut);
+    }
+    nextId = Math.max(nextId, donut.id + 1);
+  }
+  G.nextDonutId = nextId;
 }
 
 function netPushReplicaSample(a, s, sampleTime) {
@@ -2150,6 +2269,7 @@ function netApplyActorState(a, s, local, sampleTime) {
   }
   a.kills = Math.max(0, Math.floor(s.kills || 0));
   a.deaths = Math.max(0, Math.floor(s.deaths || 0));
+  a.confirms = Math.max(0, Math.floor(s.confirms || 0));
   a.streak = Math.max(0, Math.floor(s.streak || 0));
   a.bestStreak = Math.max(0, Math.floor(s.bestStreak || 0));
 
@@ -2189,17 +2309,9 @@ function netApplyActorState(a, s, local, sampleTime) {
 }
 
 function netApplySnapshot(msg) {
-  if (!Number.isSafeInteger(msg.tick) || msg.tick < 0 || msg.tick <= NET.lastSnapshotTick ||
-      !netFiniteIn(msg.time, 0, 100_000_000) || typeof msg.over !== 'boolean' ||
-      !Number.isSafeInteger(msg.eventSeq) || msg.eventSeq < 0 ||
-      !Number.isSafeInteger(msg.manifestVersion) || msg.manifestVersion < 1 ||
-      !Array.isArray(msg.actors) || msg.actors.length < 1 || msg.actors.length > 16) return;
+  if (!netValidSnapshot(msg) || msg.tick <= NET.lastSnapshotTick) return;
 
-  const seen = new Set();
-  for (const state of msg.actors) {
-    if (!netValidActorState(state) || seen.has(state.netId)) return;
-    seen.add(state.netId);
-  }
+  const seen = new Set(msg.actors.map(state => state.netId));
   if (!seen.has(NET.id)) return;
   /* Read before the manifest is adopted below: on the first snapshot every
      actor is new, and only afterwards does a new one mean somebody arrived. */
@@ -2263,8 +2375,11 @@ function netApplySnapshot(msg) {
   for (const a of G.actors.slice()) {
     if (!a.isPlayer && !seen.has(a.netId)) detachActor(a);
   }
+  setGameMode(msg.mode);
+  netReconcileDonuts(msg.donuts);
 
-  const sig = G.actors.map(a => a.netId + ':' + a.kills + ':' + a.deaths + ':' + a.bestStreak).join('|');
+  const sig = G.mode + '|' + G.actors.map(a =>
+    a.netId + ':' + a.kills + ':' + a.deaths + ':' + a.confirms + ':' + a.bestStreak).join('|');
   if (sig !== NET.scoreSignature) {
     NET.scoreSignature = sig;
     refreshBoard();
@@ -2357,6 +2472,17 @@ function netOnAuthoritativeKill(target, from) {
     streak: from ? from.streak : 0
   });
 }
+function netOnAuthoritativeConfirm(donut, collector, outcome) {
+  const owner = netPackDonutActor(donut.owner, donut.ownerNetId);
+  const killer = netPackDonutActor(donut.killer, donut.killerNetId);
+  netSendEvent('confirm', {
+    collector: netActorId(collector),
+    owner: owner.netId,
+    killer: killer.netId,
+    deny: outcome === 'DENIED',
+    at: [netRound(donut.x), netRound(donut.y), netRound(donut.z)]
+  });
+}
 function netOnAuthoritativeRespawn(a) {
   netSendEvent('respawn', {
     actor: netActorId(a), at: [a.pos.x, a.pos.y, a.pos.z],
@@ -2422,6 +2548,13 @@ function netValidEvent(e, manifest) {
   if (e.kind === 'kill') {
     return netKnownActor(e.target, manifest) &&
       (e.from === null || netKnownActor(e.from, manifest)) && netSafeCount(e.streak);
+  }
+  if (e.kind === 'confirm') {
+    return netKnownActor(e.collector, manifest) &&
+      (e.owner === null || netKnownActor(e.owner, manifest)) &&
+      (e.killer === null || netKnownActor(e.killer, manifest)) &&
+      typeof e.deny === 'boolean' && netEventPoint(e.at) &&
+      (e.deny ? e.owner !== null && e.collector === e.owner : e.collector !== e.owner);
   }
   if (e.kind === 'respawn') {
     return netKnownActor(e.actor, manifest) && netEventPoint(e.at) &&
@@ -2495,10 +2628,20 @@ function netApplyEvent(e) {
     if (target) addKillFeed(from, target);
     if (e.from === NET.id && target) {
       SFX.kill();
-      addFloater('+1', target.pos.x, target.pos.y + 1.6, target.pos.z, '#b8f2d8', true);
+      addFloater(G.mode === 'kc' ? 'KILL' : '+1', target.pos.x, target.pos.y + 1.6,
+        target.pos.z, '#b8f2d8', true);
       if (e.streak >= 3) showHint(e.streak + ' IN A ROW!');
     }
     if (e.target === NET.id) NET.lastKillerId = e.from;
+  } else if (e.kind === 'confirm') {
+    const collector = G.actors.find(a => a.netId === e.collector);
+    const owner = e.owner ? G.actors.find(a => a.netId === e.owner) : collector;
+    const killer = e.killer ? G.actors.find(a => a.netId === e.killer) : null;
+    if (!collector || !owner) return;
+    const outcome = e.deny ? 'DENIED' :
+      (e.collector === e.killer ? 'CONFIRMED' : 'STOLEN');
+    renderDonutOutcome({ x: e.at[0], y: e.at[1], z: e.at[2] },
+      collector, owner, killer, outcome);
   } else if (e.kind === 'respawn') {
     if (e.actor === NET.id) return;
     fxSpawnPuff(e.at[0], e.at[1], e.at[2], C(e.color));

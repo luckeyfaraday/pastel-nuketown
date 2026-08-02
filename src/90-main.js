@@ -211,6 +211,29 @@ function frame(now) {
   PROF.frames++;
 }
 
+/* The title menu returns after a round, so the pressed state is synchronized
+   from the live mode instead of becoming a stale copy of the last click. */
+function syncModePicker(mode) {
+  const picker = document.getElementById('modePicker');
+  const dm = document.getElementById('modeDm');
+  const kc = document.getElementById('modeKc');
+  if (!picker || !dm || !kc) return;
+
+  const guest = typeof netIsGuest === 'function' && netIsGuest();
+  picker.hidden = guest;
+  if (guest) return;
+
+  const active = mode === undefined ? G.mode : mode;
+  const isKC = active === 'kc';
+  dm.setAttribute('aria-pressed', String(!isKC));
+  kc.setAttribute('aria-pressed', String(isKC));
+}
+
+function chooseMode(mode) {
+  if (typeof netIsGuest === 'function' && netIsGuest()) return;
+  syncModePicker(setGameMode(mode));
+}
+
 /* =====================================================================
    BOOT
    ===================================================================== */
@@ -228,6 +251,8 @@ function boot() {
   initTouch();     set(88);
   initAI();        set(96);
   initNetworkUI();
+  const requestedMode = QS.get('mode');
+  setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 
   setupMatch();
   camera.position.set(40, 20, 30); camera.lookAt(0, 3, 0);
@@ -255,6 +280,10 @@ function boot() {
     }
     startMatch();
   });
+
+  document.getElementById('modeDm').addEventListener('click', () => chooseMode('dm'));
+  document.getElementById('modeKc').addEventListener('click', () => chooseMode('kc'));
+  syncModePicker();
 
   requestAnimationFrame(frame);
   if (AUTOSTART) startMatch();
@@ -472,6 +501,7 @@ window.NUKETOWN_DEBUG = {
     const p = G.player;
     p.pos.x = 0; p.pos.y = 60; p.pos.z = 0;      // park the player out of the fight
     const k0 = G.actors.map(a => a.kills);
+    const d0 = Object.assign({}, G.donutStats);
     const n = Math.round((seconds || 45) / FIXED);
     const seen = new Set(); const levels = new Set(); const moved = [];
     const start = G.actors.map(a => ({ x: a.pos.x, z: a.pos.z, d: 0 }));
@@ -487,7 +517,7 @@ window.NUKETOWN_DEBUG = {
       });
     }
     G.actors.forEach((a, j) => { if (!a.isPlayer) moved.push({ name: a.name, dist: +start[j].d.toFixed(1), kills: a.kills - k0[j] }); });
-    return {
+    const report = {
       simSeconds: seconds || 45,
       botKills: moved.reduce((s, m) => s + m.kills, 0),
       statesSeen: Array.from(seen),
@@ -495,6 +525,29 @@ window.NUKETOWN_DEBUG = {
       perBot: moved,
       nan: G.actors.some(a => !Number.isFinite(a.pos.x) || !Number.isFinite(a.pos.y) || !Number.isFinite(a.pos.z))
     };
+    if (G.mode === 'kc') {
+      const donutsSpawned = G.donutStats.spawned - (d0.spawned || 0);
+      const donutsConfirmed = G.donutStats.confirmed - (d0.confirmed || 0);
+      const donutsStolen = G.donutStats.stolen - (d0.stolen || 0);
+      const donutsDenied = G.donutStats.denied - (d0.denied || 0);
+      const donutsExpired = G.donutStats.expired - (d0.expired || 0);
+      const donutsEvicted = G.donutStats.evicted - (d0.evicted || 0);
+      const donutsCollected = donutsConfirmed + donutsStolen + donutsDenied;
+      report.donutsSpawned = donutsSpawned;
+      report.donutsConfirmed = donutsConfirmed;
+      report.donutsStolen = donutsStolen;
+      report.donutsDenied = donutsDenied;
+      report.donutsExpired = donutsExpired;
+      report.donutsEvicted = donutsEvicted;
+      report.collectionRate = donutsSpawned ? donutsCollected / donutsSpawned : 0;
+      report.donuts = {
+        spawned: donutsSpawned, confirmed: donutsConfirmed, stolen: donutsStolen,
+        denied: donutsDenied, expired: donutsExpired, evicted: donutsEvicted,
+        collected: donutsCollected,
+        collectionRate: report.collectionRate
+      };
+    }
+    return report;
   }
 };
 

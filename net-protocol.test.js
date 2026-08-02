@@ -9,6 +9,7 @@ const test = require('node:test');
 const WebSocket = require('ws');
 
 const Protocol = require('./net-protocol.js');
+const SIM = require('./net-sim.js');
 
 function closeEnough(actual, expected, epsilon = 1e-12) {
   assert.ok(
@@ -151,9 +152,48 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 7);
+  assert.equal(Protocol.VERSION, 8);
   assert.equal(Protocol.MAX_PLAYERS, 9);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
+});
+
+test('v8 envelopes are accepted and the breaking v7 envelope is refused', () => {
+  assert.equal(Protocol.sanitizeInput(validInput(), -1, -1).ok, true);
+  const old = Protocol.sanitizeInput(validInput({ v: 7 }), -1, -1);
+  assert.equal(old.ok, false);
+  assert.match(old.error, /version/);
+});
+
+test('the donut wire validator rejects malformed ids, bounds, and lifetimes', () => {
+  const client = SIM.createInstance({ ms: 0 });
+  const valid = {
+    id: 7,
+    owner: 1,
+    killer: 2,
+    ownerNetId: 'host-0001',
+    killerNetId: 'guest-001',
+    x: 0,
+    y: 0.35,
+    z: 0,
+    t: 4.5
+  };
+  assert.equal(client.call('netValidDonutState', valid), true);
+
+  const invalid = [
+    { id: 0 },
+    { owner: 0 },
+    { killer: 'guest-001' },
+    { ownerNetId: '' },
+    { killerNetId: 'x'.repeat(81) },
+    { x: 1000 },
+    { y: 21 },
+    { z: -1000 },
+    { t: 12.001 }
+  ];
+  for (const override of invalid)
+    assert.equal(client.call('netValidDonutState', { ...valid, ...override }), false,
+      `accepted malformed donut ${JSON.stringify(override)}`);
+  assert.equal(client.call('netValidDonutState', []), false);
 });
 
 test('normalizes human-entered room codes and cleans display names', () => {
@@ -654,7 +694,13 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   await expectNoMessage(guest, 'snapshot');
   host.send({
     t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1,
-    round: 1, tick: 7, time: 0.12, eventSeq: 0, manifestVersion: 1, actors: []
+    round: 1, tick: 7, time: 0.12, eventSeq: 0, manifestVersion: 1, actors: [],
+    mode: 'kc',
+    donuts: [{
+      id: 1, owner: 1, killer: 2,
+      ownerNetId: 'peer-1', killerNetId: 'peer-2',
+      x: 0, y: 0.35, z: 0, t: 1.25
+    }]
   });
   assert.deepEqual(await guest.next('snapshot'), {
     t: 'snapshot',
@@ -665,7 +711,13 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     time: 0.12,
     eventSeq: 0,
     manifestVersion: 1,
-    actors: []
+    actors: [],
+    mode: 'kc',
+    donuts: [{
+      id: 1, owner: 1, killer: 2,
+      ownerNetId: 'peer-1', killerNetId: 'peer-2',
+      x: 0, y: 0.35, z: 0, t: 1.25
+    }]
   });
 
   host.send({

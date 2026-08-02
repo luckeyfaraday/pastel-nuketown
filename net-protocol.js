@@ -14,7 +14,11 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  /* 7: a room seats nine, so a full lobby can be nine real players and no
+  /* 8: match mode, kill-confirmed donuts and confirm scores are authoritative
+     state. A version 7 guest cannot represent that state and could become a
+     host after migration, so the two versions must never share a room.
+
+     7: a room seats nine, so a full lobby can be nine real players and no
      bots at all. Two reasons this cannot be additive. A version 6 peer
      refuses any roster longer than four outright — it would watch the fifth
      arrival and then ignore every roster message for the rest of the match.
@@ -28,7 +32,7 @@
      version 5 host receiving a mid-round roster change seats nobody, and the
      arrival becomes a ghost sending input no authority ever applies. Refusing
      the handshake is the only honest outcome, so old and new must not mix. */
-  var VERSION = 7;
+  var VERSION = 8;
   /* Nine seats, because nine is how many combatants the match runs. Any
      smaller and the shortfall is made up with bots no matter how popular the
      room gets, which is the one thing a full room should not have to do. */

@@ -49,7 +49,7 @@ const FIXED = 1 / 60;
 const FILES = [
   'mapspec.js', 'bots.js', 'net-protocol.js',
   'src/10-core.js', 'src/20-world.js', 'src/30-physics.js', 'src/40-weapons.js',
-  'src/50-actors.js', 'src/60-fx.js', 'src/70-game.js', 'src/75-network.js',
+  'src/50-actors.js', 'src/60-fx.js', 'src/70-game.js', 'src/72-pickups.js', 'src/75-network.js',
   'src/78-touch.js', 'src/80-ui.js'
 ];
 
@@ -428,11 +428,16 @@ function createMatch(opts = {}) {
   }
 
   function begin(instance, mode) {
+    const requestedGameMode = mode === 'host'
+      ? (opts.hostMode || opts.mode)
+      : (opts.guestMode || opts.mode);
+    const gameMode = requestedGameMode === 'kc' ? 'kc' : 'dm';
     instance.context.__socket = socketFor(mode);
     instance.context.__members = members;
     instance.run(SIM_BOOT);
     instance.run(`
       CFG.combatants = ${combatants};
+      setGameMode(${JSON.stringify(gameMode)});
       NET.mode = ${JSON.stringify(mode)};
       NET.id = ${JSON.stringify(mode === 'host' ? HOST_ID : GUEST_ID)};
       NET.room = 'SIMRUN';

@@ -127,9 +127,17 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 #board .sw{width:15px;height:15px;border:2.5px solid var(--ink);border-radius:5px;display:inline-block}
 
 /* ---------- title / overlays ---------- */
-.screen{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;
+/* Centred by auto margins rather than by justify-content. A centred column
+   that overflows spills equally past both ends, and the half above the top is
+   unreachable -- no amount of scrolling brings it back, so the title crops.
+   Auto margins collapse to nothing once the content is taller than the
+   viewport, which leaves the overflow entirely at the bottom where scrolling
+   can actually reach it. Looks identical whenever the card does fit. */
+.screen{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:flex-start;
   flex-direction:column;background:radial-gradient(ellipse at 50% 38%,rgba(255,248,240,.26),rgba(180,198,238,.5));
   backdrop-filter:blur(2px);pointer-events:auto;overflow-y:auto;overflow-x:hidden}
+.screen>*:first-child{margin-top:auto}
+.screen>*:last-child{margin-bottom:auto}
 .screen.off{display:none}
 #title{z-index:34}          /* always above the death / match-over cards */
 #title h1{font-family:var(--disp);font-size:clamp(46px,10vw,116px);font-weight:800;line-height:.86;
@@ -189,6 +197,19 @@ body.touch .sens{display:none}
    pair. Unlike .sens it stays up on touch: drag-look goes through the same
    applyLook, so inverting matters to a thumb exactly as much as to a mouse. */
 .look-invert{width:min(330px,100%);pointer-events:auto}
+.mode-picker{width:min(360px,100%);pointer-events:auto;text-align:center}
+.mode-picker-label{display:block;margin-bottom:6px;font-family:var(--disp);font-size:11px;font-weight:700;
+  letter-spacing:.14em;color:var(--ink-soft)}
+.mode-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mode-option{min-width:0;min-height:50px;padding:6px 7px 7px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:2px;white-space:normal;line-height:1.05;font-size:11px}
+.mode-option span{font-weight:800;letter-spacing:.06em}
+.mode-option small{font-family:var(--ui);font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--ink-soft)}
+.mode-option[aria-pressed="true"]{background:linear-gradient(180deg,#fff2c9,#ffe08a);transform:translateY(-1px);
+  box-shadow:0 4px 0 var(--ink)}
+.mode-option:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+.mode-picker-note{margin-top:4px;font-family:var(--disp);font-size:10px;font-weight:600;line-height:1.15;
+  letter-spacing:.035em;color:var(--ink-soft)}
 /* Hosting a room by hand is a minority path now that PLAY picks one, but as an
    underlined line of fine print it read as a caption and nobody found CREATE
    ROOM behind it. It is a real button now — quieter than PLAY, still a button —
@@ -254,6 +275,8 @@ body.touch .sens{display:none}
   border-radius:11px;background:rgba(255,255,255,.72);box-shadow:0 3px 0 var(--ink)}
 .keys span b{font-weight:800;color:#d4638f}
 @media(max-height:760px){
+  .mode-option{min-height:44px;padding-top:5px;padding-bottom:6px}
+  .mode-picker-note{margin-top:3px;font-size:9px}
   #title h1{font-size:clamp(42px,8vw,78px)}
   #title .sub{margin-top:9px}
   #menu,#lobby{margin-top:14px}
@@ -273,6 +296,8 @@ body.touch .sens{display:none}
   #netStart{flex:1 1 180px}
   .menu-btn{font-size:22px;padding:12px 35px 14px}
   .menu-btn.alt,#menu:not(.pause) #play{font-size:17px;padding:12px 18px 14px}
+  .mode-option{padding-left:4px;padding-right:4px;font-size:10px}
+  .mode-option small{font-size:9px}
   .keys{gap:6px;padding:0 6px}
   .keys span{padding:4px 8px 5px}
 }
@@ -293,6 +318,7 @@ body.touch .sens{display:none}
   .identity{padding-top:3px;padding-bottom:3px}
   .menu-btn{padding-top:8px;padding-bottom:10px}
   .menu-btn.alt,#menu:not(.pause) #play{padding-top:8px;padding-bottom:10px}
+  .mode-option{min-height:48px;padding-top:5px;padding-bottom:6px}
   #roomCode{padding-top:5px;padding-bottom:6px}
   .keys span{font-size:10px;padding:2px 7px 3px}
 }
@@ -518,6 +544,20 @@ body.touch .touch-keys{display:flex}
       <input type="checkbox" id="invertY">
       <span>INVERT LOOK (Y)</span>
     </label>
+    <div class="mode-picker setup-only" id="modePicker" role="group" aria-labelledby="modePickerLabel" aria-describedby="modePickerNote">
+      <span class="mode-picker-label" id="modePickerLabel">MATCH MODE</span>
+      <div class="mode-options">
+        <button class="mini-btn mode-option" id="modeDm" type="button" aria-pressed="true">
+          <span>DEATHMATCH</span>
+          <small>25 KILLS</small>
+        </button>
+        <button class="mini-btn mode-option" id="modeKc" type="button" aria-pressed="false">
+          <span>KILL CONFIRMED</span>
+          <small>20 CONFIRMS</small>
+        </button>
+      </div>
+      <p class="mode-picker-note" id="modePickerNote">KILL CONFIRMED: COLLECT THE DONUT AFTER A KILL TO CONFIRM IT.</p>
+    </div>
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
       <button class="menu-btn" id="play">SOLO</button>
@@ -823,7 +863,7 @@ if (typeof THREE === "undefined") {
   'use strict';
 
   const TAU = Math.PI * 2;
-  const MOVING_STATES = new Set(['patrol', 'hunt', 'engage', 'reposition', 'retreat']);
+  const MOVING_STATES = new Set(['patrol', 'hunt', 'engage', 'reposition', 'retreat', 'donut']);
   const SKILLS = {
     easy: {
       reaction: 0.62, turn: 2.35, error: 0.145, minError: 0.035,
@@ -841,6 +881,7 @@ if (typeof THREE === "undefined") {
       burstMax: 1.05, pauseMin: 0.08, pauseMax: 0.24, preferred: 13.0
     }
   };
+  const DONUT_RADIUS = { easy: 12.0, normal: 18.0, hard: 18.0 };
 
   function finite(n, fallback) {
     return Number.isFinite(n) ? n : fallback;
@@ -1374,6 +1415,7 @@ if (typeof THREE === "undefined") {
       pathIndex: 0,
       goal: null,
       goalKind: null,
+      donutId: null,
       nextTargetEval: (hashSeed(id) % 12) * 0.01,
       targetScan: 0,
       nextDecision: 0,
@@ -1451,6 +1493,35 @@ if (typeof THREE === "undefined") {
           finite(actors[i].health, 1) > 0 && actors[i].pos) return actors[i];
     }
     return null;
+  }
+
+  function findDonut(view, id) {
+    const donuts = Array.isArray(view.donuts) ? view.donuts : [];
+    for (let i = 0; i < donuts.length; i++) {
+      if (donuts[i] && donuts[i].id === id) return donuts[i];
+    }
+    return null;
+  }
+
+  function nearestDonut(brain, view, self) {
+    const donuts = Array.isArray(view.donuts) ? view.donuts : [];
+    const radius = DONUT_RADIUS[brain.skill] || DONUT_RADIUS.normal;
+    let best = null;
+    let bestDistance = Infinity;
+    for (let i = 0; i < donuts.length; i++) {
+      const donut = donuts[i];
+      if (!donut) continue;
+      const dx = finite(donut.x, 0) - finite(self.pos.x, 0);
+      const dz = finite(donut.z, 0) - finite(self.pos.z, 0);
+      const distance = Math.hypot(dx, dz);
+      if (distance > radius || Math.abs(finite(donut.y, 0) - finite(self.pos.y, 0)) > 4.2)
+        continue;
+      if (distance < bestDistance) {
+        best = donut;
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 
   function evaluateTarget(brain, view, now) {
@@ -1776,6 +1847,12 @@ if (typeof THREE === "undefined") {
     const magSize = Math.max(1, finite(self.magSize, 1));
     const reserve = Math.max(0, finite(self.reserve, 0));
     const inContact = !!target && (visible || now - brain.targetSeenAt < 1.0);
+    const canCollect = view.mode === 'kc' ||
+      (view.mode == null && Array.isArray(view.donuts) && view.donuts.length > 0);
+    let donut = brain.state === 'donut' && brain.donutId != null
+      ? findDonut(view, brain.donutId) : null;
+    if (!donut) brain.donutId = null;
+    if (canCollect && !donut) donut = nearestDonut(brain, view, self);
     let reload = false;
 
     if (brain.state === 'spawn' && now - brain.stateSince > 0.18) {
@@ -1791,6 +1868,11 @@ if (typeof THREE === "undefined") {
       setState(brain, 'reload', now);
     } else if (target && healthRatio < 0.25) {
       setState(brain, 'retreat', now);
+    } else if (brain.state === 'donut' && donut && brain.goal &&
+      brain.donutId === donut.id && dist2D(self.pos, brain.goal) >= 1.0 &&
+      now - brain.stateSince < 8.0) {
+      // Keep a pickup goal briefly so a new kill elsewhere cannot make a bot
+      // turn around before it reaches the donut it already chose.
     } else if (brain.state === 'reposition' && brain.goal &&
       dist2D(self.pos, brain.goal) >= 1.0 && now - brain.stateSince < 12.0) {
       // Commit long enough to actually reach cover or change floors instead of
@@ -1802,6 +1884,10 @@ if (typeof THREE === "undefined") {
       } else {
         setState(brain, 'engage', now);
       }
+    } else if (canCollect && donut) {
+      brain.donutId = donut.id;
+      setGoal(brain, { x: finite(donut.x, 0), y: finite(donut.y, 0), z: finite(donut.z, 0) }, 'donut');
+      setState(brain, 'donut', now);
     } else if (target && brain.lastKnown && now - brain.targetSeenAt <= 3.6) {
       setState(brain, 'hunt', now);
     } else if (brain.state === 'reload' && !self.reloading && !reload) {
@@ -1836,6 +1922,15 @@ if (typeof THREE === "undefined") {
       if (dist2D(self.pos, huntGoal) < 1.2) {
         brain.targetId = null;
         brain.lastKnown = null;
+        setState(brain, 'patrol', now);
+      }
+    } else if (brain.state === 'donut' && brain.goal) {
+      ensurePath(brain, view, brain.goal);
+      movement = followPath(brain, view);
+      if (!donut || (dist2D(self.pos, donut) < 0.95 &&
+          Math.abs(finite(self.pos.y, 0) - finite(donut.y, 0)) < 2.0)) {
+        brain.donutId = null;
+        setGoal(brain, null, null);
         setState(brain, 'patrol', now);
       }
     } else if ((brain.state === 'retreat' || brain.state === 'reposition') &&
@@ -1912,7 +2007,11 @@ if (typeof THREE === "undefined") {
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  /* 7: a room seats nine, so a full lobby can be nine real players and no
+  /* 8: match mode, kill-confirmed donuts and confirm scores are authoritative
+     state. A version 7 guest cannot represent that state and could become a
+     host after migration, so the two versions must never share a room.
+
+     7: a room seats nine, so a full lobby can be nine real players and no
      bots at all. Two reasons this cannot be additive. A version 6 peer
      refuses any roster longer than four outright — it would watch the fifth
      arrival and then ignore every roster message for the rest of the match.
@@ -1926,7 +2025,7 @@ if (typeof THREE === "undefined") {
      version 5 host receiving a mid-round roster change seats nobody, and the
      arrival becomes a ghost sending input no authority ever applies. Refusing
      the handshake is the only honest outcome, so old and new must not mix. */
-  var VERSION = 7;
+  var VERSION = 8;
   /* Nine seats, because nine is how many combatants the match runs. Any
      smaller and the shortfall is made up with bots no matter how popular the
      room gets, which is the one thing a full room should not have to do. */
@@ -5891,7 +5990,9 @@ const SFX = {
 const CFG = {
   bots: 8,
   combatants: 9,
+  mode: 'dm',
   killsToWin: 25,
+  confirmsToWin: 20,
   respawn: 3.0,
   spawnShield: 1.6,
   playerSpeed: 5.9,
@@ -5903,10 +6004,33 @@ const CFG = {
 
 const G = {
   actors: [], player: null, nav: null, aiOK: false, aiErr: null,
+  mode: CFG.mode, donuts: [], nextDonutId: 1,
+  donutStats: { spawned: 0, confirmed: 0, stolen: 0, denied: 0, expired: 0, evicted: 0 },
   time: 0, started: false, over: false, paused: false,
   winner: null, frozen: false, hintT: 0,
   fixedAcc: 0, tick: 0
 };
+
+function setGameMode(mode) {
+  G.mode = mode === 'kc' ? 'kc' : 'dm';
+  if (G.started && typeof updateHUD === 'function') updateHUD();
+  return G.mode;
+}
+
+function matchTarget() {
+  return G.mode === 'kc' ? CFG.confirmsToWin : CFG.killsToWin;
+}
+
+function checkMatchWin() {
+  if (!G.actors.length) return;
+  if (G.mode === 'kc') {
+    const top = G.actors.reduce((m, a) => a.confirms > m.confirms ? a : m, G.actors[0]);
+    if (top.confirms >= CFG.confirmsToWin && !G.over) endMatch(top);
+  } else {
+    const top = G.actors.reduce((m, a) => a.kills > m.kills ? a : m, G.actors[0]);
+    if (top.kills >= CFG.killsToWin && !G.over) endMatch(top);
+  }
+}
 
 /* Impact debris takes the colour of what it hit, so sugar dust on a lawn is
    green and on a roof is pink. The material tag rides along on the raycast
@@ -5950,7 +6074,7 @@ function makeActor(opts) {
     health: 100, maxHealth: 100, alive: true,
     deathT: 0, deathDir: 1, spawnT: 0, respawnT: 0,
     weapon: opts.weapon || 'smg', ammo: 0, reserve: 0, reloadT: 0, fireCd: 0,
-    kills: 0, deaths: 0, streak: 0, bestStreak: 0,
+    kills: 0, deaths: 0, streak: 0, bestStreak: 0, confirms: 0,
     onGround: false, stepPhase: 0,
     lastHitBy: null, lastHitT: -99, shield: 0,
     brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
@@ -6209,6 +6333,7 @@ function setupMatch() {
      has to put it back while there is still a mesh to put back, and it must
      not carry a reference to an actor this rebuild is about to discard. */
   killcamEnd();
+  resetDonuts();
   for (const a of G.actors) disposeActorVisuals(a);
   G.actors.length = 0;
   _nextId = 1;
@@ -6480,17 +6605,18 @@ function killActor(target, from) {
     from.bestStreak = Math.max(from.bestStreak, from.streak);
     if (from.isPlayer) {
       SFX.kill();
-      addFloater('+1', target.pos.x, target.pos.y + 1.6, target.pos.z, '#b8f2d8', true);
+      addFloater(G.mode === 'kc' ? 'KILL' : '+1', target.pos.x, target.pos.y + 1.6,
+                 target.pos.z, '#b8f2d8', true);
       if (from.streak >= 3) showHint(from.streak + ' IN A ROW!');
     }
   }
+  if (G.mode === 'kc') spawnDonut(target, from);
   addKillFeed(from, target);
   if (typeof netOnAuthoritativeKill === 'function') netOnAuthoritativeKill(target, from);
   if (target.isPlayer) { SFX.die(); showDeadScreen(from); }
   refreshBoard();
 
-  const top = G.actors.reduce((m, a) => a.kills > m.kills ? a : m, G.actors[0]);
-  if (top.kills >= CFG.killsToWin && !G.over) endMatch(top);
+  checkMatchWin();
 }
 
 function endMatch(winner) {
@@ -6970,7 +7096,10 @@ function stepRemotePlayer(a, dt) {
 const _viewSelf = { id: 0, pos: null, vel: null, yaw: 0, pitch: 0, health: 0, maxHealth: 0,
                     ammo: 0, magSize: 0, reserve: 0, onGround: false, reloading: false };
 const _viewOthers = [];
-const _view = { time: 0, nav: null, rng: rng, self: _viewSelf, actors: _viewOthers, canSee: canSee };
+const _view = {
+  time: 0, nav: null, rng: rng, self: _viewSelf, actors: _viewOthers,
+  donuts: [], mode: 'dm', canSee: canSee
+};
 
 function stepBot(a, dt) {
   if (!a.alive) {
@@ -6987,7 +7116,9 @@ function stepBot(a, dt) {
   _viewSelf.health = a.health; _viewSelf.maxHealth = a.maxHealth;
   _viewSelf.ammo = a.ammo; _viewSelf.magSize = w.mag; _viewSelf.reserve = a.reserve;
   _viewSelf.onGround = a.onGround; _viewSelf.reloading = a.reloadT > 0;
-  _view.time = G.time; _view.nav = G.nav;
+  _view.time = G.time; _view.nav = G.nav; _view.mode = G.mode;
+  _view.donuts.length = 0;
+  if (G.mode === 'kc') for (const donut of G.donuts) _view.donuts.push(donut);
 
   let it;
   if (a.brain && G.aiOK) {
@@ -7043,6 +7174,7 @@ function simulate(dt) {
       stepBot(a, dt);
     }
   }
+  updateDonuts(dt);
 
   // mannequins settle back upright after being shot
   for (const m of WORLD.mannequins) {
@@ -7081,9 +7213,397 @@ function startMatch() {
   const again = document.getElementById('again');
   again.disabled = false;
   again.textContent = 'REMATCH';
-  showHint('FIRST TO ' + CFG.killsToWin + ' KILLS');
+  showHint('FIRST TO ' + matchTarget() + (G.mode === 'kc' ? ' CONFIRMS' : ' KILLS'));
   touchEnterImmersive();                  // no-op unless this is a phone
   requestLock();
+}
+</script>
+<script>/* ===== src/72-pickups.js ===== */
+/* =====================================================================
+   PASTEL NUKETOWN — kill-confirmed donuts
+   ===================================================================== */
+
+const DONUT_MAX = 24;
+const DONUT_LIFETIME = 12.0;
+const DONUT_LIFT = 0.35;
+const DONUT_PICKUP_RADIUS = 1.1;
+const DONUT_PICKUP_HEIGHT = 2.0;
+
+/* One shared geometry and a fixed mesh pool keep a busy match from allocating
+   a new GPU object for every death. The pool is deliberately separate from the
+   gameplay list, so collection and eviction never leave a mesh behind. */
+const DONUT_RENDER = {
+  geometry: null, material: null, meshes: [], used: [], slots: new Map(), ready: false
+};
+
+/* ---- the look ------------------------------------------------------------
+   The pickup is the donut emoji: a fat dough ring with a small hole, a thick
+   pink glaze poured over the top that drips unevenly past the outer edge, and
+   multicoloured sprinkles.
+
+   All three are baked into ONE flat-shaded, vertex-coloured buffer, so a donut
+   is still a single Mesh sharing one geometry and one material with the other
+   23 in the pool. Sprinkles as their own meshes would have put 24 x 38 extra
+   nodes in the scene graph for something that never moves relative to the
+   dough; baked, they cost triangles in a buffer that is uploaded once. */
+const DONUT_RING = 0.335;     // ring centre to the middle of the dough tube
+const DONUT_TUBE = 0.155;     // fat dough: outer radius 0.49, hole radius 0.18
+const DONUT_SQUASH = 0.76;    // a donut sits flatter than a circular-section torus
+const DONUT_ICE = 0.034;      // how far the glaze stands off the dough
+const DONUT_GLAZE_IN = Math.PI - 0.28;  // icing stops short of the hole's lip
+const DONUT_SEG_U = 26;       // segments around the ring
+const DONUT_SEG_V = 12;       // segments around the dough tube
+const DONUT_SEG_ICE = 8;      // segments across the glaze band
+const DONUT_SPRINKLES = 38;
+const DONUT_TILT = 0.36;      // lean, so the glazed face reads from eye height
+
+/* The glaze edge has to meet itself after a full turn around the ring, so the
+   drip is harmonics of u rather than noise. Amplitudes sum to 1: range [0,1].
+   The band it drives runs from just above the outer equator down to a proper
+   run-off, which is what leaves a tan stripe of bare dough showing under the
+   icing — without it the pickup is a pink pillow, not a donut. */
+function donutDrip(u) {
+  return 0.5 + 0.5 * (0.55 * Math.sin(3 * u + 0.9) +
+                      0.30 * Math.sin(5 * u + 2.3) +
+                      0.15 * Math.sin(8 * u + 4.1));
+}
+
+/* One sprinkle: a box lying on the glaze, oriented by the surface frame
+   (L along its length, W across, N out of the glaze). L x W = N, which is the
+   winding GeoBuilder needs for every face to end up pointing outwards. */
+function donutSprinkle(gb, c, L, W, N, hl, hw, hn, col) {
+  const p = (a, b, d) => [
+    c[0] + L[0] * a * hl + W[0] * b * hw + N[0] * d * hn,
+    c[1] + L[1] * a * hl + W[1] * b * hw + N[1] * d * hn,
+    c[2] + L[2] * a * hl + W[2] * b * hw + N[2] * d * hn
+  ];
+  gb.quad(p(-1, -1,  1), p( 1, -1,  1), p( 1,  1,  1), p(-1,  1,  1), col, true);
+  gb.quad(p( 1, -1, -1), p(-1, -1, -1), p(-1,  1, -1), p( 1,  1, -1), col, true);
+  gb.quad(p( 1, -1, -1), p( 1,  1, -1), p( 1,  1,  1), p( 1, -1,  1), col, true);
+  gb.quad(p(-1, -1, -1), p(-1, -1,  1), p(-1,  1,  1), p(-1,  1, -1), col, true);
+  gb.quad(p(-1,  1, -1), p(-1,  1,  1), p( 1,  1,  1), p( 1,  1, -1), col, true);
+  gb.quad(p(-1, -1, -1), p( 1, -1, -1), p( 1, -1,  1), p(-1, -1,  1), col, true);
+}
+
+/* Accumulates dough + glaze + sprinkles into one GeoBuilder. Colours are
+   picked from small pre-built arrays rather than blended at build time, so
+   nothing here needs a live THREE.Color to do arithmetic. */
+function buildDonutGeo() {
+  const gb = new GeoBuilder();
+  const R = DONUT_RING, r = DONUT_TUBE, k = DONUT_SQUASH;
+  /* golden, tan, toasted — the dough reads warm against the pastel ground */
+  const DOUGH = [C(0xd9a066), C(0xe8b479), C(0xf3c894)];
+  /* deep at the drip, lightest across the top, shaded again inside the hole */
+  const GLAZE = [C(0xf279b4), C(0xff8fc4), C(0xff9dcc), C(0xffb6db),
+                 C(0xffa4d0), C(0xf98cc0)];
+  const GLAZE_RIM = C(0xef6faa);
+  const SPRINKLE = [FX_MINT, FX_LILAC, FX_SUGAR, FX_BUBBLE,
+                    C(PAL.houseA), C(0xffc4a6)];
+
+  /* Squashed torus: u goes around the ring, v around the tube.
+     v = 0 outer equator, +PI/2 top, PI the hole's lip, -PI/2 underside.
+     `off` pushes a point out along the surface normal, which is how the glaze
+     is built — a fatter tube would have hung over the hole and closed it up. */
+  const nrm = (u, v) => {
+    const nx = k * Math.cos(v) * Math.cos(u), ny = Math.sin(v);
+    const nz = k * Math.cos(v) * Math.sin(u);
+    const l = Math.hypot(nx, ny, nz) || 1;
+    return [nx / l, ny / l, nz / l];
+  };
+  const at = (u, v, off) => {
+    const s = R + r * Math.cos(v), n = nrm(u, v);
+    return [s * Math.cos(u) + n[0] * off, k * r * Math.sin(v) + n[1] * off,
+            s * Math.sin(u) + n[2] * off];
+  };
+  /* Scalloped, and deliberately peaked: raising the wobble to a power keeps the
+     icing sitting on the upper flank for most of the way round and lets it run
+     right down the side in a few places. A uniform edge enrobes the whole ring
+     and loses the tan band that says "dough" at a glance. */
+  const edgeV = u => 0.14 - 0.88 * Math.pow(donutDrip(u), 1.8);
+  /* full thickness across the top, thinning to a lip where it meets the hole */
+  const thick = t => DONUT_ICE * (0.30 + 0.70 * Math.min(1, (1 - t) / 0.20));
+
+  for (let i = 0; i < DONUT_SEG_U; i++) {
+    const u0 = i / DONUT_SEG_U * TAU, u1 = (i + 1) / DONUT_SEG_U * TAU;
+
+    /* dough: the whole tube, so the ring is solid under the glaze */
+    for (let j = 0; j < DONUT_SEG_V; j++) {
+      const v0 = j / DONUT_SEG_V * TAU, v1 = (j + 1) / DONUT_SEG_V * TAU;
+      const lift = Math.sin((v0 + v1) * 0.5);
+      const col = DOUGH[lift < -0.4 ? 0 : (lift < 0.35 ? 1 : 2)];
+      gb.quad(at(u0, v0, 0), at(u0, v1, 0), at(u1, v1, 0), at(u1, v0, 0), col, true);
+    }
+
+    /* glaze: a shell from the drip edge, over the top, down to the hole */
+    const e0 = edgeV(u0), e1 = edgeV(u1);
+    for (let j = 0; j < DONUT_SEG_ICE; j++) {
+      const t0 = j / DONUT_SEG_ICE, t1 = (j + 1) / DONUT_SEG_ICE;
+      const col = GLAZE[clamp(Math.floor((t0 + t1) * 0.5 * GLAZE.length), 0, GLAZE.length - 1)];
+      gb.quad(at(u0, lerp(e0, DONUT_GLAZE_IN, t0), thick(t0)),
+              at(u0, lerp(e0, DONUT_GLAZE_IN, t1), thick(t1)),
+              at(u1, lerp(e1, DONUT_GLAZE_IN, t1), thick(t1)),
+              at(u1, lerp(e1, DONUT_GLAZE_IN, t0), thick(t0)), col, true);
+    }
+
+    /* the rims are what makes the icing a thick layer instead of a decal */
+    gb.quad(at(u0, e0, thick(0)), at(u1, e1, thick(0)),
+            at(u1, e1, 0), at(u0, e0, 0), GLAZE_RIM, true);
+    gb.quad(at(u0, DONUT_GLAZE_IN, 0), at(u1, DONUT_GLAZE_IN, 0),
+            at(u1, DONUT_GLAZE_IN, thick(1)), at(u0, DONUT_GLAZE_IN, thick(1)),
+            GLAZE_RIM, true);
+  }
+
+  /* Sprinkles spread by the golden angle so they never line up with the ring
+     segments, and sit in a band that reaches the outer flank — a player
+     looking at the donut from across the street sees them side-on. */
+  const srng = mulberry32(0x5B12C7);
+  const GOLD = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < DONUT_SPRINKLES; i++) {
+    const u = (i * GOLD) % TAU;
+    const lo = edgeV(u) + 0.12, hi = DONUT_GLAZE_IN - 0.25;
+    const v = lo + (hi - lo) * srng();
+    const n = nrm(u, v);
+    const p = at(u, v, thick((v - edgeV(u)) / (DONUT_GLAZE_IN - edgeV(u))));
+    const t1 = [-Math.sin(u), 0, Math.cos(u)];
+    const t2 = [n[1] * t1[2] - n[2] * t1[1], n[2] * t1[0] - n[0] * t1[2],
+                n[0] * t1[1] - n[1] * t1[0]];
+    const a = srng() * TAU, ca = Math.cos(a), sa = Math.sin(a);
+    const L = [ca * t1[0] + sa * t2[0], ca * t1[1] + sa * t2[1], ca * t1[2] + sa * t2[2]];
+    const W = [n[1] * L[2] - n[2] * L[1], n[2] * L[0] - n[0] * L[2],
+               n[0] * L[1] - n[1] * L[0]];
+    const hn = 0.019;
+    const c = [p[0] + n[0] * hn * 0.4, p[1] + n[1] * hn * 0.4, p[2] + n[2] * hn * 0.4];
+    donutSprinkle(gb, c, L, W, n, 0.05, hn, hn, SPRINKLE[i % SPRINKLE.length]);
+  }
+  return gb;
+}
+
+function resetDonuts() {
+  for (const donut of G.donuts) hideDonutVisual(donut);
+  G.donuts.length = 0;
+  G.nextDonutId = 1;
+  if (!G.donutStats) G.donutStats = {};
+  G.donutStats.spawned = 0;
+  G.donutStats.confirmed = 0;
+  G.donutStats.stolen = 0;
+  G.donutStats.denied = 0;
+  G.donutStats.expired = 0;
+  G.donutStats.evicted = 0;
+}
+
+function ensureDonutPool() {
+  if (DONUT_RENDER.ready || typeof scene === 'undefined' || !scene) return;
+  try {
+    /* GeoBuilder.mesh() hands back the vertex-coloured toon material the rest
+       of the town uses, with the Lambert fallback intact. Its mesh becomes the
+       first pool slot; the other 23 share its geometry and material. */
+    const proto = buildDonutGeo().mesh({ emissive: 0xfff4df });
+    DONUT_RENDER.geometry = proto.geometry;
+    DONUT_RENDER.material = proto.material;
+    /* a little glow so the pickup still reads pink in a doorway's shadow */
+    DONUT_RENDER.material.emissiveIntensity = 0.2;
+    for (let i = 0; i < DONUT_MAX; i++) {
+      const mesh = i === 0 ? proto
+        : new THREE.Mesh(DONUT_RENDER.geometry, DONUT_RENDER.material);
+      mesh.visible = false;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      DONUT_RENDER.meshes.push(mesh);
+      DONUT_RENDER.used.push(false);
+    }
+    DONUT_RENDER.ready = true;
+  } catch (e) {
+    /* A headless or partially booted renderer should not stop the simulation. */
+    DONUT_RENDER.geometry = null;
+    DONUT_RENDER.material = null;
+    DONUT_RENDER.meshes.length = 0;
+    DONUT_RENDER.used.length = 0;
+  }
+}
+
+function hideDonutVisual(donut) {
+  if (!donut) return;
+  const slot = DONUT_RENDER.slots.get(donut.id);
+  if (slot === undefined) return;
+  const mesh = DONUT_RENDER.meshes[slot];
+  if (mesh) mesh.visible = false;
+  DONUT_RENDER.used[slot] = false;
+  DONUT_RENDER.slots.delete(donut.id);
+}
+
+function showDonutVisual(donut) {
+  ensureDonutPool();
+  if (!DONUT_RENDER.ready) return;
+  let slot = -1;
+  for (let i = 0; i < DONUT_RENDER.used.length; i++) {
+    if (!DONUT_RENDER.used[i]) { slot = i; break; }
+  }
+  if (slot < 0) return;
+  const mesh = DONUT_RENDER.meshes[slot];
+  DONUT_RENDER.used[slot] = true;
+  DONUT_RENDER.slots.set(donut.id, slot);
+  mesh.visible = true;
+  mesh.position.set(donut.x, donut.y, donut.z);
+  mesh.rotation.set(0, 0, DONUT_TILT);
+}
+
+function removeDonut(index) {
+  const donut = G.donuts[index];
+  if (!donut) return null;
+  hideDonutVisual(donut);
+  G.donuts.splice(index, 1);
+  return donut;
+}
+
+function donutGroundY(x, y, z) {
+  const ox = Number.isFinite(x) ? x : 0;
+  const oy = Number.isFinite(y) ? y + 0.05 : 0.05;
+  const oz = Number.isFinite(z) ? z : 0;
+  const hit = raycastMap(ox, oy, oz, 0, -1, 0, 64);
+  if (hit && Number.isFinite(hit.py)) return hit.py + DONUT_LIFT;
+  /* The ground plane is the safest fallback for an off-map death: it keeps
+     the pickup visible and prevents a missed ray from creating an unreachable
+     floating entity. */
+  return DONUT_LIFT;
+}
+
+function spawnDonut(owner, killer) {
+  if (!owner || G.mode !== 'kc' ||
+      (typeof netIsGuest === 'function' && netIsGuest())) return null;
+  if (G.donuts.length >= DONUT_MAX) {
+    let oldest = 0;
+    for (let i = 1; i < G.donuts.length; i++) {
+      if (G.donuts[i].t > G.donuts[oldest].t) oldest = i;
+    }
+    removeDonut(oldest);
+    G.donutStats.evicted++;
+  }
+
+  const donut = {
+    id: G.nextDonutId++,
+    owner: owner.id,
+    killer: killer ? killer.id : null,
+    ownerNetId: owner.netId || null,
+    killerNetId: killer ? (killer.netId || null) : null,
+    x: Number.isFinite(owner.pos.x) ? owner.pos.x : 0,
+    y: donutGroundY(owner.pos.x, owner.pos.y, owner.pos.z),
+    z: Number.isFinite(owner.pos.z) ? owner.pos.z : 0,
+    t: 0
+  };
+  G.donuts.push(donut);
+  G.donutStats.spawned++;
+  showDonutVisual(donut);
+  return donut;
+}
+
+function donutActor(id) {
+  return G.actors.find(actor => actor.id === id) || null;
+}
+
+function donutReferenceActor(id, netId) {
+  const actor = donutActor(id);
+  if (!actor || typeof netIsMultiplayer !== 'function' || !netIsMultiplayer()) return actor;
+  if (typeof netPackDonutActor !== 'function') return null;
+  return netPackDonutActor(id, netId).id === actor.id ? actor : null;
+}
+
+function donutOutcome(owner, killer, collector) {
+  if (collector === owner) return 'DENIED';
+  return collector === killer ? 'CONFIRMED' : 'STOLEN';
+}
+
+function renderDonutOutcome(donut, collector, owner, killer, outcome) {
+  if (typeof addKillFeed === 'function') addKillFeed(collector, owner, outcome);
+  const x = donut.x, y = donut.y + 0.45, z = donut.z;
+  if (collector.isPlayer) {
+    if (typeof addFloater === 'function') {
+      const color = outcome === 'CONFIRMED' ? '#b8f2d8' :
+        (outcome === 'STOLEN' ? '#ff9dcc' : '#d8baff');
+      addFloater(outcome, x, y, z, color, true);
+    }
+    if (outcome === 'CONFIRMED') SFX.kill();
+    else SFX.ui();
+  } else if (killer && killer.isPlayer && outcome === 'STOLEN') {
+    if (typeof addFloater === 'function') addFloater('STOLEN', x, y, z, '#ff9dcc', true);
+    SFX.ui();
+  }
+}
+
+function reportDonutOutcome(donut, collector, owner, killer, outcome) {
+  if (outcome === 'CONFIRMED' || outcome === 'STOLEN') collector.confirms++;
+  if (outcome === 'CONFIRMED') G.donutStats.confirmed++;
+  else if (outcome === 'DENIED') G.donutStats.denied++;
+  else if (outcome === 'STOLEN') G.donutStats.stolen++;
+  if (typeof netOnAuthoritativeConfirm === 'function')
+    netOnAuthoritativeConfirm(donut, collector, outcome);
+  renderDonutOutcome(donut, collector, owner || collector, killer, outcome);
+}
+
+function donutTouchesActor(donut, actor) {
+  if (!actor || !actor.alive) return false;
+  const horizontal = Math.hypot(actor.pos.x - donut.x, actor.pos.z - donut.z);
+  const vertical = Math.abs(actor.pos.y - donut.y);
+  return horizontal <= DONUT_PICKUP_RADIUS && vertical <= DONUT_PICKUP_HEIGHT;
+}
+
+function animateDonuts() {
+  for (const donut of G.donuts) {
+    const slot = DONUT_RENDER.slots.get(donut.id);
+    const mesh = slot === undefined ? null : DONUT_RENDER.meshes[slot];
+    if (!mesh) continue;
+    mesh.position.set(donut.x, donut.y + Math.sin((G.time + donut.id) * 2.1) * 0.08, donut.z);
+    /* Euler XYZ applies Z first, so the lean is baked into the donut's own
+       frame and the Y spin walks it round the compass: the glazed face is
+       shown to every corner of the map in turn instead of only to the north.
+       The X term is a slow nod on top of that. */
+    mesh.rotation.y = (G.time * 1.1 + donut.id * 0.7) % TAU;
+    mesh.rotation.z = DONUT_TILT;
+    mesh.rotation.x = Math.sin((G.time + donut.id) * 1.4) * 0.12;
+  }
+}
+
+function updateDonuts(dt) {
+  if (G.mode !== 'kc') return;
+  if (typeof netIsGuest === 'function' && netIsGuest()) {
+    /* The host may disagree because it has not received this movement yet.
+       Removing only the local replica makes contact feel immediate without
+       promising a score; a still-present donut returns in the next snapshot. */
+    for (let i = G.donuts.length - 1; i >= 0; i--)
+      if (donutTouchesActor(G.donuts[i], G.player)) removeDonut(i);
+    animateDonuts();
+    return;
+  }
+  for (let i = G.donuts.length - 1; i >= 0; i--) {
+    const donut = G.donuts[i];
+    donut.t += dt;
+    if (donut.t >= DONUT_LIFETIME) {
+      removeDonut(i);
+      G.donutStats.expired++;
+    }
+  }
+
+  for (let i = G.donuts.length - 1; i >= 0; i--) {
+    const donut = G.donuts[i];
+    let collector = null;
+    for (const actor of G.actors) {
+      if (donutTouchesActor(donut, actor)) {
+        collector = actor;
+        break;
+      }
+    }
+    if (!collector) continue;
+    const owner = donutReferenceActor(donut.owner, donut.ownerNetId);
+    const killer = donutReferenceActor(donut.killer, donut.killerNetId);
+    const outcome = donutOutcome(owner, killer, collector);
+    removeDonut(i);
+    reportDonutOutcome(donut, collector, owner, killer, outcome);
+    refreshBoard();
+    checkMatchWin();
+    if (G.over) break;
+  }
+
+  animateDonuts();
 }
 </script>
 <script>/* ===== src/75-network.js ===== */
@@ -7901,6 +8421,10 @@ function netHandleWire(raw) {
     NET.id = msg.id;
     NET.room = room;
     NET.mode = msg.role === 'host' ? 'host' : 'guest';
+    /* A guest has not learned the match mode yet. Keep the lobby neutral until
+       the authority's first snapshot arrives, regardless of the URL that led
+       this browser here; a host keeps the mode it chose before creating. */
+    if (netIsGuest()) setGameMode(CFG.mode);
     NET.phase = 'lobby';
     NET.members = members;
     NET.authorityEpoch = msg.authorityEpoch;
@@ -8221,30 +8745,20 @@ function netReturnToLobbyAfterHostChange(hostId) {
 
 function netValidMigrationSnapshot(snapshot, previousEpoch, round) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) ||
-      snapshot.t !== 'snapshot' || snapshot.v !== NETP.VERSION ||
       snapshot.authorityEpoch !== previousEpoch || snapshot.round !== round ||
-      !Number.isSafeInteger(snapshot.tick) || snapshot.tick < 0 ||
-      !netFiniteIn(snapshot.time, 0, 100_000_000) ||
-      !Number.isSafeInteger(snapshot.eventSeq) || snapshot.eventSeq < 0 ||
-      !Number.isSafeInteger(snapshot.manifestVersion) ||
-      snapshot.manifestVersion < 1 || typeof snapshot.over !== 'boolean' ||
-      !Array.isArray(snapshot.actors) || snapshot.actors.length < 1 ||
-      snapshot.actors.length > 16) return false;
-  const ids = new Set();
-  for (const actor of snapshot.actors) {
-    if (!netValidActorState(actor) || ids.has(actor.netId)) return false;
-    ids.add(actor.netId);
-  }
+      !netValidSnapshot(snapshot)) return false;
+  const ids = new Set(snapshot.actors.map(actor => actor.netId));
   if (!ids.has(NET.id)) return false;
-  if (snapshot.winner !== null &&
-      (typeof snapshot.winner !== 'string' || !ids.has(snapshot.winner))) return false;
-  if (snapshot.over &&
-      (typeof snapshot.winner !== 'string' || !ids.has(snapshot.winner))) return false;
   return true;
 }
 
 function netCheckpointMetadata(checkpoint) {
   return new Map(checkpoint.actors.map(actor => [actor.netId, actor]));
+}
+
+function netCheckpointEvents(checkpoint) {
+  return checkpoint.events.concat(checkpoint.confirmEvents)
+    .sort((a, b) => a.id - b.id);
 }
 
 function netBotOrdinal(netId) {
@@ -8288,6 +8802,7 @@ function netHydrateActor(actor, state, metadata, local) {
   actor.reloadT = state.reloadT;
   actor.fireCd = 0;
   actor.kills = state.kills; actor.deaths = state.deaths;
+  actor.confirms = state.confirms;
   actor.streak = state.streak; actor.bestStreak = state.bestStreak;
   actor.lastHitBy = state.lastHitBy;
   actor.stepPhase = 0;
@@ -8375,6 +8890,8 @@ function netHydrateMigration(snapshot, checkpoint) {
     : null;
   if (snapshot.over && !G.winner) return false;
   G.fixedAcc = 0;
+  setGameMode(snapshot.mode);
+  netReconcileDonuts(snapshot.donuts);
 
   NET.actorManifest = manifest;
   NET.manifestVersion = snapshot.manifestVersion + (pruned ? 1 : 0);
@@ -8387,12 +8904,13 @@ function netHydrateMigration(snapshot, checkpoint) {
   NET.pendingSteps = [];
   NET.inputSentTimes.clear();
   NET.lastInputAck = NET.inputSeq;
+  const checkpointEvents = netCheckpointEvents(checkpoint);
   NET.eventSeq = Math.max(
     snapshot.eventSeq,
-    ...checkpoint.events.map(event => event.id)
+    ...checkpointEvents.map(event => event.id)
   );
   NET.eventQueue = netIsHost()
-    ? checkpoint.events.filter(event => netValidEvent(event, manifest))
+    ? checkpointEvents.filter(event => netValidEvent(event, manifest))
     : [];
   NET.checkpointDirty = pruned;
   NET.snapshotAcc = 0;
@@ -8437,6 +8955,7 @@ function netBeginSeamlessMigration(change, previousEpoch) {
       !netValidCheckpoint(checkpoint) ||
       checkpoint.authorityEpoch !== sourceEpoch ||
       checkpoint.round !== change.round ||
+      checkpoint.mode !== snapshot.mode ||
       checkpoint.manifestVersion !== snapshot.manifestVersion) return false;
   const metadata = netCheckpointMetadata(checkpoint);
   if (metadata.size !== snapshot.actors.length ||
@@ -8665,6 +9184,34 @@ function netOnAuthoritySlowStateChanged() {
 }
 
 function netRound(v) { return Math.round(v * 1000) / 1000; }
+function netPackDonutActor(id, netId) {
+  const actor = G.actors.find(item => item.id === id && netActorId(item) === netId);
+  return actor ? { id: id, netId: netId } : { id: null, netId: null };
+}
+
+function netPackDonut(donut) {
+  /* Donuts survive their owners. Preserve a reference only while both halves
+     still name the same live actor; this also prevents a recycled numeric id
+     from changing a stale donut's outcome after host migration. */
+  const owner = netPackDonutActor(donut.owner, donut.ownerNetId);
+  const killer = netPackDonutActor(donut.killer, donut.killerNetId);
+  return {
+    id: donut.id,
+    owner: owner.id,
+    killer: killer.id,
+    ownerNetId: owner.netId,
+    killerNetId: killer.netId,
+    x: netRound(donut.x),
+    y: netRound(donut.y),
+    z: netRound(donut.z),
+    t: netRound(donut.t)
+  };
+}
+
+function netPackDonuts() {
+  return G.donuts.slice(0, DONUT_MAX).map(netPackDonut);
+}
+
 function netPackActor(a) {
   const remote = a.controller === 'remote';
   return {
@@ -8696,6 +9243,7 @@ function netPackActor(a) {
     weaponSeq: remote ? a.weaponAck : 0,
     kills: a.kills,
     deaths: a.deaths,
+    confirms: a.confirms,
     streak: a.streak,
     bestStreak: a.bestStreak,
     lastHitBy: a.lastHitBy
@@ -8729,9 +9277,14 @@ function netSendCheckpoint() {
     round: NET.round,
     tick: G.tick,
     time: G.time,
+    mode: G.mode,
     manifestVersion: NET.manifestVersion,
     actors: G.actors.map(netPackCheckpointActor),
-    events: NET.eventQueue.slice()
+    /* The unchanged relay validates the legacy checkpoint event list itself.
+       Keeping v8 confirm feedback beside that list lets the relay forward it
+       into migration without mistaking a new display event for bad state. */
+    events: NET.eventQueue.filter(event => event.kind !== 'confirm'),
+    confirmEvents: NET.eventQueue.filter(event => event.kind === 'confirm')
   });
 }
 
@@ -8896,9 +9449,11 @@ function netAfterSimulation(dt, force) {
       round: NET.round,
       tick: G.tick,
       time: G.time,
+      mode: G.mode,
       eventSeq: NET.eventSeq,
       manifestVersion: NET.manifestVersion,
       actors: G.actors.map(netPackActor),
+      donuts: netPackDonuts(),
       over: !!G.over,
       winner: G.winner ? netActorId(G.winner) : null
     }, !force);
@@ -9091,15 +9646,69 @@ function netSafeCount(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
 }
 
+function netValidDonutState(donut) {
+  const b = MAP.bounds;
+  const actorId = value => Number.isSafeInteger(value) && value > 0 && value <= 100_000;
+  const netId = value => typeof value === 'string' && value.length > 0 && value.length <= 80;
+  const actorRef = (id, identity) =>
+    (id === null && identity === null) || (actorId(id) && netId(identity));
+  return !!(donut && typeof donut === 'object' && !Array.isArray(donut) &&
+    Number.isSafeInteger(donut.id) && donut.id > 0 && donut.id <= 1_000_000 &&
+    actorRef(donut.owner, donut.ownerNetId) &&
+    actorRef(donut.killer, donut.killerNetId) &&
+    netFiniteIn(donut.x, b.minX - 3, b.maxX + 3) &&
+    netFiniteIn(donut.y, -2, 20) &&
+    netFiniteIn(donut.z, b.minZ - 3, b.maxZ + 3) &&
+    netFiniteIn(donut.t, 0, DONUT_LIFETIME));
+}
+
+function netValidSnapshot(message) {
+  if (!message || typeof message !== 'object' || Array.isArray(message) ||
+      message.t !== 'snapshot' || message.v !== NETP.VERSION ||
+      !NETP.isAuthorityEpoch(message.authorityEpoch) ||
+      !Number.isSafeInteger(message.round) || message.round < 1 ||
+      !Number.isSafeInteger(message.tick) || message.tick < 0 ||
+      !netFiniteIn(message.time, 0, 100_000_000) ||
+      !Number.isSafeInteger(message.eventSeq) || message.eventSeq < 0 ||
+      !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
+      (message.mode !== 'dm' && message.mode !== 'kc') ||
+      typeof message.over !== 'boolean' ||
+      !Array.isArray(message.actors) || message.actors.length < 1 ||
+      message.actors.length > 16 ||
+      !Array.isArray(message.donuts) || message.donuts.length > DONUT_MAX ||
+      (message.mode === 'dm' && message.donuts.length > 0)) return false;
+
+  const netIds = new Set();
+  const actorIds = new Map();
+  for (const actor of message.actors) {
+    if (!netValidActorState(actor) || netIds.has(actor.netId) || actorIds.has(actor.id))
+      return false;
+    netIds.add(actor.netId);
+    actorIds.set(actor.id, actor.netId);
+  }
+  const donutIds = new Set();
+  for (const donut of message.donuts) {
+    if (!netValidDonutState(donut) || donutIds.has(donut.id) ||
+        (donut.owner !== null && actorIds.get(donut.owner) !== donut.ownerNetId) ||
+        (donut.killer !== null && actorIds.get(donut.killer) !== donut.killerNetId)) return false;
+    donutIds.add(donut.id);
+  }
+  if (message.winner !== null &&
+      (typeof message.winner !== 'string' || !netIds.has(message.winner))) return false;
+  return !message.over || typeof message.winner === 'string';
+}
+
 function netValidCheckpoint(message) {
   if (!message || typeof message !== 'object' || Array.isArray(message) ||
       message.t !== 'checkpoint' || message.v !== NETP.VERSION ||
       !Number.isSafeInteger(message.tick) || message.tick < 0 ||
       !netFiniteIn(message.time, 0, 100_000_000) ||
+      (message.mode !== 'dm' && message.mode !== 'kc') ||
       !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
       !Array.isArray(message.actors) || message.actors.length < 1 ||
       message.actors.length > 16 ||
-      !Array.isArray(message.events) || message.events.length > 128) return false;
+      !Array.isArray(message.events) || message.events.length > 128 ||
+      !Array.isArray(message.confirmEvents) || message.confirmEvents.length > 128) return false;
   const ids = new Set();
   for (const actor of message.actors) {
     if (!actor || typeof actor !== 'object' || Array.isArray(actor) ||
@@ -9121,7 +9730,8 @@ function netValidCheckpoint(message) {
     }
     ids.add(actor.netId);
   }
-  return message.events.every(event => netValidEvent(event, ids));
+  return message.events.every(event => event.kind !== 'confirm' && netValidEvent(event, ids)) &&
+    message.confirmEvents.every(event => event.kind === 'confirm' && netValidEvent(event, ids));
 }
 
 function netValidActorState(s) {
@@ -9154,6 +9764,7 @@ function netValidActorState(s) {
     Number.isSafeInteger(s.ack) && s.ack >= 0 &&
     Number.isSafeInteger(s.weaponSeq) && s.weaponSeq >= 0 &&
     netSafeCount(s.kills) && netSafeCount(s.deaths) &&
+    netSafeCount(s.confirms) &&
     netSafeCount(s.streak) && netSafeCount(s.bestStreak) &&
     (s.lastHitBy === null ||
       (Number.isSafeInteger(s.lastHitBy) && s.lastHitBy > 0 &&
@@ -9178,6 +9789,34 @@ function netCreateReplica(s) {
   attachCharacter(a);
   G.actors.push(a);
   return a;
+}
+
+function netReconcileDonuts(states) {
+  const incoming = new Map(states.map(state => [state.id, state]));
+  for (let i = G.donuts.length - 1; i >= 0; i--)
+    if (!incoming.has(G.donuts[i].id)) removeDonut(i);
+
+  let nextId = 1;
+  for (const state of states) {
+    let donut = G.donuts.find(item => item.id === state.id);
+    const fresh = !donut;
+    if (!donut) donut = {};
+    donut.id = state.id;
+    donut.owner = state.owner;
+    donut.killer = state.killer;
+    donut.ownerNetId = state.ownerNetId;
+    donut.killerNetId = state.killerNetId;
+    donut.x = state.x;
+    donut.y = state.y;
+    donut.z = state.z;
+    donut.t = state.t;
+    if (fresh) {
+      G.donuts.push(donut);
+      showDonutVisual(donut);
+    }
+    nextId = Math.max(nextId, donut.id + 1);
+  }
+  G.nextDonutId = nextId;
 }
 
 function netPushReplicaSample(a, s, sampleTime) {
@@ -9239,6 +9878,7 @@ function netApplyActorState(a, s, local, sampleTime) {
   }
   a.kills = Math.max(0, Math.floor(s.kills || 0));
   a.deaths = Math.max(0, Math.floor(s.deaths || 0));
+  a.confirms = Math.max(0, Math.floor(s.confirms || 0));
   a.streak = Math.max(0, Math.floor(s.streak || 0));
   a.bestStreak = Math.max(0, Math.floor(s.bestStreak || 0));
 
@@ -9278,17 +9918,9 @@ function netApplyActorState(a, s, local, sampleTime) {
 }
 
 function netApplySnapshot(msg) {
-  if (!Number.isSafeInteger(msg.tick) || msg.tick < 0 || msg.tick <= NET.lastSnapshotTick ||
-      !netFiniteIn(msg.time, 0, 100_000_000) || typeof msg.over !== 'boolean' ||
-      !Number.isSafeInteger(msg.eventSeq) || msg.eventSeq < 0 ||
-      !Number.isSafeInteger(msg.manifestVersion) || msg.manifestVersion < 1 ||
-      !Array.isArray(msg.actors) || msg.actors.length < 1 || msg.actors.length > 16) return;
+  if (!netValidSnapshot(msg) || msg.tick <= NET.lastSnapshotTick) return;
 
-  const seen = new Set();
-  for (const state of msg.actors) {
-    if (!netValidActorState(state) || seen.has(state.netId)) return;
-    seen.add(state.netId);
-  }
+  const seen = new Set(msg.actors.map(state => state.netId));
   if (!seen.has(NET.id)) return;
   /* Read before the manifest is adopted below: on the first snapshot every
      actor is new, and only afterwards does a new one mean somebody arrived. */
@@ -9352,8 +9984,11 @@ function netApplySnapshot(msg) {
   for (const a of G.actors.slice()) {
     if (!a.isPlayer && !seen.has(a.netId)) detachActor(a);
   }
+  setGameMode(msg.mode);
+  netReconcileDonuts(msg.donuts);
 
-  const sig = G.actors.map(a => a.netId + ':' + a.kills + ':' + a.deaths + ':' + a.bestStreak).join('|');
+  const sig = G.mode + '|' + G.actors.map(a =>
+    a.netId + ':' + a.kills + ':' + a.deaths + ':' + a.confirms + ':' + a.bestStreak).join('|');
   if (sig !== NET.scoreSignature) {
     NET.scoreSignature = sig;
     refreshBoard();
@@ -9446,6 +10081,17 @@ function netOnAuthoritativeKill(target, from) {
     streak: from ? from.streak : 0
   });
 }
+function netOnAuthoritativeConfirm(donut, collector, outcome) {
+  const owner = netPackDonutActor(donut.owner, donut.ownerNetId);
+  const killer = netPackDonutActor(donut.killer, donut.killerNetId);
+  netSendEvent('confirm', {
+    collector: netActorId(collector),
+    owner: owner.netId,
+    killer: killer.netId,
+    deny: outcome === 'DENIED',
+    at: [netRound(donut.x), netRound(donut.y), netRound(donut.z)]
+  });
+}
 function netOnAuthoritativeRespawn(a) {
   netSendEvent('respawn', {
     actor: netActorId(a), at: [a.pos.x, a.pos.y, a.pos.z],
@@ -9511,6 +10157,13 @@ function netValidEvent(e, manifest) {
   if (e.kind === 'kill') {
     return netKnownActor(e.target, manifest) &&
       (e.from === null || netKnownActor(e.from, manifest)) && netSafeCount(e.streak);
+  }
+  if (e.kind === 'confirm') {
+    return netKnownActor(e.collector, manifest) &&
+      (e.owner === null || netKnownActor(e.owner, manifest)) &&
+      (e.killer === null || netKnownActor(e.killer, manifest)) &&
+      typeof e.deny === 'boolean' && netEventPoint(e.at) &&
+      (e.deny ? e.owner !== null && e.collector === e.owner : e.collector !== e.owner);
   }
   if (e.kind === 'respawn') {
     return netKnownActor(e.actor, manifest) && netEventPoint(e.at) &&
@@ -9584,10 +10237,20 @@ function netApplyEvent(e) {
     if (target) addKillFeed(from, target);
     if (e.from === NET.id && target) {
       SFX.kill();
-      addFloater('+1', target.pos.x, target.pos.y + 1.6, target.pos.z, '#b8f2d8', true);
+      addFloater(G.mode === 'kc' ? 'KILL' : '+1', target.pos.x, target.pos.y + 1.6,
+        target.pos.z, '#b8f2d8', true);
       if (e.streak >= 3) showHint(e.streak + ' IN A ROW!');
     }
     if (e.target === NET.id) NET.lastKillerId = e.from;
+  } else if (e.kind === 'confirm') {
+    const collector = G.actors.find(a => a.netId === e.collector);
+    const owner = e.owner ? G.actors.find(a => a.netId === e.owner) : collector;
+    const killer = e.killer ? G.actors.find(a => a.netId === e.killer) : null;
+    if (!collector || !owner) return;
+    const outcome = e.deny ? 'DENIED' :
+      (e.collector === e.killer ? 'CONFIRMED' : 'STOLEN');
+    renderDonutOutcome({ x: e.at[0], y: e.at[1], z: e.at[2] },
+      collector, owner, killer, outcome);
   } else if (e.kind === 'respawn') {
     if (e.actor === NET.id) return;
     fxSpawnPuff(e.at[0], e.at[1], e.at[2], C(e.color));
@@ -10037,6 +10700,9 @@ const elCross = { u: $('cU'), d: $('cD'), l: $('cL'), r: $('cR') };
 
 let crossSpread = 8, crossPunch = 0, hitmarkT = 0, dmgFlash = 0, healFlash = 0;
 
+function uiScore(a) { return G.mode === 'kc' ? (a.confirms || 0) : a.kills; }
+function uiTarget() { return G.mode === 'kc' ? CFG.confirmsToWin : CFG.killsToWin; }
+
 /* Where the scoreboard lives when no full-screen card is up. */
 const boardHome = elBoard.parentNode;
 function restoreBoard() {
@@ -10074,11 +10740,11 @@ function updateHUD() {
   const order = ['smg', 'shotgun', 'rifle'];
   for (let i = 0; i < elSlots.length; i++) elSlots[i].classList.toggle('on', order[i] === gunOwner.weapon);
 
-  elScore.textContent = String(p.kills);
-  elGoal.textContent = String(CFG.killsToWin);
+  elScore.textContent = String(uiScore(p));
+  elGoal.textContent = String(uiTarget());
   let lead = G.actors[0];
-  for (const a of G.actors) if (a.kills > lead.kills) lead = a;
-  elLead.textContent = lead.kills > 0 ? (lead.isPlayer ? 'YOU' : lead.name) : '—';
+  for (const a of G.actors) if (uiScore(a) > uiScore(lead)) lead = a;
+  elLead.textContent = uiScore(lead) > 0 ? (lead.isPlayer ? 'YOU' : lead.name) : '—';
 }
 
 function setCrosshairPunch(px) { crossPunch = Math.max(crossPunch, px); }
@@ -10142,7 +10808,7 @@ function updateDamageDirs(dt) {
 
 /* ---- killfeed ---- */
 const feedItems = [];
-function addKillFeed(from, target) {
+function addKillFeed(from, target, outcome) {
   const el = document.createElement('div');
   el.className = 'fitem';
   const w = from ? WBY[from.weapon] : null;
@@ -10152,7 +10818,19 @@ function addKillFeed(from, target) {
     s.style.color = a.isPlayer ? '#d4638f' : '#4a3f5c';
     return s;
   };
-  if (from && from !== target) {
+  if (outcome) {
+    el.dataset.kind = 'donut-' + outcome.toLowerCase();
+    const source = outcome === 'DENIED' ? target : from;
+    el.appendChild(nm(source));
+    const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = '🍩';
+    el.appendChild(ic);
+    if (outcome !== 'DENIED' && target && target !== source) el.appendChild(nm(target));
+    const label = document.createElement('b');
+    label.textContent = outcome;
+    label.style.color = outcome === 'CONFIRMED' ? '#258c6b' :
+      (outcome === 'STOLEN' ? '#c54e7a' : '#8069b0');
+    el.appendChild(label);
+  } else if (from && from !== target) {
     el.appendChild(nm(from));
     const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = w ? w.icon : '💥';
     el.appendChild(ic);
@@ -10201,7 +10879,20 @@ function setBoard(on) {
   elBoard.classList.toggle('on', on);
 }
 function refreshBoard() {
-  const rows = G.actors.slice().sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+  const head = elBoard.querySelector && elBoard.querySelector('thead tr');
+  if (head && head.children) {
+    let marker = Array.from(head.children).find(th => th.dataset && th.dataset.kcConfirms);
+    if (G.mode === 'kc' && !marker) {
+      marker = document.createElement('th');
+      marker.dataset.kcConfirms = '1';
+      marker.textContent = 'Confirms';
+      head.insertBefore(marker, head.children[1] || null);
+    } else if (G.mode !== 'kc' && marker) {
+      marker.remove();
+    }
+  }
+  const rows = G.actors.slice().sort((a, b) =>
+    uiScore(b) - uiScore(a) || b.kills - a.kills || a.deaths - b.deaths);
   elBoardBody.innerHTML = '';
   for (const a of rows) {
     const tr = document.createElement('tr');
@@ -10213,7 +10904,10 @@ function refreshBoard() {
     td0.appendChild(sw);
     td0.appendChild(document.createTextNode(a.isPlayer ? 'YOU' : a.name));
     tr.appendChild(td0);
-    for (const v of [a.kills, a.deaths, a.bestStreak]) {
+    const values = G.mode === 'kc'
+      ? [a.confirms || 0, a.kills, a.deaths, a.bestStreak]
+      : [a.kills, a.deaths, a.bestStreak];
+    for (const v of values) {
       const td = document.createElement('td'); td.textContent = String(v); tr.appendChild(td);
     }
     elBoardBody.appendChild(tr);
@@ -10235,11 +10929,12 @@ function updateDeadScreen() {
   if (G.player && !G.player.alive) $('deadCd').textContent = String(Math.max(1, Math.ceil(G.player.respawnT)));
 }
 function showOverScreen(winner) {
-  const rows = G.actors.slice().sort((a, b) => b.kills - a.kills);
+  const rows = G.actors.slice().sort((a, b) => uiScore(b) - uiScore(a) || b.kills - a.kills);
   const place = rows.indexOf(G.player) + 1;
   $('overBig').textContent = winner.isPlayer ? 'YOU WIN!' : (winner.name + ' WINS');
+  const scoreText = G.mode === 'kc' ? G.player.confirms + ' confirms' : G.player.kills + ' kills';
   $('overRank').textContent = 'You placed #' + place + ' of ' + rows.length +
-    '  ·  ' + G.player.kills + ' kills / ' + G.player.deaths + ' deaths  ·  best streak ' + G.player.bestStreak;
+    '  ·  ' + scoreText + ' / ' + G.player.deaths + ' deaths  ·  best streak ' + G.player.bestStreak;
   refreshBoard();
   const over = $('over');
   over.insertBefore(elBoard, $('again'));
@@ -10496,6 +11191,29 @@ function frame(now) {
   PROF.frames++;
 }
 
+/* The title menu returns after a round, so the pressed state is synchronized
+   from the live mode instead of becoming a stale copy of the last click. */
+function syncModePicker(mode) {
+  const picker = document.getElementById('modePicker');
+  const dm = document.getElementById('modeDm');
+  const kc = document.getElementById('modeKc');
+  if (!picker || !dm || !kc) return;
+
+  const guest = typeof netIsGuest === 'function' && netIsGuest();
+  picker.hidden = guest;
+  if (guest) return;
+
+  const active = mode === undefined ? G.mode : mode;
+  const isKC = active === 'kc';
+  dm.setAttribute('aria-pressed', String(!isKC));
+  kc.setAttribute('aria-pressed', String(isKC));
+}
+
+function chooseMode(mode) {
+  if (typeof netIsGuest === 'function' && netIsGuest()) return;
+  syncModePicker(setGameMode(mode));
+}
+
 /* =====================================================================
    BOOT
    ===================================================================== */
@@ -10513,6 +11231,8 @@ function boot() {
   initTouch();     set(88);
   initAI();        set(96);
   initNetworkUI();
+  const requestedMode = QS.get('mode');
+  setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 
   setupMatch();
   camera.position.set(40, 20, 30); camera.lookAt(0, 3, 0);
@@ -10540,6 +11260,10 @@ function boot() {
     }
     startMatch();
   });
+
+  document.getElementById('modeDm').addEventListener('click', () => chooseMode('dm'));
+  document.getElementById('modeKc').addEventListener('click', () => chooseMode('kc'));
+  syncModePicker();
 
   requestAnimationFrame(frame);
   if (AUTOSTART) startMatch();
@@ -10757,6 +11481,7 @@ window.NUKETOWN_DEBUG = {
     const p = G.player;
     p.pos.x = 0; p.pos.y = 60; p.pos.z = 0;      // park the player out of the fight
     const k0 = G.actors.map(a => a.kills);
+    const d0 = Object.assign({}, G.donutStats);
     const n = Math.round((seconds || 45) / FIXED);
     const seen = new Set(); const levels = new Set(); const moved = [];
     const start = G.actors.map(a => ({ x: a.pos.x, z: a.pos.z, d: 0 }));
@@ -10772,7 +11497,7 @@ window.NUKETOWN_DEBUG = {
       });
     }
     G.actors.forEach((a, j) => { if (!a.isPlayer) moved.push({ name: a.name, dist: +start[j].d.toFixed(1), kills: a.kills - k0[j] }); });
-    return {
+    const report = {
       simSeconds: seconds || 45,
       botKills: moved.reduce((s, m) => s + m.kills, 0),
       statesSeen: Array.from(seen),
@@ -10780,6 +11505,29 @@ window.NUKETOWN_DEBUG = {
       perBot: moved,
       nan: G.actors.some(a => !Number.isFinite(a.pos.x) || !Number.isFinite(a.pos.y) || !Number.isFinite(a.pos.z))
     };
+    if (G.mode === 'kc') {
+      const donutsSpawned = G.donutStats.spawned - (d0.spawned || 0);
+      const donutsConfirmed = G.donutStats.confirmed - (d0.confirmed || 0);
+      const donutsStolen = G.donutStats.stolen - (d0.stolen || 0);
+      const donutsDenied = G.donutStats.denied - (d0.denied || 0);
+      const donutsExpired = G.donutStats.expired - (d0.expired || 0);
+      const donutsEvicted = G.donutStats.evicted - (d0.evicted || 0);
+      const donutsCollected = donutsConfirmed + donutsStolen + donutsDenied;
+      report.donutsSpawned = donutsSpawned;
+      report.donutsConfirmed = donutsConfirmed;
+      report.donutsStolen = donutsStolen;
+      report.donutsDenied = donutsDenied;
+      report.donutsExpired = donutsExpired;
+      report.donutsEvicted = donutsEvicted;
+      report.collectionRate = donutsSpawned ? donutsCollected / donutsSpawned : 0;
+      report.donuts = {
+        spawned: donutsSpawned, confirmed: donutsConfirmed, stolen: donutsStolen,
+        denied: donutsDenied, expired: donutsExpired, evicted: donutsEvicted,
+        collected: donutsCollected,
+        collectionRate: report.collectionRate
+      };
+    }
+    return report;
   }
 };
 
