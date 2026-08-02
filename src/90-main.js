@@ -211,6 +211,29 @@ function frame(now) {
   PROF.frames++;
 }
 
+/* The title menu returns after a round, so the pressed state is synchronized
+   from the live mode instead of becoming a stale copy of the last click. */
+function syncModePicker(mode) {
+  const picker = document.getElementById('modePicker');
+  const dm = document.getElementById('modeDm');
+  const kc = document.getElementById('modeKc');
+  if (!picker || !dm || !kc) return;
+
+  const guest = typeof netIsGuest === 'function' && netIsGuest();
+  picker.hidden = guest;
+  if (guest) return;
+
+  const active = mode === undefined ? G.mode : mode;
+  const isKC = active === 'kc';
+  dm.setAttribute('aria-pressed', String(!isKC));
+  kc.setAttribute('aria-pressed', String(isKC));
+}
+
+function chooseMode(mode) {
+  if (typeof netIsGuest === 'function' && netIsGuest()) return;
+  syncModePicker(setGameMode(mode));
+}
+
 /* =====================================================================
    BOOT
    ===================================================================== */
@@ -258,6 +281,10 @@ function boot() {
     }
     startMatch();
   });
+
+  document.getElementById('modeDm').addEventListener('click', () => chooseMode('dm'));
+  document.getElementById('modeKc').addEventListener('click', () => chooseMode('kc'));
+  syncModePicker();
 
   requestAnimationFrame(frame);
   if (AUTOSTART) startMatch();
