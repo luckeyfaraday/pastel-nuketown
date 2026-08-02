@@ -1866,6 +1866,133 @@ test('an idle lobby is not an idle match', async (t) => {
   waiting.ws.terminate();
 });
 
+test('aim nobody could produce by hand costs the seat, aim a fast player could does not', async (t) => {
+  /* Two strikes rather than the shipped zero: what is under test is the
+     decision, and the shipped default is to count without acting so the
+     threshold can be read against real traffic before it is trusted. */
+  const { port } = await startRelay(t, {
+    aimRateStrikes: 2, idleKickMs: 0, roomRandom: () => 0
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const snapping = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const flicking = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([snapping.opened, flicking.opened]);
+  snapping.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Bot' });
+  await snapping.next('room');
+  await host.next('members');
+  flicking.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Player' });
+  await flicking.next('room');
+  await host.next('members');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), snapping.next('start'), flicking.next('start')]);
+
+  /* One turns half the compass between two consecutive simulated ticks, over
+     and over — about 188 rad/s sustained. The other turns 0.15 rad a tick,
+     which is 9 rad/s: a quick flick held for a quarter second, and well inside
+     what a hand does. Both send at the same rate, so the only thing separating
+     them is how far the aim moved per tick of simulated time. */
+  let seq = 0;
+  const pump = setInterval(() => {
+    seq++;
+    snapping.send(validInput({ seq, round: 1, yaw: seq % 2 ? Math.PI : 0, pitch: 0 }));
+    flicking.send(validInput({ seq, round: 1, yaw: seq * 0.15, pitch: 0 }));
+  }, 15);
+  t.after(() => clearInterval(pump));
+
+  const kicked = await snapping.next('error', 3000);
+  assert.equal(kicked.code, 'aim-rate');
+  assert.match(kicked.message, /impossible aim/i);
+  await new Promise((resolve) => snapping.ws.on('close', resolve));
+
+  const roster = await host.next('members', 3000);
+  assert.deepEqual(roster.members.map((member) => member.name), ['Host', 'Player'],
+    'the fast player keeps the seat the snapping one lost');
+
+  clearInterval(pump);
+  host.ws.terminate();
+  flicking.ws.terminate();
+});
+
+test('the aim limit counts without acting until it is told to act', async (t) => {
+  const { port } = await startRelay(t, { idleKickMs: 0, roomRandom: () => 0 });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await guest.opened;
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Bot' });
+  await guest.next('room');
+  await host.next('members');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), guest.next('start')]);
+
+  /* Four windows' worth, kept inside the relay's burst budget so what ends the
+     connection can only be the aim limit and never the rate limiter. */
+  for (let seq = 1; seq <= 60; seq++) {
+    guest.send(validInput({ seq, round: 1, yaw: seq % 2 ? Math.PI : 0, pitch: 0 }));
+  }
+
+  /* Four windows over the limit and the seat is still theirs: on the shipped
+     default a strike is a number in a counter, not a disconnection. The input
+     still reaches the host, because dropping it would be acting on the
+     measurement too. */
+  await expectNoMessage(guest, 'error', 300);
+  const forwarded = await host.next('input', 1000);
+  assert.equal(forwarded.from !== undefined, true);
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
+test('the relay attests each guest round trip so the host can bound a rewind', async (t) => {
+  const { port } = await startRelay(t, { idleKickMs: 0, roomRandom: () => 0 });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await guest.opened;
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Player' });
+  await guest.next('room');
+  await host.next('members');
+
+  /* startRound pings every member, so by the time input flows the relay has
+     measured a loopback round trip for itself. */
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  await Promise.all([host.next('start'), guest.next('start')]);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  guest.send(validInput({ seq: 1, round: 1 }));
+  const forwarded = await host.next('input', 1000);
+  assert.equal(forwarded.from !== undefined, true);
+  assert.equal(Number.isFinite(forwarded.rttMs), true,
+    'the host is told what the relay measured, not what the guest claims');
+  assert.ok(forwarded.rttMs >= 0 && forwarded.rttMs < 1000,
+    `a loopback round trip should be small, was ${forwarded.rttMs}ms`);
+  /* The guest cannot author it: whatever it puts on the wire is replaced. */
+  guest.send(validInput({ seq: 2, round: 1, rttMs: 250_000 }));
+  const second = await host.next('input', 1000);
+  assert.ok(second.rttMs < 1000, 'a guest cannot inflate its own latency');
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
 function statsDirectory(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nuketown-stats-'));
   t.after(() => fs.rmSync(dir, { force: true, recursive: true }));

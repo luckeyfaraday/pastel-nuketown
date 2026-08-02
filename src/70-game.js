@@ -69,7 +69,7 @@ function makeActor(opts) {
     lastHitBy: null, lastHitT: -99, shield: 0,
     brain: null, char: null, plate: null, blob: null, bubble: null, state: 'idle',
     netInput: null, netTarget: null, lastInputSeq: -1, lastWeaponSeq: -1,
-    inputAck: 0, weaponAck: 0,
+    inputAck: 0, weaponAck: 0, netLagOffset: null, netRelayRttMs: 0,
     lastFireSeq: 0, lastReloadSeq: 0, pendingFireUntil: 0,
     pendingFireSeq: 0, pendingRenderTime: 0
   };
@@ -985,6 +985,10 @@ function stepRemotePlayer(a, dt) {
     seq: a.inputAck, weaponSeq: a.weaponAck, renderTime: G.time
   };
   if (fresh) {
+    /* Here rather than at arrival: this input is the one a shot in this tick
+       will rewind with, and measuring the offset on the same input that spends
+       it keeps the queue's depth out of the figure. */
+    netTrackLagOffset(a, it);
     a.inputAck = it.seq;
     if (it.weaponSeq > a.weaponAck) switchRemoteWeapon(a, it.weapon);
     a.weaponAck = it.weaponSeq;

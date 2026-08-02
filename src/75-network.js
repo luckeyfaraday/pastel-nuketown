@@ -43,6 +43,22 @@ const NET_SNAP_DISTANCE = 3;
 const NET_RESIDUAL_SMOOTHING = 0.5;
 const NET_MAX_HISTORY_SAMPLES = 32;
 const NET_MAX_REPLICA_SAMPLES = 16;
+/* A guest picks the moment it wants the host to rewind the world to, and the
+   protocol's bound only stops it being absurd -- anywhere in the last 300ms is
+   accepted. That window is not a tolerance, it is a search space: a guest that
+   lies about it gets to pick, shot by shot, whichever instant in the last third
+   of a second had its target least behind cover.
+
+   The honest value is not a free parameter though. It is one-way latency plus
+   the guest's own interpolation delay, and it drifts with the connection rather
+   than jumping per shot. So the offset is smoothed per guest and the request is
+   held near it: the tolerance covers real jitter and nothing else. */
+const NET_LAG_OFFSET_SMOOTHING = 0.05;
+const NET_LAG_OFFSET_TOLERANCE = 0.03;
+/* Headroom on the ceiling for the parts of the offset the host cannot see --
+   the guest's jitter margin above the interpolation floor, and the age of the
+   relay's last round-trip sample. */
+const NET_LAG_OFFSET_SLACK = 0.05;
 /* Errors that mean "not that room" rather than "not this game". A quick-play
    candidate can fill, close, or start changing host in the moment between the
    poll that offered it and the socket that dials it; that is the next
@@ -904,6 +920,11 @@ function netHandleWire(raw) {
     if (!a) return;
     const checked = NETP.sanitizeInput(msg, a.lastInputSeq, a.lastWeaponSeq);
     if (!checked.ok) return;
+    /* Relay-authored, so it is read off the envelope rather than the sanitized
+       payload: sanitizeInput only passes through what the guest is allowed to
+       author, and this is precisely the field it is not. */
+    if (Number.isFinite(msg.rttMs) && msg.rttMs >= 0 && msg.rttMs <= 10000)
+      a.netRelayRttMs = msg.rttMs;
     /* Queued rather than assigned. A guest now sends one input per simulated
        tick, and jitter means two can land between two host ticks; overwriting
        would silently drop one, and a dropped input is one the guest predicted
@@ -1192,6 +1213,8 @@ function netHydrateActor(actor, state, metadata, local) {
   actor.weaponAck = 0;
   actor.lastFireSeq = 0;
   actor.lastReloadSeq = 0;
+  actor.netLagOffset = null;
+  actor.netRelayRttMs = 0;
   actor.netHistory = [];
   actor.netSamples = [];
   netRestoreAmmoStore(actor, metadata);
@@ -1372,6 +1395,11 @@ function netAcceptAuthorityState(message) {
   actor.lastReloadSeq = state.reloadSeq;
   actor.lastWeaponSeq = state.weaponSeq;
   actor.weaponAck = state.weaponSeq;
+  /* A new authority inherits none of the old one's read on this guest's
+     latency. Re-seed from what arrives here rather than carry over an estimate
+     measured against a clock that has just been replaced. */
+  actor.netLagOffset = null;
+  actor.netRelayRttMs = 0;
   if (actor.weapon !== state.weapon) switchRemoteWeapon(actor, state.weapon);
   actor.netInput = {
     fwd: 0, strafe: 0, jump: false, sprint: false, fire: false,
@@ -1669,6 +1697,52 @@ function netHistoryStateAt(history, time) {
   };
 }
 
+/* The furthest back this guest could honestly be asking to see: half the round
+   trip the relay measured, plus the deepest interpolation buffer the protocol
+   allows, plus slack. The round trip is the load-bearing part, and it is the
+   relay's number rather than the guest's -- a guest cannot buy a longer look
+   backwards by claiming to be further away, because it does not author the
+   claim. Without one (an older relay, or before the first pong) this falls
+   back to the flat protocol bound and only the smoothing does any work. */
+function netLagOffsetCeiling(actor) {
+  const measured = actor.netRelayRttMs;
+  if (!Number.isFinite(measured) || measured <= 0) return NETP.MAX_REWIND_SECONDS;
+  return Math.min(NETP.MAX_REWIND_SECONDS,
+    measured / 2000 +
+    NET_SNAPSHOT_INTERVAL * NETP.MAX_INTERP_SNAPSHOTS +
+    NET_LAG_OFFSET_SLACK);
+}
+
+function netTrackLagOffset(actor, input) {
+  /* Zero is not a small offset, it is a guest that has not synchronised to the
+     host's clock yet -- netGuestRenderTime returns it until the first snapshot
+     lands. Seeding an estimate from those would start every guest at the
+     ceiling and spend the first third of a second rewinding honest shots
+     further back than they asked for. */
+  if (!input || !Number.isFinite(input.renderTime) || input.renderTime <= 0) return;
+  const observed = clamp(G.time - input.renderTime, 0, netLagOffsetCeiling(actor));
+  /* Slow on purpose. It has to follow a connection that genuinely changes, and
+     it must not follow a guest walking its own offset outwards a millisecond at
+     a time -- the ceiling is what stops that, and this decides how long the
+     walk takes to be worth attempting. */
+  actor.netLagOffset = Number.isFinite(actor.netLagOffset)
+    ? lerp(actor.netLagOffset, observed, NET_LAG_OFFSET_SMOOTHING)
+    : observed;
+}
+
+/* Hold the requested rewind near what this guest has actually been running at.
+   Clamped rather than refused: a rejected rewind is a shot that quietly does
+   not count, and on the one occasion the estimate is wrong that would be an
+   honest player's shot. */
+function netNarrowRewind(shooter, renderTime) {
+  if (!Number.isFinite(shooter.netLagOffset) || !Number.isFinite(renderTime))
+    return renderTime;
+  const low = Math.max(0, shooter.netLagOffset - NET_LAG_OFFSET_TOLERANCE);
+  const high = Math.max(low, Math.min(netLagOffsetCeiling(shooter),
+    shooter.netLagOffset + NET_LAG_OFFSET_TOLERANCE));
+  return G.time - clamp(G.time - renderTime, low, high);
+}
+
 function netBeginLagCompensation(shooter, renderTime) {
   if (!netIsHost() || shooter.controller !== 'remote' ||
       !shooter.netHistory || !shooter.netHistory.length) return null;
@@ -1676,7 +1750,8 @@ function netBeginLagCompensation(shooter, renderTime) {
      history requests get no rewind at all; a guest never gets an arbitrary
      trip through match history. */
   const rewindTime = NETP.clampRewindTime(
-    renderTime, G.time, shooter.netHistory[0].time, NETP.MAX_REWIND_SECONDS);
+    netNarrowRewind(shooter, renderTime), G.time, shooter.netHistory[0].time,
+    NETP.MAX_REWIND_SECONDS);
   if (rewindTime === null) return null;
 
   const saved = [];

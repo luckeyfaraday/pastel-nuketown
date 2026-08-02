@@ -16,9 +16,18 @@ const RELAY_TYPES = new Set(['snapshot', 'checkpoint', 'event']);
 const CHECKPOINT_CONTROLLERS = new Set(['local', 'remote', 'bot']);
 const CHECKPOINT_SKILLS = new Set(['easy', 'normal', 'hard']);
 const EVENT_KINDS = new Set(['shot', 'shield', 'damage', 'kill', 'respawn', 'match-over']);
+/* Mirrors FIXED in src/90-main.js. A guest sends one input per simulated tick,
+   so the gap between two `seq` values is how much simulated time separates the
+   two aim samples in them -- which is what an angular rate needs, and is not
+   the same thing as how far apart the packets happened to arrive. */
+const SIMULATION_HZ = 60;
 
 function positiveInteger(value, fallback) {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+function positiveNumber(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function secureRandom() {
@@ -74,6 +83,31 @@ export function createRelayServer(options = {}) {
   /* Fine enough that "a minute" means roughly a minute rather than up to two,
      cheap enough to be irrelevant: it walks a map of at most a few hundred. */
   const idleSweepMs = Math.max(50, Math.min(5_000, Math.floor(idleKickMs / 4) || 5_000));
+  /* How fast a guest claims to be turning, in radians per second, before the
+     relay stops believing a hand is doing it. Aim is the one input nobody can
+     check against the world from here, so this checks it against physiology
+     instead.
+
+     Measured over a window rather than per input, because per input is not a
+     rate a human produces evenly: the client simulates a fixed 60Hz but
+     samples the mouse once a frame, so a guest running at 30fps legitimately
+     delivers a whole frame's turn in one tick and neutral turns in the next.
+     Averaging over a quarter second puts those back together.
+
+     30 rad/s is roughly a 180-degree flick every 100ms, sustained for the
+     whole window. Deliberately far above what a fast player peaks at: this is
+     here to catch a machine snapping between targets, and a threshold tight
+     enough to argue with good players would be worse than no threshold. */
+  const aimRateLimit = positiveNumber(options.aimRateLimit, 30);
+  const aimRateWindowTicks = positiveInteger(options.aimRateWindowTicks, 15);
+  /* Consecutive windows over the limit before the seat is taken back, or 0 to
+     watch without ever acting on it.
+
+     Zero is the default on purpose. A false positive here costs an honest
+     player their match on the strength of a number nobody has yet seen
+     against real traffic, and the counter is worth reading for a while before
+     it is worth trusting. Set it once the logs say what normal looks like. */
+  const aimRateStrikes = positiveInteger(options.aimRateStrikes, 0);
   const backpressureBytes = positiveInteger(
     options.backpressureBytes,
     512 * 1024
@@ -468,6 +502,20 @@ export function createRelayServer(options = {}) {
     return sendEncoded(peer, encode(message), isSnapshot);
   }
 
+  /* Leaves an outstanding measurement alone rather than restamping it: the
+     pong that answers the first ping is the one that carries the honest round
+     trip, and a second stamp on top of it would report the gap between the
+     pings instead. */
+  function pingPeer(peer) {
+    if (!peer || peer.ws.readyState !== WebSocket.OPEN) return;
+    if (peer.pingAt === 0) peer.pingAt = Date.now();
+    try {
+      peer.ws.ping();
+    } catch (error) {
+      peer.ws.terminate();
+    }
+  }
+
   function sendError(peer, code, message) {
     send(peer, {
       t: 'error',
@@ -560,6 +608,12 @@ export function createRelayServer(options = {}) {
     for (const member of room.members.values()) {
       member.lastSeq = -1;
       member.activeAt = Date.now();
+      resetAimWindow(member);
+      /* The heartbeat is on a half-minute clock, which is a long time to spend
+         at the start of a match with no latency figure for the host to bound a
+         rewind with. One ping each at the whistle costs a frame of nothing and
+         means the number is there for the first firefight. */
+      pingPeer(member);
     }
     broadcastRoom(room, {
       t: 'start',
@@ -752,6 +806,57 @@ export function createRelayServer(options = {}) {
       Math.abs(input.pitch - peer.lastPitch) > AIM_EPSILON;
   }
 
+  function resetAimWindow(peer) {
+    peer.aimSeq = -1;
+    peer.aimTravel = 0;
+  }
+
+  /* Aim is the one thing a guest sends that the relay cannot check against the
+     world: it has no simulation, so it cannot say whether a shot was plausible.
+     What it can say is whether the hand that aimed was a hand.
+
+     A strike is a whole window over the limit, and a clean window pays one
+     back, so this accumulates only when a guest is over the line more often
+     than under it. One frantic moment never adds up to anything. */
+  function trackAimRate(peer, input) {
+    if (aimRateLimit <= 0) return true;
+
+    if (peer.aimSeq < 0 || input.seq <= peer.aimSeq) {
+      resetAimWindow(peer);
+      peer.aimSeq = input.seq;
+      return true;
+    }
+
+    peer.aimTravel += angleGap(input.yaw, peer.lastYaw) +
+      Math.abs(input.pitch - peer.lastPitch);
+
+    const ticks = input.seq - peer.aimSeq;
+    if (ticks < aimRateWindowTicks) return true;
+
+    const rate = peer.aimTravel / (ticks / SIMULATION_HZ);
+    peer.aimSeq = input.seq;
+    peer.aimTravel = 0;
+
+    if (rate <= aimRateLimit) {
+      if (peer.aimStrikes > 0) peer.aimStrikes--;
+      return true;
+    }
+
+    peer.aimStrikes++;
+    /* The whole value of counting without acting is being able to read it. If
+       the threshold is right this line never appears; if it floods, that is
+       the threshold being wrong, which is the thing worth finding out before
+       aimRateStrikes is ever set above zero. */
+    console.warn(`Aim rate ${rate.toFixed(1)} rad/s over ${aimRateLimit} ` +
+      `in room ${peer.room.code} (strike ${peer.aimStrikes})`);
+    if (aimRateStrikes <= 0 || peer.aimStrikes < aimRateStrikes) return true;
+
+    sendError(peer, 'aim-rate', 'Removed for impossible aim movement.');
+    try { peer.ws.close(1008, 'aim rate'); }
+    catch (error) { peer.ws.terminate(); }
+    return false;
+  }
+
   function handleGuestInput(peer, message) {
     if (!peer.room.started || peer.room.migrating ||
         message.round !== peer.room.round ||
@@ -764,6 +869,9 @@ export function createRelayServer(options = {}) {
 
     if (idleKickMs > 0 && inputShowsAPlayer(peer, sanitized.value))
       peer.activeAt = Date.now();
+    /* Before the aim baseline moves: the rate is measured against the previous
+       sample, which is the one still sitting in peer.lastYaw. */
+    if (!trackAimRate(peer, sanitized.value)) return;
     peer.lastFireSeq = sanitized.value.fireSeq;
     peer.lastWeaponSeq = sanitized.value.weaponSeq;
     peer.lastReloadSeq = sanitized.value.reloadSeq;
@@ -771,9 +879,16 @@ export function createRelayServer(options = {}) {
     peer.lastPitch = sanitized.value.pitch;
 
     peer.lastSeq = sanitized.value.seq;
+    /* rttMs is the relay's own measurement, not the guest's claim about
+       itself, and it is here so the host can bound how far into the past a
+       guest is allowed to ask it to rewind. A guest cannot inflate its own
+       latency to buy a longer look backwards without inflating a number it
+       does not author. Additive and ignorable: a host that does not read it
+       falls back to the protocol's flat bound. */
     send(peer.room.host, {
       ...sanitized.value,
-      from: peer.id
+      from: peer.id,
+      rttMs: peer.rttMs
     });
   }
 
@@ -1236,7 +1351,12 @@ export function createRelayServer(options = {}) {
       lastWeaponSeq: -1,
       lastReloadSeq: -1,
       lastYaw: 0,
-      lastPitch: 0
+      lastPitch: 0,
+      aimSeq: -1,
+      aimTravel: 0,
+      aimStrikes: 0,
+      pingAt: 0,
+      rttMs: 0
     };
     peers.set(ws, peer);
     peer.joinTimer = setTimeout(() => {
@@ -1247,6 +1367,10 @@ export function createRelayServer(options = {}) {
 
     ws.on('pong', () => {
       peer.alive = true;
+      if (peer.pingAt > 0) {
+        peer.rttMs = Math.max(0, Date.now() - peer.pingAt);
+        peer.pingAt = 0;
+      }
     });
     ws.on('message', (raw) => {
       try {
@@ -1317,11 +1441,7 @@ export function createRelayServer(options = {}) {
         }
 
         peer.alive = false;
-        try {
-          peer.ws.ping();
-        } catch (error) {
-          peer.ws.terminate();
-        }
+        pingPeer(peer);
       }
     }, heartbeatMs)
     : null;
@@ -1381,7 +1501,11 @@ if (isMain) {
   const host = process.env.HOST || '0.0.0.0';
   const relay = createRelayServer({
     allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(','),
-    statsPath: statsPathFromEnvironment(process.env)
+    statsPath: statsPathFromEnvironment(process.env),
+    /* Turning enforcement on is meant to be a decision made after reading the
+       logs, so it is a restart rather than a code change. Unset keeps the
+       counter watching and acting on nothing. */
+    aimRateStrikes: Number.parseInt(process.env.AIM_RATE_STRIKES || '0', 10)
   });
 
   relay.listen(port, host, () => {
