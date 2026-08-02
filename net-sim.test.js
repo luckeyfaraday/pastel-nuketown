@@ -449,6 +449,63 @@ test('a guest predicts its own position to the centimetre', () => {
   }
 });
 
+const REMOTE = "G.actors.find(a => a.controller === 'remote')";
+
+test('the host learns what a guest is honestly running at', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5 });
+  match.run(2.0);
+
+  const offset = match.host.get(`${REMOTE}.netLagOffset`);
+  assert.ok(Number.isFinite(offset), 'the host should have an estimate at all');
+
+  /* One way plus the guest's interpolation delay: 48ms of link plus roughly a
+     58ms buffer on a steady connection. The estimate has to land on that and
+     not on the 300ms the protocol would otherwise allow. */
+  assert.ok(offset > 0.06 && offset < 0.16,
+    `estimate should be one way plus interpolation, was ${offset.toFixed(3)}s`);
+  assert.ok(match.host.get(`${REMOTE}.netRelayRttMs`) > 0,
+    'the relay should have attested a round trip');
+});
+
+test('a guest cannot pick its own rewind point out of the whole window', () => {
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5 });
+  match.run(2.0);
+
+  const offset = match.host.get(`${REMOTE}.netLagOffset`);
+  const honest = match.host.get(`netNarrowRewind(${REMOTE}, G.time - ${offset})`);
+  const hostTime = match.host.get('G.time');
+  assert.ok(Math.abs((hostTime - honest) - offset) < 1e-9,
+    'a request already at the estimate should pass through untouched');
+
+  /* The two ends of the window the protocol alone would hand over: the
+     furthest back a backtracking cheat would reach for, and the newest instant
+     it could claim instead. Both come back held to the guest's own measured
+     lag, so the search space is the tolerance rather than the bound. */
+  for (const requested of [0.3, 0.0]) {
+    const narrowed = match.host.get(`netNarrowRewind(${REMOTE}, G.time - ${requested})`);
+    const applied = match.host.get('G.time') - narrowed;
+    assert.ok(Math.abs(applied - offset) <= 0.0305,
+      `a claimed ${requested}s rewind should be held near ${offset.toFixed(3)}s, ` +
+      `got ${applied.toFixed(3)}s`);
+  }
+});
+
+test('an unattested round trip still narrows to the guest\'s own history', () => {
+  /* An older relay sends no measurement. The ceiling falls back to the flat
+     protocol bound, which is the point at which the smoothed offset is the
+     only thing holding the request down — so it has to hold it on its own. */
+  const match = SIM.createMatch({ latencyMs: LIVE_LATENCY_MS, seed: 5 });
+  match.run(2.0);
+  match.host.run(`${REMOTE}.netRelayRttMs = 0;`);
+
+  const offset = match.host.get(`${REMOTE}.netLagOffset`);
+  const narrowed = match.host.get(`netNarrowRewind(${REMOTE}, G.time - 0.3)`);
+  const applied = match.host.get('G.time') - narrowed;
+  assert.ok(applied < 0.2, `should not reach the flat bound, got ${applied.toFixed(3)}s`);
+  assert.ok(Math.abs(applied - offset) <= 0.0305,
+    `should still sit near the estimate ${offset.toFixed(3)}s, got ${applied.toFixed(3)}s`);
+});
+
 test('a moving duel is not decided by the guest being dragged', () => {
   /* A stationary duel cannot see reconciliation at all: standing still, a
      mispredicted position costs nothing. Strafing, it costs everything --

@@ -345,7 +345,14 @@ function createLink(clock, opts) {
       const sanitized = NETP.sanitizeInput(message, relayLastSeq);
       if (!sanitized.ok) { stats.rejected++; return; }
       relayLastSeq = sanitized.value.seq;
-      enqueue('host', Object.assign({}, sanitized.value, { from: GUEST_ID }));
+      /* What the relay's own ping would have measured on this link, which is
+         what the shipped relay attaches. Present so the host's rewind bound is
+         exercised here on the same terms as in production rather than falling
+         back to the protocol's flat one. */
+      enqueue('host', Object.assign({}, sanitized.value, {
+        from: GUEST_ID,
+        rttMs: Math.round(latency * 2)
+      }));
     },
     /* Host -> relay -> guest, forwarded as-is once the epoch checks out. */
     fromHost(message) {
