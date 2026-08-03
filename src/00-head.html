@@ -1,4 +1,44 @@
 <meta charset="utf-8">
+<script>
+/* The sign-in callback arrives as `#auth_token=…&auth_expires_at=…` and has to
+   come off the address bar in the same tick the page starts parsing — which is
+   why this is here, ahead of the fonts, the CDN copy of Three.js and every
+   module in the bundle, rather than in 82-store.js where the rest of the store
+   lives. Anything above it in the document runs with page privileges and can
+   read location.href, and a CDN that stalls would otherwise leave a freshly
+   issued bearer sitting visible in the popup's address bar for as long as the
+   player leaves the window open — and in history, and in anything they copy.
+
+   It sits second because the charset declaration has to stay inside the first
+   1024 bytes; everything after that point is negotiable, this is not.
+
+   Deliberately dependency-free: no bundle globals, no helpers, all of it inside
+   one try. If the store module never loads, the token still leaves the URL.
+   The values are handed on through a one-shot function that deletes itself on
+   the first call, so once the store has taken them there is nothing left on
+   window for later code to find. */
+(function () {
+  try {
+    var hash = typeof location.hash === 'string' ? location.hash : '';
+    if (hash.length < 2) return;
+    var fragment = new URLSearchParams(hash.slice(1));
+    if (!fragment.has('auth_token') && !fragment.has('auth_expires_at')) return;
+    var found = { token: fragment.get('auth_token'), expiresAt: fragment.get('auth_expires_at') };
+    fragment.delete('auth_token');
+    fragment.delete('auth_expires_at');
+    /* Whatever else was in the fragment — #room=ABCDE — belongs to the page. */
+    var rest = fragment.toString();
+    if (history && history.replaceState)
+      history.replaceState(null, '', location.pathname + location.search + (rest ? '#' + rest : ''));
+    window.__pnTakeAuthCallback = function () {
+      var taken = found;
+      found = null;
+      try { delete window.__pnTakeAuthCallback; } catch (e) { window.__pnTakeAuthCallback = null; }
+      return taken;
+    };
+  } catch (e) {}
+})();
+</script>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -334,6 +374,118 @@ body.touch .sens{display:none}
   .mode-option{min-height:48px;padding-top:5px;padding-bottom:6px}
   #roomCode{padding-top:5px;padding-bottom:6px}
   .keys span{font-size:10px;padding:2px 7px 3px}
+}
+
+/* =====================================================================
+   SIGN-IN ROW + THE LOCKER
+   Both are title-screen furniture, so they are built out of the parts the
+   rest of that card is built out of: .mini-btn, .panel, the same 2.5px
+   ink outline and 3px drop. The row sits between the callsign and the aim
+   settings because who you are and what you are called belong together.
+   The store itself is a .screen, which buys it the auto-margin centring
+   the title uses -- six cards are taller than a phone held sideways, and
+   that machinery is the only thing that keeps the top of a tall card
+   reachable instead of cropped off the window.
+   ===================================================================== */
+.locker{width:min(330px,100%);display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;pointer-events:auto}
+/* 44px everywhere something can be pressed, and it is a floor rather than a
+   size: this game is played on a phone held sideways, where a thumb covers
+   more than it can aim at. Everything below that wants to be smaller on a
+   short screen shrinks its decoration -- the type, the padding, the swatch --
+   and leaves the box you actually hit alone. */
+.locker .mini-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-height:44px;font-size:11px;letter-spacing:.1em}
+.locker-btn{flex:1 1 auto;min-width:0}
+#signIn{background:#fff}
+.gmark{width:15px;height:15px;flex:none}
+.locker-store{flex:0 0 auto;background:linear-gradient(180deg,#f3e9ff,#d4c5f9)}
+.locker-who{flex:1 1 175px;display:flex;align-items:center;gap:8px;min-width:0;
+  padding:4px 6px 4px 12px;border:2.5px solid var(--ink);border-radius:12px;
+  background:rgba(255,255,255,.76);box-shadow:0 3px 0 var(--ink)}
+.locker-who .tag{font-family:var(--disp);font-size:9px;font-weight:700;letter-spacing:.13em;
+  color:var(--ink-soft);flex:none}
+#accountName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--disp);font-size:13px;font-weight:800;letter-spacing:.03em}
+.locker-who .mini-btn{flex:none;min-height:44px;padding:5px 10px 6px;font-size:10px}
+#lockerNote{flex:1 0 100%;text-align:center;font-family:var(--disp);font-size:11px;font-weight:600;
+  letter-spacing:.04em;color:#b8406a}
+#lockerNote:empty{display:none}
+
+#store{z-index:36}                /* over #title (34): it replaces that card, not shares it */
+.store-card{width:min(680px,calc(100vw - 16px));max-height:calc(100vh - 30px);padding:15px 17px 17px;
+  display:flex;flex-direction:column;gap:11px;pointer-events:auto}
+.store-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+/* A flex child is as wide as its longest word unless told otherwise, and the
+   words here are somebody else's: a Google display name, a catalog name the
+   relay wrote. Forty unbroken characters would push CLOSE off the card at
+   phone width, so the text column is allowed to be narrower than its content
+   and the content is allowed to break mid-word. */
+.store-head-text{min-width:0}
+.store-head h2{font-family:var(--disp);font-size:24px;font-weight:800;letter-spacing:.09em;line-height:1;
+  overflow-wrap:anywhere}
+.store-sub{margin-top:4px;font-family:var(--disp);font-size:11px;font-weight:600;letter-spacing:.05em;
+  color:var(--ink-soft);overflow-wrap:anywhere}
+#storeClose{flex:none;min-height:44px}
+#storeNote{font-family:var(--disp);font-size:12px;font-weight:600;letter-spacing:.035em;
+  color:#4f7389;text-align:center}
+#storeNote[data-kind="error"]{color:#b8406a}
+#storeNote:empty{display:none}
+/* Scrolls inside the card rather than growing it, so CLOSE stays where it
+   was put on a short screen. */
+#storeGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:10px;
+  overflow-y:auto;padding:3px}
+.sitem{display:flex;flex-direction:column;gap:6px;padding:9px 10px 10px;
+  border:2.5px solid var(--ink);border-radius:15px;background:rgba(255,255,255,.66);
+  box-shadow:0 3px 0 var(--ink)}
+.sitem.owned{background:rgba(255,255,255,.92)}
+/* Equipped is a state of the card, not of the button alone -- at a glance
+   across six of them the ring is what you actually read. */
+.sitem.on{box-shadow:0 3px 0 var(--ink),0 0 0 3px #d4638f}
+.swatch{height:56px;border:2.5px solid var(--ink);border-radius:11px;
+  box-shadow:inset 0 -6px 12px rgba(74,63,92,.14)}
+/* Same reasoning as the header: the name and the price are the relay's text
+   in a two-column card 152px wide. */
+.sname{font-family:var(--disp);font-size:15px;font-weight:800;letter-spacing:.02em;line-height:1.1;
+  min-width:0;overflow-wrap:anywhere}
+.skind{font-family:var(--disp);font-size:9px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft);
+  min-width:0;overflow-wrap:anywhere}
+.sfoot{margin-top:auto;padding-top:3px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sprice{font-family:var(--disp);font-size:13px;font-weight:800;letter-spacing:.04em;
+  min-width:0;overflow-wrap:anywhere}
+.sitem .mini-btn{min-height:44px;padding:8px 13px 9px;font-size:11px}
+.sitem .mini-btn[aria-pressed="true"]{background:linear-gradient(180deg,#fff2c9,#ffe08a)}
+.sitem .mini-btn:focus-visible,.locker .mini-btn:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+/* The dialog takes focus when it opens; it should say so quietly rather than
+   draw a ring around the whole card. */
+.store-card:focus{outline:none}
+.store-card:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+
+/* A phone in portrait: two columns is the narrowest a card can be and still
+   fit a name, and one column would put BUY six scrolls apart. */
+@media(max-width:430px){
+  .store-card{padding:12px 12px 14px}
+  #storeGrid{grid-template-columns:1fr 1fr;gap:8px;padding:2px}
+  .sitem{padding:7px 8px 8px;border-radius:13px}
+  .swatch{height:44px}
+  .sname{font-size:13px}
+  .sfoot{flex-wrap:wrap;gap:5px}
+  .sitem .mini-btn{flex:1 1 100%;padding:8px 6px 9px}
+}
+/* A phone held sideways, which is how this game is played: the title card is
+   already over budget at this height, so the locker gets shorter rather than
+   dropping off it the way the social link does. */
+@media(max-height:430px){
+  .locker{gap:6px}
+  .locker .mini-btn{font-size:10px;padding-top:5px;padding-bottom:6px}
+  .locker-who{padding-top:2px;padding-bottom:2px}
+  .store-card{max-height:calc(100vh - 14px);padding:10px 12px 12px;gap:8px}
+  .store-head h2{font-size:19px}
+  .store-sub{font-size:10px}
+  #storeGrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:7px}
+  .swatch{height:32px}
+  .sitem{gap:4px;padding:6px 8px 7px}
+  .sname{font-size:13px}
+  .skind{font-size:8px}
 }
 
 /* .screen's wash is tuned for the title and match-over cards, where there is

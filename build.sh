@@ -37,7 +37,7 @@ trap 'rm -f "$TMP"' EXIT
 
   for f in src/10-core.js src/20-world.js src/30-physics.js src/40-weapons.js \
            src/50-actors.js src/60-fx.js src/70-game.js src/72-pickups.js src/75-network.js \
-           src/78-touch.js src/80-ui.js src/90-main.js; do
+           src/78-touch.js src/80-ui.js src/82-store.js src/90-main.js; do
     echo "<script>/* ===== $f ===== */"
     cat "$f"
     echo '</script>'
