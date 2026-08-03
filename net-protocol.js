@@ -14,7 +14,12 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  /* 8: match mode, kill-confirmed donuts and confirm scores are authoritative
+  /* 9: player-selected cosmetics cross the room handshake and snapshots. The
+     jersey is still seat identity, but a version 8 host cannot carry the
+     separate appearance metadata through a snapshot or a migration, so the
+     two versions must never share a room.
+
+     8: match mode, kill-confirmed donuts and confirm scores are authoritative
      state. A version 7 guest cannot represent that state and could become a
      host after migration, so the two versions must never share a room.
 
@@ -32,7 +37,7 @@
      version 5 host receiving a mid-round roster change seats nobody, and the
      arrival becomes a ghost sending input no authority ever applies. Refusing
      the handshake is the only honest outcome, so old and new must not mix. */
-  var VERSION = 8;
+  var VERSION = 9;
   /* Nine seats, because nine is how many combatants the match runs. Any
      smaller and the shortfall is made up with bots no matter how popular the
      room gets, which is the one thing a full room should not have to do. */
@@ -124,6 +129,64 @@
     return Number.isSafeInteger(value) && value >= 0 && value < MAX_PLAYERS;
   }
 
+  /* Cosmetic ids are deliberately soft data. A stale client may name an item
+     this build has never heard of, while a damaged preference may not be a
+     string at all; neither is a reason to lose a seat. This first pass keeps
+     only a small, inert identifier. Callers that know the catalog can provide
+     `accepts` to turn unknown or wrong-slot ids into null as well. */
+  function cleanCosmeticId(value) {
+    if (typeof value !== 'string' || value.length < 1 || value.length > 120)
+      return null;
+    return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) ? value : null;
+  }
+
+  function acceptedCosmetic(accepts, id, kind, slot) {
+    if (!id || typeof accepts !== 'function') return id;
+    try {
+      return accepts(id, kind, slot) ? id : null;
+    } catch (error) {
+      /* Validation is a default-appearance boundary. Even a bad catalog
+         adapter must not turn somebody's paint choice into a bad message. */
+      return null;
+    }
+  }
+
+  function sanitizeCosmetics(value, accepts) {
+    var source = value && typeof value === 'object' && !Array.isArray(value)
+      ? value
+      : null;
+    var rawWeapons = source && source.weapons &&
+      typeof source.weapons === 'object' && !Array.isArray(source.weapons)
+      ? source.weapons
+      : null;
+    var character = acceptedCosmetic(
+      accepts,
+      cleanCosmeticId(source && source.character),
+      'character',
+      null
+    );
+    var weapons = {};
+    for (var i = 0; i < ALLOWED_WEAPONS.length; i++) {
+      var slot = ALLOWED_WEAPONS[i];
+      weapons[slot] = acceptedCosmetic(
+        accepts,
+        cleanCosmeticId(rawWeapons && rawWeapons[slot]),
+        'weapon',
+        slot
+      );
+    }
+    return { character: character, weapons: weapons };
+  }
+
+  function hasCosmetics(value) {
+    var clean = sanitizeCosmetics(value);
+    if (clean.character) return true;
+    for (var i = 0; i < ALLOWED_WEAPONS.length; i++) {
+      if (clean.weapons[ALLOWED_WEAPONS[i]]) return true;
+    }
+    return false;
+  }
+
   function isAuthorityEpoch(value) {
     return Number.isSafeInteger(value) && value > 0;
   }
@@ -204,7 +267,13 @@
         }
       }
       if (raw.id === localId) includesLocal = true;
-      members.push({ id: raw.id, name: name, role: raw.role, slot: raw.slot });
+      var member = { id: raw.id, name: name, role: raw.role, slot: raw.slot };
+      var cosmetics = sanitizeCosmetics(raw.cosmetics);
+      /* Keep the legacy shape for a default-dressed member. Apart from making
+         old diagnostics easier to read, omission makes null mean exactly the
+         same thing as a client that predates the selection. */
+      if (hasCosmetics(cosmetics)) member.cosmetics = cosmetics;
+      members.push(member);
     }
     if (hosts !== 1 || !seen[message.host] || !includesLocal) {
       return result(false, null, 'host change roster is incomplete');
@@ -693,6 +762,9 @@
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
     validSlot: validSlot,
+    cleanCosmeticId: cleanCosmeticId,
+    sanitizeCosmetics: sanitizeCosmetics,
+    hasCosmetics: hasCosmetics,
     isAuthorityEpoch: isAuthorityEpoch,
     sanitizeHostChanged: sanitizeHostChanged,
     sanitizeAuthorityState: sanitizeAuthorityState,
