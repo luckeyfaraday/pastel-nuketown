@@ -32,10 +32,49 @@ const WEAPONS = [
 ];
 const WBY = {}; WEAPONS.forEach(w => WBY[w.id] = w);
 
+/* Weapon cosmetics live beside the simulation records but never replace
+   them. The viewmodel only borrows these palette and effect fields, so a
+   skin can make a gun feel new without quietly introducing a fourth weapon
+   with different damage, timing or ammunition. */
+const WEAPON_SKINS = {
+  'smg-cottoncloud': {
+    weapon: 'smg', name: 'Cotton Cloud',
+    col: { body: 0xf5f3f7, accent: 0x38c4d3, metal: 0xe9e2f2, grip: 0x8fa7bd },
+    flash: 0xfff3d1, tracer: 0xd8f4ff
+  },
+  'shotgun-toastedmallow': {
+    weapon: 'shotgun', name: 'Toasted Mallow',
+    col: { body: 0xf4c58f, accent: 0xffe2b6, metal: 0xfff3df, grip: 0xb8786e },
+    flash: 0xffc47f, tracer: 0xffaa7e
+  },
+  'rifle-berryswirl': {
+    weapon: 'rifle', name: 'Berry Swirl',
+    col: { body: 0xe4b8d7, accent: 0xc8f2dc, metal: 0xf1e5f0, grip: 0x765678 },
+    flash: 0xffd5e9, tracer: 0xa9d4e7
+  }
+};
+
+/* A cosmetic lookup is deliberately forgiving. A stale client can receive a
+   newer id, and the safe result is the exact base record rather than a
+   partially dressed gun or a failed render. */
+function baseWeapon(w) {
+  if (!w) return null;
+  if (w.id && WBY[w.id]) return WBY[w.id];
+  return WBY[w.weapon] || null;
+}
+function weaponForSkin(w, skinId) {
+  const base = baseWeapon(w);
+  const skin = typeof skinId === 'string' ? WEAPON_SKINS[skinId] : null;
+  if (!base || !skin || skin.weapon !== base.id || !skin.col) return base;
+  return Object.assign({}, base, {
+    col: skin.col, flash: skin.flash, tracer: skin.tracer
+  });
+}
+
 /* =====================================================================
    VIEWMODEL SCENE
    ===================================================================== */
-let vmScene, vmCam, vmRoot, vmGuns = {}, vmHands = null, vmFlash = null, vmLight = null;
+let vmScene, vmCam, vmRoot, vmGuns = {}, vmGunVariants = {}, vmHands = null, vmFlash = null, vmLight = null;
 
 /* The guns are modelled at true scale (~0.9m) and then shrunk to viewmodel
    proportions. Anything sized to match the gun — the muzzle flash above all
@@ -64,12 +103,15 @@ function starTexture() {
 let STAR_TEX = null;
 
 /* ---- gun bodies, built from chunky boxes so they read as toys ---- */
-function buildGunMesh(w) {
+function buildGunMesh(w, skinId) {
+  const base = baseWeapon(w);
+  if (!base) return null;
+  const visual = weaponForSkin(w, skinId);
   const B = new GeoBuilder();
-  const c = w.col;
+  const c = visual.col;
   const body = C(c.body), acc = C(c.accent), met = C(c.metal), grip = C(c.grip);
 
-  if (w.id === 'smg') {
+  if (base.id === 'smg') {
     B.box([-0.055, -0.030, -0.30], [0.055, 0.075, 0.13], body, { top: Cx(c.body, 1.05) });
     B.box([-0.038, 0.075, -0.24], [0.038, 0.098, 0.06], acc);              // top rail
     B.box([-0.030, -0.012, -0.52], [0.030, 0.048, -0.30], met);            // barrel shroud
@@ -82,7 +124,7 @@ function buildGunMesh(w) {
     B.box([-0.014, 0.098, -0.20], [0.014, 0.128, -0.17], met);             // front sight
     B.box([-0.020, 0.098, 0.02], [0.020, 0.126, 0.05], met);               // rear sight
     B.box([-0.058, 0.012, -0.16], [0.058, 0.040, -0.10], acc);             // side stripe
-  } else if (w.id === 'shotgun') {
+  } else if (base.id === 'shotgun') {
     B.box([-0.058, -0.020, -0.34], [0.058, 0.078, 0.16], body, { top: Cx(c.body, 1.05) });
     B.box([-0.030, 0.014, -0.70], [0.030, 0.070, -0.34], met);             // barrel
     B.box([-0.036, 0.006, -0.72], [0.036, 0.078, -0.66], acc);             // muzzle band
@@ -121,8 +163,8 @@ function buildGunMesh(w) {
     H.box([x - 0.070, y - 0.070, z + 0.060], [x + 0.070, y + 0.070, z + 0.115], cuff);
     H.box([x - 0.030, y + 0.040, z - 0.095], [x + 0.052, y + 0.078, z + 0.010], skin);  // thumb over top
   };
-  if (w.id === 'smg')       { hand(0, -0.105, 0.128); hand(0, -0.045, -0.24); }
-  else if (w.id === 'shotgun') { hand(0, -0.095, 0.145); hand(0, -0.075, -0.40); }
+  if (base.id === 'smg')       { hand(0, -0.105, 0.128); hand(0, -0.045, -0.24); }
+  else if (base.id === 'shotgun') { hand(0, -0.095, 0.145); hand(0, -0.075, -0.40); }
   else                      { hand(0, -0.100, 0.155); hand(0, -0.055, -0.20); }
   const hm = H.mesh(); hm.castShadow = false;
   g.add(hm);
@@ -130,13 +172,33 @@ function buildGunMesh(w) {
 
   // muzzle marker
   const muz = new THREE.Object3D();
-  muz.position.set(0, 0.02, w.id === 'rifle' ? -0.90 : (w.id === 'shotgun' ? -0.72 : -0.62));
+  muz.position.set(0, 0.02, base.id === 'rifle' ? -0.90 : (base.id === 'shotgun' ? -0.72 : -0.62));
   g.add(muz);
   g.userData.muzzle = muz;
   // magazine part, animated during reload
   g.userData.mag = null;
   g.scale.setScalar(VM_SCALE);
   return g;
+}
+
+/* Keep the three ordinary guns resident for a quick first frame, but defer
+   cosmetic meshes until a selection actually asks for one. Phones pay for
+   every material and line buffer we keep alive, so unused paint should not
+   double the viewmodel's startup footprint. */
+function ensureVmGunVariant(id, skinId) {
+  const base = WBY[id];
+  if (!base) return null;
+  if (!vmRoot) return null;
+  const variants = vmGunVariants[id] || (vmGunVariants[id] = {});
+  const key = skinId || 'default';
+  if (!variants[key]) {
+    const g = buildGunMesh(base, skinId);
+    if (!g) return null;
+    g.visible = false;
+    vmRoot.add(g);
+    variants[key] = g;
+  }
+  return variants[key];
 }
 
 function initViewmodel() {
@@ -155,10 +217,11 @@ function initViewmodel() {
   vmScene.add(vmRoot);
 
   for (const w of WEAPONS) {
-    const g = buildGunMesh(w);
-    g.visible = false;
-    vmRoot.add(g);
-    vmGuns[w.id] = g;
+    const variants = { default: buildGunMesh(w) };
+    variants.default.visible = false;
+    vmRoot.add(variants.default);
+    vmGunVariants[w.id] = variants;
+    vmGuns[w.id] = variants.default;
   }
 
   // muzzle flash: additive star + tiny core + a real point light on the world
@@ -181,6 +244,8 @@ function initViewmodel() {
    ===================================================================== */
 const VM = {
   cur: 'smg',
+  skin: null,
+  visual: WBY.smg,
   recoil: 0, recoilV: 0,
   rot: 0, rotV: 0,
   bobT: 0, bob: new THREE.Vector2(),
@@ -193,24 +258,42 @@ const VM = {
   landDip: 0
 };
 
-function vmSetWeapon(id, instant) {
-  if (VM.cur === id && !instant) return;
+function vmSetWeapon(id, instant, skinId) {
+  const base = WBY[id];
+  if (!base) return;
+  const skin = base && typeof skinId === 'string' && WEAPON_SKINS[skinId] &&
+    WEAPON_SKINS[skinId].weapon === base.id ? skinId : null;
+  if (VM.cur === id && VM.skin === skin && !instant) return;
   VM.swapFrom = VM.cur;
   VM.cur = id;
+  VM.skin = skin;
+  /* Resolve the cosmetic once per weapon/skin change. Firing can happen many
+     times before the next change, and allocating the same visual copy per
+     bullet only creates garbage for the flash colour. */
+  VM.visual = weaponForSkin(base, skin);
   VM.swapT = instant ? 0 : 0.42;
-  for (const k in vmGuns) vmGuns[k].visible = (k === id);
+  for (const id2 in vmGunVariants)
+    for (const variant in vmGunVariants[id2]) vmGunVariants[id2][variant].visible = false;
+  const chosen = ensureVmGunVariant(id, skin);
+  if (chosen) {
+    chosen.visible = true;
+    vmGuns[id] = chosen;
+  }
 }
 function vmFire(w) {
-  VM.recoilV += w.kick * 46;
-  VM.rotV    += w.kickRot * 46;
+  const base = baseWeapon(w);
+  if (!base) return;
+  const visual = VM.visual && VM.visual.id === base.id ? VM.visual : base;
+  VM.recoilV += base.kick * 46;
+  VM.rotV    += base.kickRot * 46;
   VM.flashT = 0.055;
   vmFlash.visible = true;
   vmFlash.rotation.z = rand(0, TAU);
-  const s = (w.id === 'shotgun' ? rand(0.68, 0.86) : rand(0.38, 0.52)) * VM_SCALE;
+  const s = (base.id === 'shotgun' ? rand(0.68, 0.86) : rand(0.38, 0.52)) * VM_SCALE;
   // colour in the flash, not just a white core — this is what makes the
   // three guns feel like different toys rather than one reskinned box
-  vmFlash.children[0].material.color.copy(C(w.flash || 0xfff0c0));
-  vmLight.color.copy(C(w.flash || 0xffdca8));
+  vmFlash.children[0].material.color.copy(C(visual.flash || 0xfff0c0));
+  vmLight.color.copy(C(visual.flash || 0xffdca8));
   vmFlash.children[0].scale.set(s, s, 1);
 }
 function vmStartReload(dur) { VM.reloadT = dur; VM.reloadDur = dur; }
