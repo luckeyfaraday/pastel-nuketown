@@ -181,6 +181,14 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
   background:#fff8f0;color:var(--ink);box-shadow:0 3px 0 var(--ink);font-family:var(--disp);font-weight:800;
   letter-spacing:.06em;white-space:nowrap}
 .mini-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 0 var(--ink)}
+/* An <a> rather than a <button>, so it needs the bits .mini-btn leaves to the
+   button default: its own font-size, no underline, and a box that lines the
+   glyph up with the text. Sits below #menuNote as the quietest thing on the
+   card -- it should never compete with PLAY. */
+.social{display:inline-flex;align-items:center;gap:7px;padding:6px 13px 7px;font-size:12px;
+  text-decoration:none;opacity:.72;transition:opacity .12s,transform .09s,box-shadow .09s}
+.social:hover{opacity:1}
+.social svg{width:12px;height:12px;flex:none}
 .listed{display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--disp);font-size:11px;
   font-weight:700;letter-spacing:.11em;color:var(--ink-soft)}
 .listed input{width:15px;height:15px;accent-color:#d4638f;cursor:pointer}
@@ -206,8 +214,6 @@ body.touch .sens{display:none}
 .mode-option[aria-pressed="true"]{background:linear-gradient(180deg,#fff2c9,#ffe08a);transform:translateY(-1px);
   box-shadow:0 4px 0 var(--ink)}
 .mode-option:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
-.mode-picker-note{margin-top:4px;font-family:var(--disp);font-size:10px;font-weight:600;line-height:1.15;
-  letter-spacing:.035em;color:var(--ink-soft)}
 /* Hosting a room by hand is a minority path now that PLAY picks one, but as an
    underlined line of fine print it read as a caption and nobody found CREATE
    ROOM behind it. It is a real button now — quieter than PLAY, still a button —
@@ -274,7 +280,6 @@ body.touch .sens{display:none}
 .keys span b{font-weight:800;color:#d4638f}
 @media(max-height:760px){
   .mode-option{min-height:44px;padding-top:5px;padding-bottom:6px}
-  .mode-picker-note{margin-top:3px;font-size:9px}
   #title h1{font-size:clamp(42px,8vw,78px)}
   #title .sub{margin-top:9px}
   #menu,#lobby{margin-top:14px}
@@ -313,6 +318,7 @@ body.touch .sens{display:none}
   #title h1{font-size:38px}
   #title .sub{display:none}
   .online-count{display:none}
+  .social{display:none}       /* landscape phone: the card is already over budget */
   .identity{padding-top:3px;padding-bottom:3px}
   .menu-btn{padding-top:8px;padding-bottom:10px}
   .menu-btn.alt,#menu:not(.pause) #play{padding-top:8px;padding-bottom:10px}
