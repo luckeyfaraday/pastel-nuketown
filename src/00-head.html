@@ -350,6 +350,28 @@ body.touch .sens{display:none}
 #dead .cd{margin-top:22px;font-family:var(--disp);font-size:58px;font-weight:800;color:#fff;
   text-shadow:0 4px 0 var(--ink)}
 
+/* Quiet on purpose, and quiet in a specific direction: this is the one control
+   on the screen you should not press by reflex. It sits under the respawn
+   count so the eye reaches it last, and it is the only thing on the card that
+   is pressable at all — everything above it is a label. */
+#dead .report{margin-top:20px;pointer-events:auto;cursor:pointer;font-family:var(--disp);
+  font-size:13px;font-weight:700;letter-spacing:.09em;color:var(--ink);padding:7px 16px 8px;
+  border:2px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.55);
+  box-shadow:0 3px 0 var(--ink);opacity:.72;transition:opacity .15s}
+#dead .report:hover:not(:disabled){opacity:1}
+#dead .report:active:not(:disabled){transform:translateY(3px);box-shadow:none}
+#dead .report .k{display:inline-block;margin-left:7px;padding:1px 5px 2px;border-radius:5px;
+  border:1.5px solid var(--ink);font-size:10px;opacity:.8}
+#dead .report:disabled{cursor:default;opacity:.9;box-shadow:none;transform:translateY(3px);
+  background:rgba(214,240,226,.85)}
+/* No report target, so no button: solo, bots, and a world death all land here.
+   Hidden rather than disabled — a control for something that cannot happen is
+   noise, not information. */
+#dead .report.off{display:none}
+/* The key hint is a lie on a phone, where there is no keyboard and the tap
+   works on its own. */
+body.touch #dead .report .k{display:none}
+
 #over .big{font-family:var(--disp);font-size:clamp(40px,9vw,96px);font-weight:800;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 14px 30px rgba(74,63,92,.3);text-align:center}
 #over .rank{margin-top:16px;font-family:var(--disp);font-size:22px;font-weight:700;color:var(--ink)}

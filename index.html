@@ -352,6 +352,28 @@ body.touch .sens{display:none}
 #dead .cd{margin-top:22px;font-family:var(--disp);font-size:58px;font-weight:800;color:#fff;
   text-shadow:0 4px 0 var(--ink)}
 
+/* Quiet on purpose, and quiet in a specific direction: this is the one control
+   on the screen you should not press by reflex. It sits under the respawn
+   count so the eye reaches it last, and it is the only thing on the card that
+   is pressable at all — everything above it is a label. */
+#dead .report{margin-top:20px;pointer-events:auto;cursor:pointer;font-family:var(--disp);
+  font-size:13px;font-weight:700;letter-spacing:.09em;color:var(--ink);padding:7px 16px 8px;
+  border:2px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.55);
+  box-shadow:0 3px 0 var(--ink);opacity:.72;transition:opacity .15s}
+#dead .report:hover:not(:disabled){opacity:1}
+#dead .report:active:not(:disabled){transform:translateY(3px);box-shadow:none}
+#dead .report .k{display:inline-block;margin-left:7px;padding:1px 5px 2px;border-radius:5px;
+  border:1.5px solid var(--ink);font-size:10px;opacity:.8}
+#dead .report:disabled{cursor:default;opacity:.9;box-shadow:none;transform:translateY(3px);
+  background:rgba(214,240,226,.85)}
+/* No report target, so no button: solo, bots, and a world death all land here.
+   Hidden rather than disabled — a control for something that cannot happen is
+   noise, not information. */
+#dead .report.off{display:none}
+/* The key hint is a lie on a phone, where there is no keyboard and the tap
+   works on its own. */
+body.touch #dead .report .k{display:none}
+
 #over .big{font-family:var(--disp);font-size:clamp(40px,9vw,96px);font-weight:800;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 14px 30px rgba(74,63,92,.3);text-align:center}
 #over .rank{margin-top:16px;font-family:var(--disp);font-size:22px;font-weight:700;color:var(--ink)}
@@ -639,6 +661,7 @@ body.touch .touch-keys{display:flex}
   <div class="big">DOWN!</div>
   <div class="by" id="deadBy"></div>
   <div class="cd" id="deadCd">3</div>
+  <button class="report off" id="deadReport" type="button"><span id="deadReportLabel">REPORT AIM</span><span class="k">F</span></button>
 </div>
 
 <div class="screen off" id="over">
@@ -2602,6 +2625,40 @@ if (typeof THREE === "undefined") {
     }, null);
   }
 
+  /* A report is one player saying "look at this one", and deliberately nothing
+     more. No reason text: free text from strangers is a moderation problem of
+     its own, and the relay is not going to read it. No claim about what was
+     seen either — the reporter names a peer, the relay writes it down, and
+     whether it means anything is decided later, off this wire, by counting how
+     many different rooms flagged the same person.
+
+     Carrying `v` costs nothing here because a peer that disagrees about the
+     version never cleared the handshake, and it keeps this message shaped like
+     every other one a client sends. */
+  var MAX_REPORT_TARGET_LENGTH = 80;
+
+  function sanitizeReport(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return result(false, null, 'report must be an object');
+    }
+    if (message.t !== 'report') {
+      return result(false, null, 'unexpected message type');
+    }
+    if (message.v !== VERSION) {
+      return result(false, null, 'unsupported protocol version');
+    }
+    if (typeof message.target !== 'string' || !message.target ||
+        message.target.length > MAX_REPORT_TARGET_LENGTH) {
+      return result(false, null, 'target must be a peer id');
+    }
+
+    return result(true, {
+      t: 'report',
+      v: VERSION,
+      target: message.target
+    }, null);
+  }
+
   function utf8Size(text) {
     if (typeof TextEncoder !== 'undefined') {
       return new TextEncoder().encode(text).byteLength;
@@ -2700,6 +2757,7 @@ if (typeof THREE === "undefined") {
     MAX_PITCH: MAX_PITCH,
     FIRE_INTENT_TTL: FIRE_INTENT_TTL,
     MAX_REWIND_SECONDS: MAX_REWIND_SECONDS,
+    MAX_REPORT_TARGET_LENGTH: MAX_REPORT_TARGET_LENGTH,
     PREDICTED_HIT_TTL: PREDICTED_HIT_TTL,
     MIN_INTERP_SNAPSHOTS: MIN_INTERP_SNAPSHOTS,
     MAX_INTERP_SNAPSHOTS: MAX_INTERP_SNAPSHOTS,
@@ -2726,6 +2784,7 @@ if (typeof THREE === "undefined") {
     wrapAngle: wrapAngle,
     lerpAngle: lerpAngle,
     sanitizeInput: sanitizeInput,
+    sanitizeReport: sanitizeReport,
     parseWireMessage: parseWireMessage
   });
 }));
@@ -6769,6 +6828,12 @@ function initInput() {
     if (e.code === 'Digit2') switchWeapon('shotgun');
     if (e.code === 'Digit3') switchWeapon('rifle');
     if (e.code === 'Tab') setBoard(true);
+    /* The death card's button, reachable. The pointer is locked to the canvas
+       for the whole respawn on desktop, so a click on it never arrives and the
+       key is the only way in. Guarded by !repeat so a held key files one
+       report, and sendReport itself refuses when there is nothing to report —
+       which is what keeps F inert for the rest of the match. */
+    if (e.code === 'KeyF' && !e.repeat) sendReport();
     if (e.code === 'Escape') { /* browser exits lock; handled below */ }
   });
   addEventListener('keyup', e => {
@@ -7743,7 +7808,9 @@ const NET = {
   roomsTimer: 0,
   quick: null,                  // in-flight quick-play plan, or null
   autoStartAt: 0,               // performance.now() the relay's clock reaches 0
-  countdownTimer: 0
+  countdownTimer: 0,
+  reports: new Set(),           // peer ids the relay has acknowledged a report for
+  reportSending: ''             // peer id of the report in flight, or ''
 };
 
 function netNow() { return performance.now(); }
@@ -8329,6 +8396,10 @@ function netResetTransport() {
   NET.scoreSignature = '';
   NET.quick = null;
   NET.endReason = '';
+  /* Peer ids are per-connection, so a report list carried across a reconnect
+     would suppress the button against whoever inherits the id shape next. */
+  NET.reports.clear();
+  NET.reportSending = '';
   netCancelAutoStart();
   NET.manualClose = false;
 }
@@ -8590,7 +8661,23 @@ function netHandleWire(raw) {
     for (const event of msg.events) netApplyEvent(event);
     return;
   }
+  if (msg.t === 'reported') {
+    if (typeof msg.target === 'string' && msg.target) NET.reports.add(msg.target);
+    NET.reportSending = '';
+    updateReportButton();
+    return;
+  }
   if (msg.t === 'error') {
+    /* Handled before the shared branch below: a refused report must not take
+       down the lobby's status line or re-enable a start button mid-match. It
+       is a dead end by design — the relay only refuses one for a target that
+       is not in the room, which means the roster moved under the button, and
+       the next death offers it again. */
+    if (msg.code === 'invalid-report' || msg.code === 'no-such-player') {
+      NET.reportSending = '';
+      updateReportButton();
+      return;
+    }
     const errorText = typeof msg.message === 'string' && msg.message
       ? msg.message.slice(0, 200)
       : 'Multiplayer error.';
@@ -8622,6 +8709,28 @@ function netHandleWire(raw) {
       netStatus(errorText, 'error');
     }
   }
+}
+
+/* ---- reporting a player ----
+   Who can be reported: a human, in this room, who is not you. Bots carry a
+   `bot-N` netId and are never in the roster, so the roster lookup is the whole
+   test and there is no separate rule for them. An actor with no netId at all
+   is a solo match, where there is nobody to report to. */
+function netReportableId(actor) {
+  if (!netIsMultiplayer() || !actor || !actor.netId || actor.netId === NET.id) return null;
+  return NET.members.some(member => member.id === actor.netId) ? actor.netId : null;
+}
+
+function netHasReported(netId) { return !!netId && NET.reports.has(netId); }
+
+/* Optimistic only as far as the button: `reportSending` disables it so the
+   same death cannot file four reports while the first is still in the air, but
+   the label does not claim the report landed until the relay says so. */
+function netReportPlayer(netId) {
+  if (!netId || netHasReported(netId) || NET.reportSending) return false;
+  if (!netSend({ t: 'report', v: NETP.VERSION, target: netId })) return false;
+  NET.reportSending = netId;
+  return true;
 }
 
 /* The relay answers with a roster carrying the new deadline, so there is
@@ -10943,10 +11052,63 @@ function showDeadScreen(from) {
   $('deadBy').textContent = from && from !== G.player ? ('taken out by ' + from.name) : 'you went down';
   $('dead').classList.remove('off');
   killcamBegin(from);
+  updateReportButton();
 }
-function hideDeadScreen() { $('dead').classList.add('off'); killcamEnd(); if (!G.over) restoreBoard(); }
+function hideDeadScreen() {
+  $('dead').classList.add('off'); killcamEnd(); updateReportButton();
+  if (!G.over) restoreBoard();
+}
+
+/* ---- report ----
+   The button reports the killer, not whoever the camera happens to be on. The
+   two are the same for all but a moment: killcamActor drops the view when the
+   killer dies or leaves, and a target that vanished for the three seconds
+   their own respawn takes would be a button that flickered away under the
+   thumb reaching for it.
+
+   Everything about whether it can be pressed lives in netReportableId, so the
+   answer is the same one the relay will give — a bot, a solo match, a player
+   who already left, and yourself all come back null and the button is simply
+   not there. */
+function reportTarget() {
+  if (!G.player || G.player.alive || G.over) return null;
+  return netReportableId(KILLCAM.killer);
+}
+
+function updateReportButton() {
+  const el = $('deadReport');
+  if (!el) return;
+  const target = reportTarget();
+  el.classList.toggle('off', !target);
+  if (!target) return;
+  const sent = netHasReported(target);
+  el.disabled = sent || NET.reportSending === target;
+  const label = $('deadReportLabel');
+  if (label) label.textContent = sent ? 'REPORTED' : 'REPORT AIM';
+}
+
+function initReportButton() {
+  const el = $('deadReport');
+  if (!el) return;
+  el.addEventListener('click', () => { sendReport(); });
+}
+
+/* Two ways in, because on desktop the pointer is locked to the canvas for the
+   whole death and a click never reaches the button at all. The key is the real
+   control there; the button is what says the key exists. On touch there is no
+   lock and the tap is the only way in. */
+function sendReport() {
+  const target = reportTarget();
+  if (!target || netHasReported(target) || NET.reportSending) return;
+  netReportPlayer(target);
+  updateReportButton();
+}
 function updateDeadScreen() {
   if (G.player && !G.player.alive) $('deadCd').textContent = String(Math.max(1, Math.ceil(G.player.respawnT)));
+  /* Every frame the card is up, because the roster can move under it: a killer
+     who quits mid-respawn has to take the button with them rather than leave
+     one that the relay would only refuse. */
+  updateReportButton();
 }
 function showOverScreen(winner) {
   const rows = G.actors.slice().sort((a, b) => uiScore(b) - uiScore(a) || b.kills - a.kills);
@@ -11249,6 +11411,7 @@ function boot() {
   initFX();        set(82);
   initInput();
   initTouch();     set(88);
+  initReportButton();
   initAI();        set(96);
   initNetworkUI();
   const requestedMode = QS.get('mode');
