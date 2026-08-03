@@ -130,12 +130,21 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
    unreachable -- no amount of scrolling brings it back, so the title crops.
    Auto margins collapse to nothing once the content is taller than the
    viewport, which leaves the overflow entirely at the bottom where scrolling
-   can actually reach it. Looks identical whenever the card does fit. */
+   can actually reach it. Looks identical whenever the card does fit.
+   The margins hang off ::before/::after rather than the first and last
+   children: the title ends on two .keys rows and hides whichever one the
+   input type does not want, so a child selector picks a display:none element
+   half the time, loses that end's margin, and the column silently drops to
+   bottom-aligned with the last row against the window edge. The spacers are
+   always the real end items, and their height keeps the last row's shadow
+   off that edge -- and leaves a gutter to scroll to when the card is taller
+   than the window. */
 .screen{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:flex-start;
   flex-direction:column;background:radial-gradient(ellipse at 50% 38%,rgba(255,248,240,.26),rgba(180,198,238,.5));
   backdrop-filter:blur(2px);pointer-events:auto;overflow-y:auto;overflow-x:hidden}
-.screen>*:first-child{margin-top:auto}
-.screen>*:last-child{margin-bottom:auto}
+.screen::before,.screen::after{content:'';flex:0 0 auto;height:14px}
+.screen::before{margin-top:auto}
+.screen::after{margin-bottom:auto}
 .screen.off{display:none}
 #title{z-index:34}          /* always above the death / match-over cards */
 #title h1{font-family:var(--disp);font-size:clamp(46px,10vw,116px);font-weight:800;line-height:.86;
