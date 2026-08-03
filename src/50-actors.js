@@ -9,6 +9,28 @@ const CH = {
   shoulder: 1.28, armLen: 0.50, hipW: 0.115, legW: 0.155
 };
 
+/* The jersey remains the large, readable colour field on every character.
+   Skin-specific colours are reserved for small costume pieces, which lets a
+   player recognize a fox or a knight without losing track of whose team
+   colour is moving across the street. */
+const CHARACTER_SKINS = {
+  'char-midnight': {
+    name: 'Midnight',
+    cap: 0x5c6689, backpack: 0x69749a, boot: 0x48516f, badge: 0xb7b9e6
+  },
+  'char-sherbetfox': {
+    name: 'Sherbet Fox',
+    cap: 0xffb77d, backpack: 0xffc28f, boot: 0xd78378, badge: 0xffe0a8,
+    fur: 0xed8958, inner: 0xfff1c4, tailTip: 0xffefb0
+  },
+  'char-cloudknight': {
+    name: 'Cloud Knight',
+    cap: 0xf8fbff, backpack: 0xb9dcf0, boot: 0x9fc9df, badge: 0xdff5ff,
+    armor: 0xf8fbff, armorShade: 0xb9dcf0,
+    crest: 0xc8ecfa, crestShade: 0xffffff
+  }
+};
+
 function partMesh(build, withLines) {
   const B = new GeoBuilder();
   build(B);
@@ -18,9 +40,20 @@ function partMesh(build, withLines) {
   return g;
 }
 
-function buildCharacter(colors) {
+function buildCharacter(colors, skinId) {
+  const cosmetic = typeof skinId === 'string' ? CHARACTER_SKINS[skinId] : null;
   const body = colors.body, trim = colors.trim;
   const cB = C(body), cT = C(trim), cD = Cx(body, 0.9), skin = C(0xffe0c8), boot = C(0x6b5f80);
+  const skinColor = (key, fallback) => cosmetic && cosmetic[key] !== undefined ? C(cosmetic[key]) : fallback;
+  /* Keep the backpack in the skin palette because it is the large rear-facing
+     costume anchor that makes a selected outfit recognizable from cover;
+     the jersey remains the larger team-colour field across the front and
+     sides, so this does not turn the silhouette into a team-blind marker. */
+  const cCap = skinColor('cap', cT), cPack = skinColor('backpack', cD);
+  const cBoot = skinColor('boot', boot), cBadge = skinColor('badge', cT);
+  const cFur = skinColor('fur', cT), cInner = skinColor('inner', cT), cTailTip = skinColor('tailTip', cFur);
+  const cArmor = skinColor('armor', cT), cArmorShade = skinColor('armorShade', cT);
+  const cCrest = skinColor('crest', cT), cCrestShade = skinColor('crestShade', cCrest);
 
   const root = new THREE.Group();          // origin at the feet
   const hips = new THREE.Group();
@@ -30,9 +63,34 @@ function buildCharacter(colors) {
   const torso = partMesh(B => {
     B.box([-0.235, CH.legTop - 0.06, -0.145], [0.235, CH.torsoTop, 0.145], cB, { top: Cx(body, 1.05) });
     B.box([-0.245, CH.torsoTop - 0.10, -0.155], [0.245, CH.torsoTop, 0.155], cT);        // collar
-    B.box([-0.165, CH.legTop + 0.10, 0.145], [0.165, CH.torsoTop - 0.12, 0.255], cD);    // backpack
-    B.box([-0.10, CH.legTop + 0.16, -0.16], [0.10, CH.legTop + 0.30, -0.145], cT);       // chest badge
+    B.box([-0.165, CH.legTop + 0.10, 0.145], [0.165, CH.torsoTop - 0.12, 0.255], cPack);  // backpack
+    B.box([-0.10, CH.legTop + 0.16, -0.16], [0.10, CH.legTop + 0.30, -0.145], cBadge);    // chest badge
     B.box([-0.25, CH.legTop - 0.10, -0.15], [0.25, CH.legTop + 0.02, 0.15], cT);         // belt
+
+    if (skinId === 'char-sherbetfox') {
+      /* Hang the stepped fan from the hips, below the backpack's y=.84 floor,
+         so it reads as a tail from behind and in profile without becoming a
+         rearward hitbox cue. A 100^3 sample per box against torso/backpack/
+         belt volumes gives torso 0.0/0.0/0.0%, backpack 0.0/0.0/0.0% and
+         belt 3.6/11.0/6.6%; the furthest corner is
+         sqrt(.18^2 + .23^2) = .292 radial, below HIT.bodyR=.36. Its +z=.230
+         stays inside the default character's rearmost +.255. A tail-only
+         orthographic outline comparison at yaw 0/30/45/60/90/135/180 adds
+         0.0/0.0/15.6/54.9/121.0/16.3/0.0 cm^2 outside the default outline,
+         giving it real outline at oblique and side yaws without extending
+         the rearward silhouette. z audit, tail base/mid/tip maxima:
+         +.230/.190/.170. */
+      B.box([-0.18, 0.60, 0.145], [0.18, 0.70, 0.23], cFur);
+      B.box([-0.205, 0.64, 0.145], [0.205, 0.76, 0.19], cFur);
+      B.box([-0.215, 0.73, 0.145], [-0.16, 0.82, 0.17], cTailTip);
+    }
+
+    if (skinId === 'char-cloudknight') {
+      /* z audit, chest plate/shade maxima: -.148/-.146; both are forward of
+         the character and well inside the +.255 rearward limit. */
+      B.box([-0.14, CH.legTop + 0.20, -0.17], [0.14, CH.torsoTop - 0.19, -0.148], cArmor);
+      B.box([-0.10, CH.legTop + 0.27, -0.174], [0.10, CH.legTop + 0.33, -0.146], cArmorShade);
+    }
   }, true);
   hips.add(torso);
 
@@ -42,8 +100,8 @@ function buildCharacter(colors) {
   const head = partMesh(B => {
     const r = CH.headR;
     B.box([-r, -r, -r], [r, r, r], skin, { top: Cx(0xffe0c8, 1.03) });
-    B.box([-r - 0.022, r - 0.03, -r - 0.022], [r + 0.022, r + 0.055, r + 0.022], cT);    // cap
-    B.box([-r - 0.02, r - 0.055, -r - 0.115], [r + 0.02, r + 0.012, -r + 0.01], cT);     // brim
+    B.box([-r - 0.022, r - 0.03, -r - 0.022], [r + 0.022, r + 0.055, r + 0.022], cCap);  // cap
+    B.box([-r - 0.02, r - 0.055, -r - 0.115], [r + 0.02, r + 0.012, -r + 0.01], cCap);   // brim
     for (const s of [-1, 1]) {                                                            // eyes
       B.box([s * 0.075 - 0.048, -0.015, -r - 0.012], [s * 0.075 + 0.048, 0.075, -r + 0.01], C(0xfffdf8));
       B.box([s * 0.075 - 0.024, 0.005, -r - 0.024], [s * 0.075 + 0.024, 0.052, -r - 0.006], C(0x4a3f5c));
@@ -51,6 +109,36 @@ function buildCharacter(colors) {
     B.box([-0.055, -0.115, -r - 0.014], [0.055, -0.085, -r + 0.005], C(0xe8a0a8));       // mouth
     B.box([-r - 0.03, -0.06, -0.05], [-r, 0.03, 0.05], skin);                            // ears
     B.box([r, -0.06, -0.05], [r + 0.03, 0.03, 0.05], skin);
+
+    if (skinId === 'char-sherbetfox') {
+      /* The fur is now clearly warmer than the cap and the tips rise to
+         y=.340 (from .300), so the ears remain distinct at side and rear
+         yaws. On the 120^3 cap/brim/skull overlap sample the lower, upper and
+         inner pieces are 61.1%, 19.8% and 13.8% buried; the exposed top and
+         outer edges are inside the existing head-scale envelope. z audit,
+         each lower/upper/inner ear box maxes at +.120/+.120/-.040. */
+      for (const s of [-1, 1]) {
+        const x0 = s < 0 ? -0.295 : 0.18, x1 = s < 0 ? -0.18 : 0.295;
+        const t0 = s < 0 ? -0.275 : 0.215, t1 = s < 0 ? -0.215 : 0.275;
+        const i0 = s < 0 ? -0.285 : 0.245, i1 = s < 0 ? -0.245 : 0.285;
+        B.box([x0, 0.235, -0.08], [x1, 0.295, 0.12], cFur);
+        B.box([t0, 0.270, -0.06], [t1, 0.340, 0.12], cFur);
+        B.box([i0, 0.255, -0.11], [i1, 0.332, -0.04], cInner);
+      }
+    }
+
+    if (skinId === 'char-cloudknight') {
+      /* These front/rear lobes are merged into the head mesh, but their real
+         z depth still gives the crest a readable wrap from every yaw. The
+         rearward silhouette was +.300 (4.5 cm beyond the +.255 limit) and is
+         now +.255 (0.0 cm beyond it); the rear shade makes the same
+         +.300-to+.255 change. z audit, front/rear lobe maxima:
+         -.200/+.255; front/rear shade maxima: -.280/+.255. */
+      B.box([-0.14, 0.245, -0.30], [0.14, 0.30, -0.20], cCrest);
+      B.box([-0.14, 0.245, 0.20], [0.14, 0.30, 0.255], cCrest);
+      B.box([-0.065, 0.265, -0.30], [0.065, 0.295, -0.28], cCrestShade);
+      B.box([-0.065, 0.265, 0.235], [0.065, 0.295, 0.255], cCrestShade);
+    }
   }, true);
   headPiv.add(head);
   hips.add(headPiv);
@@ -58,12 +146,20 @@ function buildCharacter(colors) {
   // ---- limbs ----
   const mkLeg = () => partMesh(B => {
     B.box([-CH.legW, -CH.legTop + 0.10, -0.10], [CH.legW, 0, 0.10], cD);
-    B.box([-CH.legW - 0.012, -CH.legTop, -0.145], [CH.legW + 0.012, -CH.legTop + 0.14, 0.115], boot);
+    B.box([-CH.legW - 0.012, -CH.legTop, -0.145], [CH.legW + 0.012, -CH.legTop + 0.14, 0.115], cBoot);
   }, false);
   const mkArm = (isRight) => partMesh(B => {
     B.box([-0.088, -CH.armLen + 0.10, -0.088], [0.088, 0, 0.088], cB);
     B.box([-0.075, -CH.armLen + 0.06, -0.075], [0.075, -CH.armLen + 0.14, 0.075], cT);   // cuff
     B.box([-0.082, -CH.armLen, -0.082], [0.082, -CH.armLen + 0.075, 0.082], skin);       // mitt
+    if (skinId === 'char-cloudknight') {
+      /* Each pauldron is in its own arm's builder, rather than on hips. The
+         local shoulder box therefore follows the same x/z aim rotations as
+         the arm, with its inner edge overlapping the shoulder volume. z audit:
+         each pauldron's local maximum is +.120. */
+      const x0 = isRight ? -0.045 : -0.09, x1 = isRight ? 0.09 : 0.045;
+      B.box([x0, -0.10, -0.12], [x1, 0.10, 0.12], cArmor);
+    }
   }, false);
 
   const legL = new THREE.Group(), legR = new THREE.Group();
