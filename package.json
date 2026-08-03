@@ -8,7 +8,7 @@
     "prestart": "npm run build",
     "start": "node server.mjs",
     "test": "node --test",
-    "check": "bash -n build.sh && bash -n deploy/provision.sh && node --check net-protocol.js && node --check net-sim.js && node --check cosmetics.mjs && node --check store-db.mjs && node --check http-utils.mjs && node --check auth.mjs && node --check shop.mjs && node --check account-store.mjs && node --check server.mjs && node --check src/70-game.js && node --check src/72-pickups.js && node --check src/75-network.js && node --check src/78-touch.js && node --check src/80-ui.js && node --check src/90-main.js && node --test && bash build.sh --check"
+    "check": "bash -n build.sh && bash -n deploy/provision.sh && node --check net-protocol.js && node --check net-sim.js && node --check cosmetics.mjs && node --check store-db.mjs && node --check http-utils.mjs && node --check auth.mjs && node --check shop.mjs && node --check account-store.mjs && node --check server.mjs && node --check src/70-game.js && node --check src/72-pickups.js && node --check src/75-network.js && node --check src/78-touch.js && node --check src/80-ui.js && node --check src/82-store.js && node --check src/90-main.js && node --test && bash build.sh --check"
   },
   "engines": {
     "node": ">=22.5"
