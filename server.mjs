@@ -6,6 +6,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { WebSocket, WebSocketServer } from 'ws';
+import { createAccountStoreFromEnvironment } from './account-store.mjs';
+import { COSMETICS_BY_ID } from './cosmetics.mjs';
 import Protocol from './net-protocol.js';
 
 const ROOT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -35,12 +37,22 @@ function secureRandom() {
 }
 
 function memberList(room) {
-  return Array.from(room.members.values(), (peer) => ({
-    id: peer.id,
-    name: peer.name,
-    role: peer.role,
-    slot: peer.slot
-  }));
+  return Array.from(room.members.values(), (peer) => {
+    const member = {
+      id: peer.id,
+      name: peer.name,
+      role: peer.role,
+      slot: peer.slot
+    };
+    if (Protocol.hasCosmetics(peer.cosmetics))
+      member.cosmetics = Protocol.sanitizeCosmetics(peer.cosmetics);
+    return member;
+  });
+}
+
+function catalogAcceptsCosmetic(id, kind, slot) {
+  const item = COSMETICS_BY_ID.get(id);
+  return !!item && item.type === kind && item.slot === slot;
 }
 
 /* The lowest jersey nobody in the room is wearing. Seats are a room resource
@@ -398,15 +410,75 @@ export function createRelayServer(options = {}) {
     return open.concat(running).slice(0, maxListedRooms);
   }
 
+  const accountStore = options.accountStore || null;
+
+  /* A browser WebSocket cannot attach an Authorization header, so the same
+     bearer credential used by the account HTTP API travels once in the room
+     handshake. It is optional and a bad or expired value is signed-out state,
+     not a failed game connection. Most importantly, the returned entitlement
+     set comes from the database rather than from either cosmetic claim. */
+  function approvedCosmetics(message) {
+    const declared = Protocol.sanitizeCosmetics(
+      message && message.cosmetics,
+      catalogAcceptsCosmetic
+    );
+    const token = message && message.authToken;
+    let entitlements = [];
+    if (accountStore && accountStore.auth &&
+        typeof accountStore.auth.authenticate === 'function' &&
+        typeof token === 'string' && /^[A-Za-z0-9_-]{20,512}$/.test(token)) {
+      try {
+        const account = accountStore.auth.authenticate({
+          authorization: `Bearer ${token}`
+        }, false);
+        if (account && Array.isArray(account.entitlements))
+          entitlements = account.entitlements;
+      } catch (error) {
+        /* Authentication is deliberately fail-closed for appearance and
+           fail-open for play: the peer keeps its seat, wearing the default. */
+      }
+    }
+    const owned = new Set(entitlements);
+    return Protocol.sanitizeCosmetics(
+      declared,
+      (id, kind, slot) => owned.has(id) && catalogAcceptsCosmetic(id, kind, slot)
+    );
+  }
+
+  function snapshotWithApprovedCosmetics(room, message) {
+    const actors = message.actors.map((actor) => {
+      if (!actor || typeof actor !== 'object' || Array.isArray(actor)) return actor;
+      const member = typeof actor.netId === 'string'
+        ? room.members.get(actor.netId)
+        : null;
+      const cosmetics = member
+        ? Protocol.sanitizeCosmetics(member.cosmetics, catalogAcceptsCosmetic)
+        : Protocol.sanitizeCosmetics(null);
+      const clean = { ...actor };
+      /* The relay authors this field from the room member, even when the host
+         omitted or forged it. A bot has no member and therefore no cosmetic;
+         netId remains the manifest identity on both paths. */
+      if (Protocol.hasCosmetics(cosmetics)) clean.cosmetics = cosmetics;
+      else delete clean.cosmetics;
+      return clean;
+    });
+    return { ...message, actors };
+  }
+
   async function handleHttp(request, response) {
+    let requestUrl;
     let pathname;
     try {
-      pathname = new URL(request.url || '/', 'http://localhost').pathname;
+      requestUrl = new URL(request.url || '/', 'http://localhost');
+      pathname = requestUrl.pathname;
     } catch (error) {
       response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('Bad request\n');
       return;
     }
+
+    if (accountStore && await accountStore.handleHttp(request, response, requestUrl))
+      return;
 
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       response.writeHead(405, {
@@ -686,13 +758,14 @@ export function createRelayServer(options = {}) {
     return `"${peer.name}" (${peer.id.slice(0, 8)}, seat ${peer.slot})`;
   }
 
-  function enterRoom(peer, room, role, name) {
+  function enterRoom(peer, room, role, name, cosmetics) {
     if (peer.joinTimer) clearTimeout(peer.joinTimer);
     peer.joinTimer = null;
     peer.name = name;
     peer.role = role;
     peer.room = room;
     peer.slot = claimSlot(room);
+    peer.cosmetics = Protocol.sanitizeCosmetics(cosmetics, catalogAcceptsCosmetic);
     peer.lastSeq = -1;
     /* Arriving is activity. A drop-in gets the full grace period to find the
        deploy card, and nobody is judged on time spent before they were here. */
@@ -770,7 +843,7 @@ export function createRelayServer(options = {}) {
       listed: message.listed !== false
     };
     rooms.set(code, room);
-    enterRoom(peer, room, 'host', name);
+    enterRoom(peer, room, 'host', name, approvedCosmetics(message));
     roomReply(peer);
     broadcastMembers(room);
   }
@@ -802,7 +875,7 @@ export function createRelayServer(options = {}) {
       return;
     }
 
-    enterRoom(peer, room, 'guest', name);
+    enterRoom(peer, room, 'guest', name, approvedCosmetics(message));
     /* Before either reply: the arrival is the second body that starts the
        clock, and both messages are meant to carry the clock's answer. */
     scheduleAutoStart(room);
@@ -1066,17 +1139,19 @@ export function createRelayServer(options = {}) {
         sendError(peer, 'invalid-event', 'Invalid event batch.');
         return;
       }
+      let relayed = message;
       if (message.t === 'snapshot') {
+        relayed = snapshotWithApprovedCosmetics(peer.room, message);
         if (peer.room.latestSnapshot &&
-            message.tick < peer.room.latestSnapshot.tick) return;
-        peer.room.latestSnapshot = message;
+            relayed.tick < peer.room.latestSnapshot.tick) return;
+        peer.room.latestSnapshot = relayed;
         observeSnapshot(peer.room, peer);
       } else if (message.t === 'checkpoint') {
         if (peer.room.latestCheckpoint &&
             message.tick < peer.room.latestCheckpoint.tick) return;
         peer.room.latestCheckpoint = message;
       }
-      broadcastRoom(peer.room, message);
+      broadcastRoom(peer.room, relayed);
       return;
     }
 
@@ -1128,6 +1203,7 @@ export function createRelayServer(options = {}) {
     peer.room = null;
     peer.role = null;
     peer.name = '';
+    peer.cosmetics = Protocol.sanitizeCosmetics(null);
     peer.lastSeq = -1;
   }
 
@@ -1374,6 +1450,7 @@ export function createRelayServer(options = {}) {
       role: null,
       room: null,
       slot: -1,
+      cosmetics: Protocol.sanitizeCosmetics(null),
       lastSeq: -1,
       alive: true,
       cleanedUp: false,
@@ -1496,13 +1573,15 @@ export function createRelayServer(options = {}) {
     }
     for (const peer of peers.values()) peer.ws.terminate();
 
-    if (!server.listening) return;
-    await new Promise((resolveClose, rejectClose) => {
-      server.close((error) => {
-        if (error) rejectClose(error);
-        else resolveClose();
+    if (server.listening) {
+      await new Promise((resolveClose, rejectClose) => {
+        server.close((error) => {
+          if (error) rejectClose(error);
+          else resolveClose();
+        });
       });
-    });
+    }
+    if (accountStore && typeof accountStore.close === 'function') accountStore.close();
   }
 
   return {
@@ -1530,11 +1609,27 @@ function statsPathFromEnvironment(env) {
   return stateDir ? resolve(stateDir, 'stats.json') : null;
 }
 
+export function accountStoreForEnvironment(env, options = {}) {
+  /* Production remains strict by default. Local and LAN relays can opt out
+     explicitly without inventing OAuth and Stripe credentials; this removes
+     only the additive HTTP account routes and leaves the public relay exactly
+     as it was before accounts existed. */
+  if (String(env.ACCOUNTS_ENABLED || '').trim() === '0') return null;
+  return createAccountStoreFromEnvironment(env, options);
+}
+
 if (isMain) {
   const port = Number.parseInt(process.env.PORT || '8080', 10);
   const host = process.env.HOST || '0.0.0.0';
+  const configuredOrigins = (process.env.ALLOWED_ORIGINS || '').split(',');
+  /* Accounts are part of a production boot, not a best-effort extra. Building
+     the service before opening the listening socket makes a missing Google or
+     Stripe secret a visible failed unit instead of a healthy-looking relay
+     whose Sign in and Buy buttons fail later. */
+  const accountStore = accountStoreForEnvironment(process.env);
   const relay = createRelayServer({
-    allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(','),
+    allowedOrigins: configuredOrigins,
+    accountStore,
     statsPath: statsPathFromEnvironment(process.env),
     /* Both halves of the aim limit are a decision made after reading the logs,
        so both are a restart rather than a code change. Unset leaves the

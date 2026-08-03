@@ -7,6 +7,43 @@
 # That step is at the bottom, to run by hand once key login is confirmed.
 set -euo pipefail
 
+# The root-only file is the durable copy of production credentials. Load it on
+# later runs so the documented one-command redeploy does not require secrets in
+# shell history or process arguments. Values supplied for this invocation win,
+# which keeps intentional rotation possible; a fresh host has no file and still
+# reaches the loud guards below.
+ACCOUNT_ENV_NAMES=(
+  GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URI GAME_ORIGIN
+  STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
+  STRIPE_PRICE_SMG_COTTONCLOUD STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW
+  STRIPE_PRICE_RIFLE_BERRYSWIRL STRIPE_PRICE_CHAR_MIDNIGHT
+  STRIPE_PRICE_CHAR_SHERBETFOX STRIPE_PRICE_CHAR_CLOUDKNIGHT
+)
+if [ -r /etc/nuketown.env ]; then
+  declare -A INVOCATION_ENV=()
+  for name in "${ACCOUNT_ENV_NAMES[@]}"; do
+    if [[ -v "$name" ]]; then INVOCATION_ENV["$name"]="${!name}"; fi
+  done
+  # EnvironmentFile values are data, not shell. Read the writer's KEY=value
+  # format without evaluation so whitespace, dollars, backticks, and quotes
+  # round-trip with the same literal meaning they have for systemd.
+  while IFS='=' read -r env_name env_value || [[ -n "$env_name$env_value" ]]; do
+    for name in "${ACCOUNT_ENV_NAMES[@]}"; do
+      if [[ "$env_name" == "$name" ]]; then
+        printf -v "$name" '%s' "$env_value"
+        export "$name"
+        break
+      fi
+    done
+  done < /etc/nuketown.env
+  for name in "${!INVOCATION_ENV[@]}"; do
+    printf -v "$name" '%s' "${INVOCATION_ENV[$name]}"
+    export "$name"
+  done
+  unset INVOCATION_ENV env_name env_value
+fi
+unset ACCOUNT_ENV_NAMES
+
 DOMAIN="${DOMAIN:-relay.luckeysystems.com}"
 SITE="${SITE:-nuketown.luckeysystems.com}"
 ADMIN="${ADMIN:-deploy}"
@@ -28,10 +65,29 @@ AIM_RATE_STRIKES="${AIM_RATE_STRIKES:-3}"
 # in the rooms. Two entries: the site the game is served from, and the relay
 # itself (it serves index.html at / as well).
 #
-# Note the '-' rather than ':-' — an explicitly empty ALLOWED_ORIGINS= means
-# "accept every origin", which is what a LAN box or a private relay wants:
-#   ALLOWED_ORIGINS= bash provision.sh
+# Note the '-' rather than ':-' so an explicitly empty value still reaches the
+# application unchanged. The socket retains its old "accept every origin"
+# meaning in that case, but the account service will now fail the unit clearly:
+# authenticated HTTP routes require an explicit list and never use '*'. A LAN
+# install should list its actual page origin here rather than leave it empty.
 ALLOWED_ORIGINS="${ALLOWED_ORIGINS-https://$SITE,https://$DOMAIN}"
+
+# Authentication is not optional in a production unit: anonymous play still
+# works exactly as before, but a half-configured account service would accept
+# traffic and fail only after somebody tried to recover a purchase. The price
+# IDs are different — an empty one intentionally takes just that item off sale.
+GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:?Set GOOGLE_CLIENT_ID before provisioning}"
+GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:?Set GOOGLE_CLIENT_SECRET before provisioning}"
+GOOGLE_REDIRECT_URI="${GOOGLE_REDIRECT_URI:-https://$DOMAIN/auth/google/callback}"
+GAME_ORIGIN="${GAME_ORIGIN:-https://$SITE}"
+STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:?Set STRIPE_SECRET_KEY before provisioning}"
+STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:?Set STRIPE_WEBHOOK_SECRET before provisioning}"
+STRIPE_PRICE_SMG_COTTONCLOUD="${STRIPE_PRICE_SMG_COTTONCLOUD:-}"
+STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW="${STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW:-}"
+STRIPE_PRICE_RIFLE_BERRYSWIRL="${STRIPE_PRICE_RIFLE_BERRYSWIRL:-}"
+STRIPE_PRICE_CHAR_MIDNIGHT="${STRIPE_PRICE_CHAR_MIDNIGHT:-}"
+STRIPE_PRICE_CHAR_SHERBETFOX="${STRIPE_PRICE_CHAR_SHERBETFOX:-}"
+STRIPE_PRICE_CHAR_CLOUDKNIGHT="${STRIPE_PRICE_CHAR_CLOUDKNIGHT:-}"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$1"; }
 
@@ -81,8 +137,11 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 CONF
 
-say "node 22"
-if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 22 ]; then
+say "node 22.5+"
+if ! command -v node >/dev/null 2>&1 || ! node -e '
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  process.exit(major > 22 || (major === 22 && minor >= 5) ? 0 : 1);
+'; then
   apt-get install -y -qq ca-certificates curl gnupg git >/dev/null
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
   apt-get install -y -qq nodejs >/dev/null
@@ -145,6 +204,24 @@ npm test
 chown -R nuketown:nuketown "$APP_DIR"
 
 say "systemd unit (allowed origins: ${ALLOWED_ORIGINS:-<any>})"
+# Keep credentials out of the world-readable unit itself. systemd reads this
+# root-only file and passes the values to the service process as environment;
+# the application checkout stays read-only and contains no production secret.
+install -m 600 -o root -g root /dev/null /etc/nuketown.env
+{
+  printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
+  printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
+  printf 'GOOGLE_REDIRECT_URI=%s\n' "$GOOGLE_REDIRECT_URI"
+  printf 'GAME_ORIGIN=%s\n' "$GAME_ORIGIN"
+  printf 'STRIPE_SECRET_KEY=%s\n' "$STRIPE_SECRET_KEY"
+  printf 'STRIPE_WEBHOOK_SECRET=%s\n' "$STRIPE_WEBHOOK_SECRET"
+  printf 'STRIPE_PRICE_SMG_COTTONCLOUD=%s\n' "$STRIPE_PRICE_SMG_COTTONCLOUD"
+  printf 'STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW=%s\n' "$STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW"
+  printf 'STRIPE_PRICE_RIFLE_BERRYSWIRL=%s\n' "$STRIPE_PRICE_RIFLE_BERRYSWIRL"
+  printf 'STRIPE_PRICE_CHAR_MIDNIGHT=%s\n' "$STRIPE_PRICE_CHAR_MIDNIGHT"
+  printf 'STRIPE_PRICE_CHAR_SHERBETFOX=%s\n' "$STRIPE_PRICE_CHAR_SHERBETFOX"
+  printf 'STRIPE_PRICE_CHAR_CLOUDKNIGHT=%s\n' "$STRIPE_PRICE_CHAR_CLOUDKNIGHT"
+} > /etc/nuketown.env
 # Unquoted heredoc: $ALLOWED_ORIGINS is expanded below. Keep literal '$' and
 # systemd specifiers out of this block, or escape them as '\$' / '%%'.
 cat > /etc/systemd/system/nuketown.service <<UNIT
@@ -164,6 +241,7 @@ StateDirectory=nuketown
 Environment=PORT=8080
 Environment=HOST=127.0.0.1
 Environment=ALLOWED_ORIGINS=$ALLOWED_ORIGINS
+EnvironmentFile=/etc/nuketown.env
 # How fast a guest may claim to be turning before the relay stops believing a
 # hand is doing it, and how many windows over that line cost the seat. Measured
 # rather than guessed: honest players in a firefight peak at 30-42 rad/s, so
