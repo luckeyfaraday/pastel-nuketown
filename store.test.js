@@ -153,18 +153,6 @@ function makeStore(options) {
      the browser creates it. */
   if (opts.signIn) ctx.sessionStorage.setItem('pastel-nuketown-signin', JSON.stringify(opts.signIn));
 
-  /* What the head's inline scrubber left behind, when a test wants the store
-     to find the callback the way it really arrives in the built page. */
-  if (opts.stashed) {
-    let found = opts.stashed;
-    ctx.__pnTakeAuthCallback = () => {
-      const taken = found;
-      found = null;
-      delete ctx.__pnTakeAuthCallback;
-      return taken;
-    };
-  }
-
   /* Everything the page has that this harness does not: THREE, the two
      model builders, the frame clock. Only the display-case tests ask for
      any of it, and the point of the rest of the file is that the store
@@ -341,59 +329,151 @@ function headScrubber() {
   return match[1];
 }
 
-function runScrubber(href) {
+function runScrubber(href, opts) {
+  opts = opts || {};
   const location = makeLocation(href);
+  const store = makeStorage();
+  if (opts.signIn) store.setItem('pastel-nuketown-signin', JSON.stringify(opts.signIn));
   const ctx = {
     location: location,
     URLSearchParams: URLSearchParams,
     URL: URL,
+    JSON: JSON,
+    Date: Date,
+    isFinite: isFinite,
+    sessionStorage: opts.noStorage ? null : store,
+    opener: 'opener' in opts ? opts.opener : null,
+    closedSelf: false,
+    close() { ctx.closedSelf = true; },
     history: { replaceState(state, title, url) { location.set(new URL(url, location.href).href); } }
   };
   ctx.window = ctx;
+  /* A window whose opener is itself is not a popup somebody opened; it is the
+     shape a top-level load has in some browsers, and it must not be handed a
+     token. Only expressible once the context exists. */
+  if (opts.opener === 'self') ctx.opener = ctx;
   vm.createContext(ctx);
   vm.runInContext(headScrubber(), ctx, { filename: 'src/00-head.html' });
+  ctx.storage = store;
   return ctx;
 }
 
+/* Everything on `window` after the snippet has run, minus what a bare context
+   already carries. The security property is that this list never contains the
+   token, under any outcome — a global holding a bearer is a global the CDN
+   copy of Three.js can read, and that script runs long before the bundle. */
+function leakedGlobals(ctx) {
+  const known = new Set(['location', 'URLSearchParams', 'URL', 'JSON', 'Date', 'isFinite',
+    'sessionStorage', 'opener', 'closedSelf', 'close', 'history', 'window', 'storage']);
+  return Object.keys(ctx).filter(k => !known.has(k));
+}
+
 test('the head scrubs the callback out of the URL before any other script runs', () => {
-  const ctx = runScrubber(PAGE + '/#auth_token=SECRET-TOKEN&auth_expires_at=99');
+  const opener = makeOpener();
+  const ctx = runScrubber(PAGE + '/#auth_token=SECRET-TOKEN&auth_expires_at=99',
+    { signIn: { nonce: 'NONCE-1', at: Date.now() }, opener: opener });
 
   assert.equal(ctx.location.hash, '');
   assert.ok(!ctx.location.href.includes('SECRET-TOKEN'), ctx.location.href);
+});
 
-  /* Handed on once and then gone, so that nothing loading after the store —
-     or instead of it — can pick the token up a second time. */
-  const taken = ctx.window.__pnTakeAuthCallback();
-  assert.equal(taken.token, 'SECRET-TOKEN');
-  assert.equal(taken.expiresAt, '99');
-  assert.equal(ctx.window.__pnTakeAuthCallback, undefined);
+/* The finding this exists for: the snippet used to leave the bearer on
+   `window.__pnTakeAuthCallback` until the bundle collected it, so any script
+   loading in between — the CDN copy of Three.js, or a compromised response
+   standing in for it — could simply call it and take the token. */
+test('the head hands the token to the opener and leaves nothing on window', () => {
+  const opener = makeOpener();
+  const ctx = runScrubber(PAGE + '/#auth_token=SECRET-TOKEN&auth_expires_at=99',
+    { signIn: { nonce: 'NONCE-1', at: Date.now() }, opener: opener });
+
+  assert.equal(opener.posted.length, 1);
+  assert.equal(opener.posted[0].data.type, 'pastel-nuketown-auth');
+  assert.equal(opener.posted[0].data.token, 'SECRET-TOKEN');
+  assert.equal(opener.posted[0].data.nonce, 'NONCE-1');
+  assert.equal(opener.posted[0].origin, PAGE);
+  /* Expired long ago, so it arrives as 0 rather than as a lie. */
+  assert.equal(opener.posted[0].data.expiresAt, 0);
+
+  assert.deepEqual(leakedGlobals(ctx), [],
+    'the snippet left something on window for the CDN script to read');
+  /* Spent, and the window is on its way out. */
+  assert.equal(ctx.storage.getItem('pastel-nuketown-signin'), null);
+  assert.equal(ctx.closedSelf, true);
+});
+
+test('an unasked-for, stale or unopened callback is scrubbed and dropped', () => {
+  const cases = {
+    'no marker at all': {},
+    'a marker from an attempt nobody is waiting on': {
+      signIn: { nonce: 'NONCE-1', at: Date.now() - 601000 }, opener: makeOpener()
+    },
+    'a marker with no nonce': { signIn: { at: Date.now() }, opener: makeOpener() },
+    'a live marker but no opener': { signIn: { nonce: 'NONCE-1', at: Date.now() } },
+    'a window that opened itself': { signIn: { nonce: 'NONCE-1', at: Date.now() }, opener: 'self' },
+    'no session storage to check': { noStorage: true, opener: makeOpener() }
+  };
+  for (const [why, opts] of Object.entries(cases)) {
+    const ctx = runScrubber(PAGE + '/#auth_token=SECRET-TOKEN&auth_expires_at=99', opts);
+    assert.equal(ctx.location.hash, '', why + ': the token stayed in the URL');
+    assert.ok(!ctx.location.href.includes('SECRET-TOKEN'), why);
+    assert.deepEqual(leakedGlobals(ctx), [], why + ': something was left on window');
+    if (opts.opener && opts.opener !== 'self')
+      assert.equal(opts.opener.posted.length, 0, why + ': the token was posted anyway');
+    assert.equal(ctx.closedSelf, false, why);
+  }
 });
 
 test('the head scrubber leaves an ordinary fragment, and an ordinary page, alone', () => {
-  const mixed = runScrubber(PAGE + '/?x=1#room=ABCDE&auth_token=SECRET');
+  const opener = makeOpener();
+  const mixed = runScrubber(PAGE + '/?x=1#room=ABCDE&auth_token=SECRET',
+    { signIn: { nonce: 'NONCE-1', at: Date.now() }, opener: opener });
   assert.equal(mixed.location.href, PAGE + '/?x=1#room=ABCDE');
-  assert.equal(mixed.window.__pnTakeAuthCallback().token, 'SECRET');
+  assert.equal(opener.posted[0].data.token, 'SECRET');
 
   const plain = runScrubber(PAGE + '/#room=ABCDE');
   assert.equal(plain.location.hash, '#room=ABCDE');
-  assert.equal(plain.window.__pnTakeAuthCallback, undefined);
+  assert.deepEqual(leakedGlobals(plain), []);
 });
 
-test('the store takes the head scrubber\'s values rather than re-reading the URL', async () => {
-  const opener = makeOpener();
-  const ctx = makeStore({
-    /* The URL as the store finds it in the real page: already clean. */
-    href: PAGE + '/',
-    opener: opener,
-    signIn: { nonce: 'NONCE-2', at: Date.now() },
-    stashed: { token: 'SECRET-TOKEN', expiresAt: '0' }
-  });
+/* The snippet cannot import the store's constants — needing the bundle is the
+   whole thing it exists to avoid — so it carries its own copies of the storage
+   key, the marker's life and the message shape. Nothing stops those drifting
+   apart except this. */
+test('the head snippet and the store agree on the key, the life and the shape', () => {
+  const snippet = headScrubber();
+  const ctx = makeStore({});
+  for (const [what, value] of [
+    ['the session key', ctx.__get('STORE_SIGNIN_KEY')],
+    ['the marker life', String(ctx.__get('STORE_SIGNIN_TTL'))]
+  ]) {
+    assert.ok(snippet.includes(value), `the head snippet no longer carries ${what} (${value})`);
+  }
+  assert.ok(snippet.includes('pastel-nuketown-auth'),
+    'the head snippet posts a message shape the store does not listen for');
+});
 
-  assert.equal(ctx.__get('STORE_URL_AUTH.token'), 'SECRET-TOKEN');
-  assert.equal(opener.posted.length, 1);
-  assert.equal(opener.posted[0].data.token, 'SECRET-TOKEN');
-  /* One shot: the store consumed it, so there is nothing left on window. */
-  assert.equal(ctx.__pnTakeAuthCallback, undefined);
+/* ---------------------------------------------------------------------
+   …and that it still runs first in the artifact that ships
+
+   Testing the snippet out of src/00-head.html proves what it does, not
+   when it does it. build.sh is what decides that, and a build that emitted
+   the CDN tags above the snippet would restore the original exposure with
+   every one of these tests still green.
+   --------------------------------------------------------------------- */
+test('the built page runs the scrubber before it loads anything off a CDN', () => {
+  const built = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const scrubber = built.indexOf('auth_token');
+  assert.ok(scrubber > 0, 'the built page has no callback scrubber in it at all');
+
+  const external = [];
+  const tag = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
+  for (let m = tag.exec(built); m; m = tag.exec(built)) external.push({ at: m.index, src: m[1] });
+  assert.ok(external.length, 'the built page loads no external script — has the CDN gone?');
+
+  const first = external.reduce((a, b) => (b.at < a.at ? b : a));
+  assert.ok(scrubber < first.at,
+    `the scrubber (byte ${scrubber}) runs after ${first.src} (byte ${first.at}), ` +
+    'so a compromised CDN response reads the token off the URL first');
 });
 
 /* ---------------------------------------------------------------------

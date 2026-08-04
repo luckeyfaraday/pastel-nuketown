@@ -16,28 +16,67 @@
 
    Deliberately dependency-free: no bundle globals, no helpers, all of it inside
    one try. If the store module never loads, the token still leaves the URL.
-   The values are handed on through a one-shot function that deletes itself on
-   the first call, so once the store has taken them there is nothing left on
-   window for later code to find. */
+
+   The whole handoff happens here, and that is the point rather than an
+   optimisation. This snippet used to park the values on `window` for the store
+   to collect once the bundle had loaded — which meant the bearer was sitting on
+   a predictable global for the whole of the CDN's execution, and a compromised
+   jsDelivr response only had to call it. Taking the token off the URL and then
+   leaving it somewhere the same untrusted code can reach protects it from the
+   address bar and from nothing else. So the token never leaves this closure:
+   the only thing a legitimate callback does with it is post it to the window
+   that opened us, and by the time anything else on the page runs, this variable
+   is out of scope and this window is closing.
+
+   Everything below is duplicated from 82-store.js on purpose — the key, the ten
+   minute life of a marker, the message shape — because a dependency here would
+   mean loading the bundle first, which is the thing being avoided. store.test.js
+   pins these literals against the constants they mirror. The store keeps its own
+   copy of this handoff for a page assembled without this snippet; in the built
+   page the fragment is gone by then and its copy quietly finds nothing. */
 (function () {
   try {
     var hash = typeof location.hash === 'string' ? location.hash : '';
     if (hash.length < 2) return;
     var fragment = new URLSearchParams(hash.slice(1));
     if (!fragment.has('auth_token') && !fragment.has('auth_expires_at')) return;
-    var found = { token: fragment.get('auth_token'), expiresAt: fragment.get('auth_expires_at') };
+    var token = fragment.get('auth_token');
+    var rawExpiry = fragment.get('auth_expires_at');
     fragment.delete('auth_token');
     fragment.delete('auth_expires_at');
     /* Whatever else was in the fragment — #room=ABCDE — belongs to the page. */
     var rest = fragment.toString();
     if (history && history.replaceState)
       history.replaceState(null, '', location.pathname + location.search + (rest ? '#' + rest : ''));
-    window.__pnTakeAuthCallback = function () {
-      var taken = found;
-      found = null;
-      try { delete window.__pnTakeAuthCallback; } catch (e) { window.__pnTakeAuthCallback = null; }
-      return taken;
-    };
+
+    /* From here on every exit drops the token on the floor, which is the
+       correct outcome for all of them: a callback nobody asked for, an attempt
+       that has gone stale, or a window with nobody to hand it to. This page
+       never signs *itself* in on the strength of a URL. */
+    var raw = null;
+    try { raw = sessionStorage.getItem('pastel-nuketown-signin'); } catch (e) { return; }
+    if (!raw) return;
+    var mark = null;
+    try { mark = JSON.parse(raw); } catch (e) { return; }
+    if (!mark || typeof mark !== 'object') return;
+    if (typeof mark.nonce !== 'string' || !mark.nonce) return;
+    var at = typeof mark.at === 'number' && isFinite(mark.at) ? mark.at : 0;
+    if (!at || Date.now() - at > 600000) return;
+    if (!window.opener || window.opener.closed || window.opener === window) return;
+
+    /* Milliseconds per the relay. The opener re-validates all of this — origin,
+       which window sent it, the shape, the nonce, the token's own characters —
+       so this is a courier, not a checkpoint. */
+    var expiresAt = /^\d{1,15}$/.test(String(rawExpiry || '')) ? Number(rawExpiry) : 0;
+    window.opener.postMessage({
+      type: 'pastel-nuketown-auth',
+      token: token,
+      expiresAt: expiresAt > Date.now() ? expiresAt : 0,
+      nonce: mark.nonce
+    }, location.origin);
+    /* This copy of the marker is spent. The opener clears its own. */
+    try { sessionStorage.removeItem('pastel-nuketown-signin'); } catch (e) {}
+    window.close();
   } catch (e) {}
 })();
 </script>
@@ -13331,13 +13370,16 @@ function storeCleanToken(value) {
    is aimed at.
 
    The fragment is erased from the address bar before anything else in the
-   page can read location.href. In the assembled page that has already
-   happened by the time this file is parsed — the inline snippet at the top
-   of <head> does it in the first tick and hands the values on through a
-   one-shot function, because everything between there and here, the CDN
-   copy of Three.js included, runs with page privileges. The parsing below
-   is the fallback for a page without that snippet, and it is what the
-   tests drive. Either way the token leaves the URL, because a token left
+   page can read location.href. In the assembled page all of it — the
+   erasure and the handoff to the opener both — has already happened by the
+   time this file is parsed: the inline snippet at the top of <head> does
+   the whole job in the first tick and keeps the token inside its own
+   closure, because everything between there and here, the CDN copy of
+   Three.js included, runs with page privileges and could read anything
+   left on window. The parsing below is the fallback for a page assembled
+   without that snippet, and it is what the tests drive; in the built page
+   it finds an empty fragment and does nothing. Either way the token leaves
+   the URL, because a token left
    in the bar survives into browser history, into a bookmark, into anything
    the player copies; COPY INVITE builds its link out of location.href, so
    a token still sitting there would be pasted into a chat window along
@@ -13346,21 +13388,7 @@ function storeCleanToken(value) {
    token somebody else should not be able to read.
    ===================================================================== */
 
-/* What the head snippet took off the URL, if it ran. Taking it clears it, so
-   nothing later in the page can read it a second time. */
-function storeTakeStashedAuth() {
-  try {
-    const take = window.__pnTakeAuthCallback;
-    if (typeof take !== 'function') return null;
-    const found = take();
-    return found && typeof found === 'object' ? found : null;
-  } catch (e) { return null; }
-}
-
 function storeTakeAuthFromURL() {
-  const stashed = storeTakeStashedAuth();
-  if (stashed) return storeCleanCallback(stashed.token, stashed.expiresAt);
-
   const hash = typeof location.hash === 'string' ? location.hash : '';
   if (hash.length < 2) return null;
 

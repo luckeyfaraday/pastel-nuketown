@@ -129,13 +129,16 @@ function storeCleanToken(value) {
    is aimed at.
 
    The fragment is erased from the address bar before anything else in the
-   page can read location.href. In the assembled page that has already
-   happened by the time this file is parsed — the inline snippet at the top
-   of <head> does it in the first tick and hands the values on through a
-   one-shot function, because everything between there and here, the CDN
-   copy of Three.js included, runs with page privileges. The parsing below
-   is the fallback for a page without that snippet, and it is what the
-   tests drive. Either way the token leaves the URL, because a token left
+   page can read location.href. In the assembled page all of it — the
+   erasure and the handoff to the opener both — has already happened by the
+   time this file is parsed: the inline snippet at the top of <head> does
+   the whole job in the first tick and keeps the token inside its own
+   closure, because everything between there and here, the CDN copy of
+   Three.js included, runs with page privileges and could read anything
+   left on window. The parsing below is the fallback for a page assembled
+   without that snippet, and it is what the tests drive; in the built page
+   it finds an empty fragment and does nothing. Either way the token leaves
+   the URL, because a token left
    in the bar survives into browser history, into a bookmark, into anything
    the player copies; COPY INVITE builds its link out of location.href, so
    a token still sitting there would be pasted into a chat window along
@@ -144,21 +147,7 @@ function storeCleanToken(value) {
    token somebody else should not be able to read.
    ===================================================================== */
 
-/* What the head snippet took off the URL, if it ran. Taking it clears it, so
-   nothing later in the page can read it a second time. */
-function storeTakeStashedAuth() {
-  try {
-    const take = window.__pnTakeAuthCallback;
-    if (typeof take !== 'function') return null;
-    const found = take();
-    return found && typeof found === 'object' ? found : null;
-  } catch (e) { return null; }
-}
-
 function storeTakeAuthFromURL() {
-  const stashed = storeTakeStashedAuth();
-  if (stashed) return storeCleanCallback(stashed.token, stashed.expiresAt);
-
   const hash = typeof location.hash === 'string' ? location.hash : '';
   if (hash.length < 2) return null;
 
