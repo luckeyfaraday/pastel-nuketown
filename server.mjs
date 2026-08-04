@@ -923,6 +923,55 @@ export function createRelayServer(options = {}) {
     });
   }
 
+  /* REPORT: a player naming somebody they think is cheating.
+
+     The relay writes it to the log and does nothing else — no kick, no
+     notification, not even a hint to the room that it happened. That is the
+     whole design and not a first step that stopped early. A report is one
+     player's opinion, it costs nothing to file, and the obvious way to abuse
+     any consequence attached to it is to lose a gunfight and press the button.
+     What the line in the journal is worth is the count across rooms: the same
+     jersey flagged by strangers who never met is a signal, and one flagged by
+     the person they just killed is Tuesday.
+
+     The accused is never told, for the same reason the aim-rate warning is not
+     broadcast: a cheater who knows which of their matches drew attention
+     learns what to hide, and a falsely accused player is handed a grudge over
+     something that had no effect on them. */
+  function handleReport(peer, message) {
+    const checked = Protocol.sanitizeReport(message);
+    if (!checked.ok) {
+      sendError(peer, 'invalid-report', checked.error);
+      return;
+    }
+
+    const target = peer.room.members.get(checked.value.target);
+    /* Bots are not in members, so "reported a bot" lands here rather than
+       needing a rule of its own. Reporting yourself is refused because it can
+       only be a client bug or somebody poking at the wire. */
+    if (!target || target === peer) {
+      sendError(peer, 'no-such-player', 'That player is not in this room.');
+      return;
+    }
+
+    /* Acknowledged either way. Silently dropping the repeat would leave the
+       button that sent it looking broken, and the reporter is not owed a
+       different answer for pressing twice than for pressing once. */
+    if (!peer.reported.has(target.id)) {
+      peer.reported.add(target.id);
+      target.reporters.add(peer.id);
+      console.warn(`Report: ${describePeer(peer)} reported ${describePeer(target)} ` +
+        `in room ${peer.room.code} (${target.reporters.size} ` +
+        `${target.reporters.size === 1 ? 'reporter' : 'reporters'} this session)`);
+    }
+
+    send(peer, {
+      t: 'reported',
+      v: Protocol.VERSION,
+      target: target.id
+    });
+  }
+
   function hasCurrentAuthority(peer, message) {
     if (message.authorityEpoch === peer.room.authorityEpoch) return true;
     sendError(peer, 'stale-authority', 'That authority epoch is no longer active.');
@@ -964,6 +1013,15 @@ export function createRelayServer(options = {}) {
         }
       }
       finishMigration(peer.room);
+      return;
+    }
+
+    /* Above the role gates below on purpose: anyone in the room can report,
+       host and guest alike. The host is the one peer the aim-rate check never
+       sees, so shutting hosts out here would leave the only player nothing
+       watches also unreportable. */
+    if (message.t === 'report') {
+      handleReport(peer, message);
       return;
     }
 
@@ -1389,6 +1447,11 @@ export function createRelayServer(options = {}) {
       aimSeq: -1,
       aimTravel: 0,
       aimStrikes: 0,
+      /* Who this peer has reported, and who has reported it, both scoped to
+         the connection. A reconnect is a new peer and starts empty, which is
+         the honest reading: the second sitting is a second opinion. */
+      reported: new Set(),
+      reporters: new Set(),
       pingAt: 0,
       rttMs: 0
     };

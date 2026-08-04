@@ -114,7 +114,9 @@ const NET = {
   roomsTimer: 0,
   quick: null,                  // in-flight quick-play plan, or null
   autoStartAt: 0,               // performance.now() the relay's clock reaches 0
-  countdownTimer: 0
+  countdownTimer: 0,
+  reports: new Set(),           // peer ids the relay has acknowledged a report for
+  reportSending: ''             // peer id of the report in flight, or ''
 };
 
 function netNow() { return performance.now(); }
@@ -700,6 +702,10 @@ function netResetTransport() {
   NET.scoreSignature = '';
   NET.quick = null;
   NET.endReason = '';
+  /* Peer ids are per-connection, so a report list carried across a reconnect
+     would suppress the button against whoever inherits the id shape next. */
+  NET.reports.clear();
+  NET.reportSending = '';
   netCancelAutoStart();
   NET.manualClose = false;
 }
@@ -961,7 +967,23 @@ function netHandleWire(raw) {
     for (const event of msg.events) netApplyEvent(event);
     return;
   }
+  if (msg.t === 'reported') {
+    if (typeof msg.target === 'string' && msg.target) NET.reports.add(msg.target);
+    NET.reportSending = '';
+    updateReportButton();
+    return;
+  }
   if (msg.t === 'error') {
+    /* Handled before the shared branch below: a refused report must not take
+       down the lobby's status line or re-enable a start button mid-match. It
+       is a dead end by design — the relay only refuses one for a target that
+       is not in the room, which means the roster moved under the button, and
+       the next death offers it again. */
+    if (msg.code === 'invalid-report' || msg.code === 'no-such-player') {
+      NET.reportSending = '';
+      updateReportButton();
+      return;
+    }
     const errorText = typeof msg.message === 'string' && msg.message
       ? msg.message.slice(0, 200)
       : 'Multiplayer error.';
@@ -993,6 +1015,28 @@ function netHandleWire(raw) {
       netStatus(errorText, 'error');
     }
   }
+}
+
+/* ---- reporting a player ----
+   Who can be reported: a human, in this room, who is not you. Bots carry a
+   `bot-N` netId and are never in the roster, so the roster lookup is the whole
+   test and there is no separate rule for them. An actor with no netId at all
+   is a solo match, where there is nobody to report to. */
+function netReportableId(actor) {
+  if (!netIsMultiplayer() || !actor || !actor.netId || actor.netId === NET.id) return null;
+  return NET.members.some(member => member.id === actor.netId) ? actor.netId : null;
+}
+
+function netHasReported(netId) { return !!netId && NET.reports.has(netId); }
+
+/* Optimistic only as far as the button: `reportSending` disables it so the
+   same death cannot file four reports while the first is still in the air, but
+   the label does not claim the report landed until the relay says so. */
+function netReportPlayer(netId) {
+  if (!netId || netHasReported(netId) || NET.reportSending) return false;
+  if (!netSend({ t: 'report', v: NETP.VERSION, target: netId })) return false;
+  NET.reportSending = netId;
+  return true;
 }
 
 /* The relay answers with a roster carrying the new deadline, so there is

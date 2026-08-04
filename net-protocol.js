@@ -589,6 +589,40 @@
     }, null);
   }
 
+  /* A report is one player saying "look at this one", and deliberately nothing
+     more. No reason text: free text from strangers is a moderation problem of
+     its own, and the relay is not going to read it. No claim about what was
+     seen either — the reporter names a peer, the relay writes it down, and
+     whether it means anything is decided later, off this wire, by counting how
+     many different rooms flagged the same person.
+
+     Carrying `v` costs nothing here because a peer that disagrees about the
+     version never cleared the handshake, and it keeps this message shaped like
+     every other one a client sends. */
+  var MAX_REPORT_TARGET_LENGTH = 80;
+
+  function sanitizeReport(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return result(false, null, 'report must be an object');
+    }
+    if (message.t !== 'report') {
+      return result(false, null, 'unexpected message type');
+    }
+    if (message.v !== VERSION) {
+      return result(false, null, 'unsupported protocol version');
+    }
+    if (typeof message.target !== 'string' || !message.target ||
+        message.target.length > MAX_REPORT_TARGET_LENGTH) {
+      return result(false, null, 'target must be a peer id');
+    }
+
+    return result(true, {
+      t: 'report',
+      v: VERSION,
+      target: message.target
+    }, null);
+  }
+
   function utf8Size(text) {
     if (typeof TextEncoder !== 'undefined') {
       return new TextEncoder().encode(text).byteLength;
@@ -687,6 +721,7 @@
     MAX_PITCH: MAX_PITCH,
     FIRE_INTENT_TTL: FIRE_INTENT_TTL,
     MAX_REWIND_SECONDS: MAX_REWIND_SECONDS,
+    MAX_REPORT_TARGET_LENGTH: MAX_REPORT_TARGET_LENGTH,
     PREDICTED_HIT_TTL: PREDICTED_HIT_TTL,
     MIN_INTERP_SNAPSHOTS: MIN_INTERP_SNAPSHOTS,
     MAX_INTERP_SNAPSHOTS: MAX_INTERP_SNAPSHOTS,
@@ -713,6 +748,7 @@
     wrapAngle: wrapAngle,
     lerpAngle: lerpAngle,
     sanitizeInput: sanitizeInput,
+    sanitizeReport: sanitizeReport,
     parseWireMessage: parseWireMessage
   });
 }));

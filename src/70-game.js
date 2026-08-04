@@ -764,6 +764,12 @@ function initInput() {
     if (e.code === 'Digit2') switchWeapon('shotgun');
     if (e.code === 'Digit3') switchWeapon('rifle');
     if (e.code === 'Tab') setBoard(true);
+    /* The death card's button, reachable. The pointer is locked to the canvas
+       for the whole respawn on desktop, so a click on it never arrives and the
+       key is the only way in. Guarded by !repeat so a held key files one
+       report, and sendReport itself refuses when there is nothing to report —
+       which is what keeps F inert for the rest of the match. */
+    if (e.code === 'KeyF' && !e.repeat) sendReport();
     if (e.code === 'Escape') { /* browser exits lock; handled below */ }
   });
   addEventListener('keyup', e => {
