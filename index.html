@@ -6134,25 +6134,111 @@ function softTex() {
   return new THREE.CanvasTexture(cv);
 }
 
-/* 0 right at the lens, 1 beyond ~2.2m. Used by every point sprite. */
+/* 0 right at the lens, 1 beyond 1.2m. Used by every point sprite.
+
+   This used to reach out to 2.2m, because it was the only thing standing
+   between the player and a sprite that had grown to fill the frame. It is
+   not any more: FX_SPRITE_MAX_H below caps how wide a sprite can ever get,
+   so this only has to stop something being drawn *on* the lens, and it can
+   be tight enough to leave a muzzle flash a metre down the barrel at full
+   strength. */
 function nearFade(x, y, z) {
   const dx = x - camera.position.x, dy = y - camera.position.y, dz = z - camera.position.z;
   const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  return smoothstep((d - 0.7) / 1.5);
+  return smoothstep((d - 0.45) / 0.75);
 }
+
+/* =====================================================================
+   POINT SPRITES
+
+   Our own shader rather than PointsMaterial, for two reasons — and the
+   first cut of the shot effects walked into both of them at once.
+
+   IT FADES ON ALPHA, NOT ON BRIGHTNESS. PointsMaterial has no per-particle
+   opacity, so the only dimmer available was the vertex colour, and
+   multiplying a colour toward zero is a fade only where the blend is
+   additive. On the normal-blended pool it is a darkening: the butter
+   0xfff1a6 at 55% brightness is 0x8c845b, which is mud. Every confetti
+   flake spent the back 70% of its life sliding down to brown, and that —
+   not the palette, which was pastel all along — is what put muddy tan
+   stars on screen. Alpha fades to nothing under either blend, so both
+   pools now use it, and the near-lens fade above can apply to both instead
+   of only to the additive one.
+
+   IT CANNOT GROW PAST FX_SPRITE_MAX_H. gl_PointSize goes as 1/distance
+   with nothing to stop it: the 0.16m confetti sprite is 12px across a wall
+   six metres off and 1200px across if it spawns six centimetres from the
+   eye, which is where a muzzle puff spawns. The clamp is a hard ceiling
+   measured in viewport heights, and it binds on the default kill confetti
+   exactly as it binds on a bought effect.
+   ===================================================================== */
+
+/* No sprite, bought or default, may be wider than a twelfth of the
+   viewport height — 75px on a 900px-tall view, half the width of the
+   default hit-ring. Both pools reach it at 0.9m from the lens, which is
+   also the closest an effect is allowed to draw (FX_EFFECT_CLEAR). */
+const FX_SPRITE_MAX_H = 1 / 12;
+/* The default hit-ring, which is the yardstick every effect is measured
+   against below. RingGeometry(FX_RING_INNER, 1) scaled to FX_HIT_RING and
+   grown by FX_RING_GROW: a thin white annulus that peaks a little over a
+   metre in radius and is gone in 0.18s. */
+const FX_RING_INNER = 0.88;
+const FX_RING_GROW = 2.9;
+const FX_HIT_RING = 0.26;
+/* World size of one sprite in each pool: the number that, times half the
+   viewport height and divided by the distance, is its width in pixels. */
+const FX_CONF_SIZE = 0.16;
+const FX_SPARK_SIZE = 0.30;
+
+const FX_POINT_VERTEX = `
+  attribute vec3 fxColor;
+  attribute float fxAlpha;
+  uniform float fxSize;
+  uniform float fxScale;
+  uniform float fxMaxPx;
+  varying vec3 vFxColor;
+  varying float vFxAlpha;
+  void main() {
+    vFxColor = fxColor;
+    vFxAlpha = fxAlpha;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = min(fxSize * fxScale / max(-mv.z, 0.05), fxMaxPx);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+const FX_POINT_FRAGMENT = `
+  precision highp float;
+  uniform sampler2D fxMap;
+  varying vec3 vFxColor;
+  varying float vFxAlpha;
+  void main() {
+    float a = texture2D(fxMap, gl_PointCoord).a * vFxAlpha;
+    if (a < 0.02) discard;
+    gl_FragColor = vec4(vFxColor, a);
+  }
+`;
 
 function ParticleSys(max, tex, additive, size) {
   const pos = new Float32Array(max * 3);
   const col = new Float32Array(max * 3);
+  const alpha = new Float32Array(max);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('fxColor', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('fxAlpha', new THREE.BufferAttribute(alpha, 1));
   g.setDrawRange(0, 0);
-  const m = new THREE.PointsMaterial({
-    size: size, map: tex, vertexColors: true, transparent: true,
-    depthWrite: false, sizeAttenuation: true, fog: false,
-    blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
-    opacity: 1, alphaTest: additive ? 0 : 0.12
+  const m = new THREE.ShaderMaterial({
+    vertexShader: FX_POINT_VERTEX, fragmentShader: FX_POINT_FRAGMENT,
+    uniforms: {
+      fxMap: { value: tex },
+      fxSize: { value: size },
+      /* Half the drawing buffer height and the clamp in the same units.
+         psUpdate refreshes them, so a resize costs nothing here. */
+      fxScale: { value: 360 },
+      fxMaxPx: { value: 720 * FX_SPRITE_MAX_H }
+    },
+    transparent: true, depthWrite: false, toneMapped: false,
+    blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending
   });
   const pts = new THREE.Points(g, m);
   pts.frustumCulled = false;
@@ -6173,15 +6259,29 @@ function psEmit(P, x, y, z, vx, vy, vz, life, color) {
   } else P.n++;
   const a = P.pts.geometry.attributes;
   a.position.array[i * 3] = x; a.position.array[i * 3 + 1] = y; a.position.array[i * 3 + 2] = z;
+  a.fxAlpha.array[i] = 0;
   P.vx[i] = vx; P.vy[i] = vy; P.vz[i] = vz;
   P.life[i] = life; P.maxLife[i] = life;
   P.r[i] = color.r; P.g[i] = color.g; P.b[i] = color.b;
 }
+/* The clamp and the perspective term both live in drawing-buffer pixels,
+   so they are re-read from the canvas rather than cached: a phone rotating
+   changes both. No renderer means the headless harness, where nothing is
+   drawn and the uniforms are inert. */
+function psViewport(P) {
+  const h = renderer && renderer.domElement ? renderer.domElement.height : 0;
+  if (!h) return;
+  const u = P.pts.material.uniforms;
+  u.fxScale.value = h * 0.5;
+  u.fxMaxPx.value = h * FX_SPRITE_MAX_H;
+}
 function psUpdate(P, dt) {
-  const a = P.pts.geometry.attributes, pos = a.position.array, col = a.color.array;
+  const a = P.pts.geometry.attributes, pos = a.position.array, col = a.fxColor.array;
+  const alpha = a.fxAlpha.array;
+  psViewport(P);
   let live = 0;
   for (let i = 0; i < P.n; i++) {
-    if (P.life[i] <= 0) { col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = 0; pos[i * 3 + 1] = -999; continue; }
+    if (P.life[i] <= 0) { alpha[i] = 0; pos[i * 3 + 1] = -999; continue; }
     P.life[i] -= dt;
     P.vy[i] -= P.grav * dt;
     P.vx[i] *= Math.exp(-2.2 * dt); P.vz[i] *= Math.exp(-2.2 * dt);
@@ -6189,18 +6289,21 @@ function psUpdate(P, dt) {
     if (pos[i * 3 + 1] < 0.03) { pos[i * 3 + 1] = 0.03; P.vy[i] *= -0.32; P.vx[i] *= 0.6; P.vz[i] *= 0.6; }
     const f = clamp(P.life[i] / P.maxLife[i], 0, 1);
     let e = f > 0.7 ? 1 : f / 0.7;
-    /* Near-camera fade, ADDITIVE ONLY. sizeAttenuation makes a 0.3m sprite
-       cover a third of the screen at arm's length and additive ones then
-       bleach the frame, so dim them toward black as they near the lens —
-       black is invisible under additive blending.
-       Never do this to a normal-blended system: there black is opaque, and
-       the confetti turns into a swarm of dark squares. It is small and
-       solid anyway, so up close it just reads as confetti flying past. */
-    if (P.additive) e *= nearFade(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-    col[i * 3] = P.r[i] * e; col[i * 3 + 1] = P.g[i] * e; col[i * 3 + 2] = P.b[i] * e;
+    /* Both fades ride the alpha channel now, which is why both pools can
+       have both of them. The old code faded by multiplying the colour
+       toward black — a fade under additive blending and a slide into mud
+       under normal blending — so the near-lens fade had to be withheld
+       from the confetti to keep it from turning into dark squares. Neither
+       compromise survives: the colour written below is the colour that was
+       asked for, at every age and every distance. */
+    e *= nearFade(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+    alpha[i] = e;
+    col[i * 3] = P.r[i]; col[i * 3 + 1] = P.g[i]; col[i * 3 + 2] = P.b[i];
     live = i + 1;
   }
-  a.position.needsUpdate = true; a.color.needsUpdate = true;
+  a.position.needsUpdate = true;
+  a.fxColor.needsUpdate = true;
+  a.fxAlpha.needsUpdate = true;
   P.pts.geometry.setDrawRange(0, P.n);
 }
 
@@ -6247,8 +6350,8 @@ function fxWarmGeometryCache() {
 }
 
 function initFX() {
-  FX.conf  = ParticleSys(SOFTWARE_GPU ? 340 : 900, squareTex(), false, 0.16);
-  FX.spark = ParticleSys(SOFTWARE_GPU ? 200 : 520, softTex(),  true,  0.30);
+  FX.conf  = ParticleSys(SOFTWARE_GPU ? 340 : 900, squareTex(), false, FX_CONF_SIZE);
+  FX.spark = ParticleSys(SOFTWARE_GPU ? 200 : 520, softTex(),  true,  FX_SPARK_SIZE);
 
   const bubbleCount = SOFTWARE_GPU ? 12 : 40;
   const bubbleGeo = new THREE.SphereGeometry(1, SOFTWARE_GPU ? 8 : 14, SOFTWARE_GPU ? 6 : 10);
@@ -6365,7 +6468,7 @@ function initFX() {
 
   const ringCount = SOFTWARE_GPU ? 10 : 24;
   FX.ringMesh = fxMakeInstanced(
-    new THREE.RingGeometry(0.88, 1, SOFTWARE_GPU ? 14 : 24),
+    new THREE.RingGeometry(FX_RING_INNER, 1, SOFTWARE_GPU ? 14 : 24),
     fxImpactMaterial(1.20, 0.48, THREE.DoubleSide), ringCount, true);
   FX.ringMesh.material.polygonOffset = true;
   FX.ringMesh.material.polygonOffsetFactor = -3;
@@ -6437,11 +6540,43 @@ const CONFETTI = [0xffb7c5, 0xa8dcf0, 0xb8f2d8, 0xd4c5f9, 0xffefa8, 0xffd3b6, 0x
    watcher nothing the default did not already tell them -- not where the
    shooter is, not where the shot landed, not a fraction of a second sooner.
 
-   NO EXTRA SCREEN. Particles are small and few, the additive ones ride the
-   same near-camera fade every additive sprite here rides, and no effect
-   touches the muzzle light's intensity or range -- only its hue. Nothing an
-   effect draws may sit between an opponent and what they are aiming at more
-   than the default does.
+   NO EXTRA SCREEN, AND IT IS MEASURED. An effect that blankets your own
+   view while you fire is a bought disadvantage; one that blankets an
+   opponent's view when your shots land near them is a bought advantage.
+   Neither is acceptable, so the budget is not "small and few" but a number:
+   EVERY EFFECT COVERS NO MORE OF THE SCREEN THAN THE DEFAULT HIT DOES.
+   Effects are told apart by shape, colour, motion and decay -- never by
+   size, because size is the one axis that is also a gameplay change.
+
+   The yardstick, and the arithmetic behind the numbers on each effect
+   below. A 1600x900 viewport, the camera's 74-degree vertical field, a
+   wall six metres off -- 99.5 pixels to the metre. A point sprite of world
+   size s is s * 450 / 6 pixels wide there, so the 0.16m confetti sprite is
+   12px and the 0.30m soft sprite 22.5px. Areas are the whole sprite quad,
+   which is deliberately pessimistic: the star texture inks 23% of its quad
+   and the soft blob about 40%.
+
+     DEFAULT (a BUBBLEGUN pellet on a wall)   7900 px^2
+       hit-ring, peak radius 1.01m, annulus   7200
+       nine droplets                           690
+
+     fx-starfall    17 sprites x 144          2450 px^2   0.31x default
+     fx-confettipop 20 sprites x 144          2880 px^2   0.36x default
+     fx-bubbletrail 11 sprites x 506 + bloom  5800 px^2   0.73x default
+
+   Both distances and both sizes scale as 1/d, so those ratios hold at
+   every range -- with one exception, which is where the first cut of this
+   went wrong. A point sprite six centimetres from the eye is 1200px across
+   and the default draws nothing there at all. Three things close that:
+   FX_SPRITE_MAX_H clamps any sprite to a twelfth of the viewport height,
+   FX_EFFECT_STANDOFF starts the wake and the flash a metre down the
+   barrel, and FX_EFFECT_CLEAR forbids an effect particle inside 0.9m of
+   the lens outright. effects.test.js checks all of it.
+
+   And no effect touches the muzzle light's intensity or range -- only its
+   hue -- nor draws a ring: an expanding ring is the default impact's own
+   silhouette, and it is both the largest thing on the frame and the one
+   shape a bought effect has no business echoing.
 
    NO EXTRA COST. Counts are per shot, halve under SOFTWARE_GPU, and are
    bounded whatever the range: a 90m rifle shot lays down the same five
@@ -6454,28 +6589,61 @@ const CONFETTI = [0xffb7c5, 0xa8dcf0, 0xb8f2d8, 0xd4c5f9, 0xffefa8, 0xffd3b6, 0x
    not so far that two jerseys wearing the same effect converge. */
 const FX_TRIM_MIX = 0.5;
 
+/* How far down the shot the wake and the flash begin.
+
+   A shot starts at the shooter's eye, so for the one player whose eye the
+   camera is at, a muzzle particle spawned 6cm along it is a particle on the
+   lens: 1200 pixels of it, six at a time, every time they pull the trigger.
+   FX_SPRITE_MAX_H stops it filling the frame and nearFade stops it being
+   opaque, but neither makes it a good idea — the default draws nothing in
+   the first metre of a shot, and a metre down the barrel is also where a
+   muzzle flash looks like it comes from. */
+const FX_EFFECT_STANDOFF = 1.1;
+/* And the floor under it. Whatever the geometry -- a shot fired into a wall
+   you are standing against, somebody firing point blank into your face --
+   nothing an effect draws is allowed inside this radius of the lens. It is
+   also where both pools hit the sprite clamp, so this is the distance at
+   which every number in the budget above stops being able to grow. */
+const FX_EFFECT_CLEAR = 0.9;
+
+function fxAwayFromLens(x, y, z) {
+  const dx = x - camera.position.x, dy = y - camera.position.y, dz = z - camera.position.z;
+  return dx * dx + dy * dy + dz * dz > FX_EFFECT_CLEAR * FX_EFFECT_CLEAR;
+}
+
+/* Every colour below is one of the seven the town is already painted in
+   (CONFETTI above, which is the same list the kill burst and the store
+   cards use) or a shade of one of them. Nothing is mixed to order and
+   nothing arrives from another game: an imported hue is what sank two
+   rounds of weapon skins, and the tan star was that same failure by a
+   different route -- 0xfff1a6 is a house butter, it was the fade that
+   dragged it to 0x8c845b. Three hue families, one each, far enough apart
+   to name across a road: LILAC, RAINBOW, MINT. */
 const SHOT_EFFECTS = {
   /* STARFALL — a comet's tail. Candy stars are flung along the shot, hang
      for an instant and sag, so the wake keeps a soft downward curve after
-     the shot itself has landed. Butter and cream: the quietest of the three
-     and the one that reads at distance, because a sagging line of gold is a
-     shape no other effect in the game makes. */
+     the shot itself has landed. Amethyst: the one cool violet in the town,
+     worn by nothing else, and a sagging line of it is a shape no other
+     effect makes. 17 sprites, 2450 px^2 at the reference frame — 0.31x the
+     default hit, and no ring. */
   'fx-starfall': {
     name: 'Starfall',
-    muzzleTint: C(0xffe9b0),
-    colors: [0xfff1a6, 0xffe08a, 0xfff8e0],
+    muzzleTint: C(0xd8ccff),
+    colors: [0xd4c5f9, 0xc3b0f2, 0xece4ff],
     wake:   { sys: 'conf', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
     muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
-    burst:  { sys: 'conf', count: 8, push: [1.6, 3.6], lift: [1.4, 3.0], life: [0.34, 0.52],
-              ring: 0xfff1a6, ringScale: 0.20 }
+    burst:  { sys: 'conf', count: 8, push: [1.6, 3.6], lift: [1.4, 3.0], life: [0.34, 0.52] }
   },
   /* CONFETTI POP — a party popper on the end of the barrel. A wide, fast,
      tumbling scatter in the town's whole party palette, thin along the shot
      and loud at both ends: a fistful out of the muzzle, and a real pop where
-     it lands. The one that falls fastest, and the only rainbow. */
+     it lands. The one that falls fastest, and the only rainbow — being all
+     seven at once is the identity, which is why it can share a texture with
+     Starfall and still never be mistaken for it. 20 sprites, 2880 px^2,
+     0.36x the default hit. */
   'fx-confettipop': {
     name: 'Confetti Pop',
-    muzzleTint: C(0xffc6e0),
+    muzzleTint: C(0xffb7c5),
     colors: CONFETTI,
     wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
     muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
@@ -6483,16 +6651,20 @@ const SHOT_EFFECTS = {
   },
   /* BUBBLE TRAIL — the only one that goes UP. Soap lights drift off the shot
      line and rise instead of falling, and the hit ends in a cluster of
-     bubbles swelling and going soft. Mint and glass. Direction alone tells
-     it from the other two at any distance, in any light, at speed. */
+     bubbles swelling and going soft. House mint and house sky. Direction
+     alone tells it from the other two at any distance, in any light, at
+     speed. Its sprite is the big soft blob rather than the star, so it runs
+     the fewest of them: 11 sprites and four bloom grains, 5800 px^2 counted
+     as solid quads, 0.73x the default hit — and nearer 0.3x once the blob's
+     40% ink coverage is allowed for. */
   'fx-bubbletrail': {
     name: 'Bubble Trail',
     muzzleTint: C(0xbdf0e2),
-    colors: [0x8eeeff, 0xa8f1d4, 0xd8f6ff],
-    wake:   { sys: 'spark', count: 5, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
-    muzzle: { count: 4, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
-    burst:  { sys: 'spark', count: 6, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50],
-              bloom: 5, ring: 0x8eeeff, ringScale: 0.16 }
+    colors: [0xb8f2d8, 0xa8dcf0, 0xd8f6ff],
+    wake:   { sys: 'spark', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
+    muzzle: { count: 3, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
+    burst:  { sys: 'spark', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50],
+              bloom: 4 }
   }
 };
 
@@ -6521,17 +6693,21 @@ function fxEffectCount(n) {
 /* The wake, laid along the segment the shot already flies. Spaced evenly
    over the whole line so it reads as a path rather than a puff at one end,
    and counted per shot rather than per metre so range costs nothing. */
-function fxEffectWake(effect, x0, y0, z0, x1, y1, z1) {
+function fxEffectWake(effect, len, x0, y0, z0, x1, y1, z1) {
   const w = effect.wake;
   const sys = fxEffectSystem(w.sys);
   const count = fxEffectCount(w.count);
+  /* Never the first metre, and never more than the near half of a shot so
+     short that the standoff would swallow all of it. */
+  const from = Math.min(0.5, FX_EFFECT_STANDOFF / len);
   for (let i = 0; i < count; i++) {
-    const u = (i + fxRand(0.15, 0.85)) / count;
+    const u = from + (1 - from) * (i + fxRand(0.15, 0.85)) / count;
+    const x = lerp(x0, x1, u) + fxRand(-w.jitter, w.jitter);
+    const y = lerp(y0, y1, u) + fxRand(-w.jitter, w.jitter);
+    const z = lerp(z0, z1, u) + fxRand(-w.jitter, w.jitter);
+    if (!fxAwayFromLens(x, y, z)) continue;
     fxEffectTint(_fxColorA, fxPick(effect.colors), _fxOwner);
-    psEmit(sys,
-      lerp(x0, x1, u) + fxRand(-w.jitter, w.jitter),
-      lerp(y0, y1, u) + fxRand(-w.jitter, w.jitter),
-      lerp(z0, z1, u) + fxRand(-w.jitter, w.jitter),
+    psEmit(sys, x, y, z,
       fxRand(-w.sway, w.sway),
       fxRand(w.rise[0], w.rise[1]),
       fxRand(-w.sway, w.sway),
@@ -6545,10 +6721,14 @@ function fxEffectMuzzlePuff(effect, x, y, z, ux, uy, uz) {
   const m = effect.muzzle;
   const sys = fxEffectSystem(effect.wake.sys);
   const count = fxEffectCount(m.count);
+  const bx = x + ux * FX_EFFECT_STANDOFF;
+  const by = y + uy * FX_EFFECT_STANDOFF;
+  const bz = z + uz * FX_EFFECT_STANDOFF;
+  if (!fxAwayFromLens(bx, by, bz)) return;
   for (let i = 0; i < count; i++) {
     const push = fxRand(m.out[0], m.out[1]);
     fxEffectTint(_fxColorA, fxPick(effect.colors), _fxOwner);
-    psEmit(sys, x + ux * 0.06, y + uy * 0.06, z + uz * 0.06,
+    psEmit(sys, bx, by, bz,
       ux * push + fxRand(-m.sway, m.sway),
       uy * push + fxRand(m.rise[0], m.rise[1]),
       uz * push + fxRand(-m.sway, m.sway),
@@ -6584,14 +6764,18 @@ function fxEffectBloom(effect, q, count) {
 function fxEffectBurst(effect, q) {
   const b = effect.burst;
   const sys = fxEffectSystem(b.sys);
+  /* A shot into the wall you are standing against lands on the lens. The
+     weapon's own impact is allowed there because it is the feedback the
+     player is owed; a bought flourish on top of it is not. */
+  if (!fxAwayFromLens(q.x, q.y, q.z)) return;
   /* The owner's colour travelled with the impact rather than in a module
      global: nine pellets are queued at once, and the next shot must not be
      able to repaint the ones still waiting. */
   _fxColorB.r = q.tintR; _fxColorB.g = q.tintG; _fxColorB.b = q.tintB;
-  if (b.ring) {
-    fxEffectTint(_fxColorA, b.ring, _fxColorB);
-    fxRing(q.x, q.y, q.z, q.nx, q.ny, q.nz, _fxColorA, b.ringScale);
-  }
+  /* No ring here. The expanding ring is the default impact's own
+     silhouette and the biggest single thing on the frame; an effect that
+     added a second one would both double the area and copy the shape it is
+     supposed to be distinguishable from. */
   if (b.bloom) fxEffectBloom(effect, q, b.bloom);
   const count = fxEffectCount(b.count);
   for (let i = 0; i < count; i++) {
@@ -6686,8 +6870,8 @@ function fxTracer(x0, y0, z0, x1, y1, z1, color, effectId) {
   FX.activeEffect = effect;
   if (len < 0.05) return;
   if (effect) {
-    fxEffectWake(effect, x0, y0, z0, x1, y1, z1);
     const inv = 1 / len;
+    fxEffectWake(effect, len, x0, y0, z0, x1, y1, z1);
     fxEffectMuzzlePuff(effect, x0, y0, z0, dx * inv, dy * inv, dz * inv);
   }
 
@@ -6716,7 +6900,7 @@ function fxRing(x, y, z, nx, ny, nz, color, scale) {
   r.x = x + nx * 0.025; r.y = y + ny * 0.025; r.z = z + nz * 0.025;
   r.quat.setFromUnitVectors(_fxForward, _fxDirection.set(nx, ny, nz).normalize());
   r.s0 = scale || 1;
-  r.grow = r.s0 > 1 ? 1.8 : 2.9;
+  r.grow = r.s0 > 1 ? 1.8 : FX_RING_GROW;
   r.t = 0;
   r.dur = r.s0 > 1 ? 0.28 : 0.18;
   fxSetInstanceColor(FX.ringMesh, index, color || FX_WHITE);
@@ -6839,7 +7023,7 @@ function fxShardBurst(q) {
 }
 function fxBubbleImpact(q) {
   fxMixSurface(_fxColorA, q.surface, FX_BUBBLE, 0.55, 1.35);
-  fxRing(q.x, q.y, q.z, q.nx, q.ny, q.nz, _fxColorA, 0.26);
+  fxRing(q.x, q.y, q.z, q.nx, q.ny, q.nz, _fxColorA, FX_HIT_RING);
   fxDropletBurst(q);
 }
 function fxMallowImpact(q) {

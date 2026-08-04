@@ -119,6 +119,11 @@ function loadEffects() {
     this.api = {
       SHOT_EFFECTS, fxEffectFor, fxEffectTint, fxEffectCount,
       FX_TRIM_MIX, FX_PREVIEW, buildEffectPreview,
+      /* The sizes the footprint test measures with. They have to cross the
+         vm boundary or the yardstick computes NaN and the fairness rule
+         goes untested while still reporting a failure. */
+      FX_CONF_SIZE, FX_SPARK_SIZE, FX_SPRITE_MAX_H,
+      FX_HIT_RING, FX_RING_GROW, FX_RING_INNER, FX_EFFECT_CLEAR,
       setSoftware(on) { SOFTWARE_GPU = on; }
     };`, sandbox);
   return sandbox.api;
@@ -173,7 +178,7 @@ test('no effect record carries anything a weapon record would be read for', () =
   const ALLOWED = new Set([
     'name', 'muzzleTint', 'colors', 'wake', 'muzzle', 'burst',
     'sys', 'count', 'jitter', 'sway', 'rise', 'life', 'out',
-    'push', 'lift', 'ring', 'ringScale', 'bloom'
+    'push', 'lift', 'bloom'
   ]);
 
   const walk = (value, id, trail) => {
@@ -339,7 +344,6 @@ test('every effect stays in the house palette — no near-black, no imported neo
   const { SHOT_EFFECTS } = loadEffects();
   for (const [id, effect] of Object.entries(SHOT_EFFECTS)) {
     const colours = effect.colors.slice();
-    if (effect.burst.ring) colours.push(effect.burst.ring);
     for (const hex of colours) {
       assert.ok(Number.isInteger(hex) && hex >= 0 && hex <= 0xffffff,
         `${id} colour ${hex} is not a 24-bit 0xRRGGBB literal`);
@@ -352,6 +356,103 @@ test('every effect stays in the house palette — no near-black, no imported neo
     }
     assert.ok(colours.some((hex) => chroma(hex) >= 0.15),
       `${id} has no committed colour — every value is a white wash`);
+  }
+});
+
+/* ---------------------------------------------------------------------
+   THE FOOTPRINT
+
+   The rule this exists to hold: an effect covers no more of the screen
+   than the default hit does. It is a fairness rule, not a taste one. An
+   effect that blankets your own view while you fire is a bought
+   disadvantage; one that blankets an opponent's view when your shots land
+   near them is a bought advantage. The first cut of these effects drew
+   four-pointed stars four hundred pixels wide, six at a time, over most of
+   the viewport, against a default that is a 150px hit-ring — so this is
+   measured in pixels rather than argued about in adjectives.
+
+   The model, which is the arithmetic the comment in src/60-fx.js states:
+   a 1600x900 viewport, the camera's 74-degree vertical field, a wall six
+   metres off. A point sprite of world size s is s * (H/2) / d pixels wide,
+   because that is literally the gl_PointSize the shader computes. Areas
+   are whole sprite quads — pessimistic, since the star texture inks about
+   23% of its quad — and every term scales as 1/d, so a ratio taken at six
+   metres is the ratio at every distance.
+   --------------------------------------------------------------------- */
+
+const VIEW_H = 900;                       // CSS px, the reference viewport
+const VIEW_FOV = 74;                      // src/10-core.js
+const REF_DIST = 6;                       // m — a wall across the road
+/* Pixels per metre of world, across the frame, at REF_DIST. */
+const PX_PER_M = (VIEW_H / 2) / (REF_DIST * Math.tan(VIEW_FOV * Math.PI / 360));
+/* And the width in pixels of a point sprite of world size s, which is a
+   different constant because gl_PointSize has the field of view baked out
+   of it: gl_PointSize = size * scale / -mvPosition.z. */
+const spritePx = (size) => size * (VIEW_H / 2) / REF_DIST;
+const quad = (size) => spritePx(size) ** 2;
+/* A ring is an annulus, not a disc: only the band between the two radii
+   is ink, which is most of why the default can be that wide and still not
+   obscure anything. */
+const annulus = (outerM, innerRatio) =>
+  Math.PI * (outerM * PX_PER_M) ** 2 * (1 - innerRatio * innerRatio);
+const disc = (radiusM) => Math.PI * (radiusM * PX_PER_M) ** 2;
+
+test('no effect covers more of the screen than the default hit does', () => {
+  const {
+    SHOT_EFFECTS, FX_CONF_SIZE, FX_SPARK_SIZE, FX_SPRITE_MAX_H,
+    FX_HIT_RING, FX_RING_GROW, FX_RING_INNER, FX_EFFECT_CLEAR
+  } = loadEffects();
+
+  /* THE YARDSTICK: what a BUBBLEGUN pellet already draws on a wall with no
+     effect worn at all — fxBubbleImpact's ring at its widest, plus nine
+     droplets. This is the "crisp white hit-ring" the screenshots compare
+     against, and it comes to ~7900 px^2. */
+  const defaultRing = annulus(FX_HIT_RING * (1 + FX_RING_GROW), FX_RING_INNER);
+  const defaultHit = defaultRing + 9 * disc(0.047);
+  assert.ok(defaultHit > 5000 && defaultHit < 12000,
+    `the yardstick itself moved: the default hit is now ${Math.round(defaultHit)} px^2`);
+
+  const sizeOf = (sys) => (sys === 'spark' ? FX_SPARK_SIZE : FX_CONF_SIZE);
+
+  for (const [id, effect] of Object.entries(SHOT_EFFECTS)) {
+    /* Worst case: every particle of all three stages alive on the same
+       frame. They are not, in practice — the muzzle puff is half dead
+       before the burst exists — which is slack in the right direction. */
+    const wake = effect.wake.count * quad(sizeOf(effect.wake.sys));
+    const muzzle = effect.muzzle.count * quad(sizeOf(effect.wake.sys));
+    const burst = effect.burst.count * quad(sizeOf(effect.burst.sys));
+    const bloom = (effect.burst.bloom || 0) * disc(0.044);
+    const total = wake + muzzle + burst + bloom;
+
+    assert.ok(total <= defaultHit,
+      `${id} covers ${Math.round(total)} px^2 against the default's ` +
+      `${Math.round(defaultHit)} — it is bought screen space`);
+
+    /* And no single sprite may be a hit-ring on its own, however the
+       counts are shuffled. */
+    const widest = Math.max(spritePx(FX_CONF_SIZE), spritePx(FX_SPARK_SIZE));
+    assert.ok(widest * 4 <= 2 * FX_HIT_RING * (1 + FX_RING_GROW) * PX_PER_M,
+      `${id} sprites are ${widest.toFixed(1)}px wide against a ${Math.round(
+        2 * FX_HIT_RING * (1 + FX_RING_GROW) * PX_PER_M)}px default ring`);
+  }
+
+  /* THE NEAR FIELD, which is where the first cut actually failed: at six
+     metres these sprites were always small, and at six centimetres from
+     the lens the same 0.16m sprite is 1200px. Two things bound it, and
+     both have to hold. */
+  assert.ok(FX_SPRITE_MAX_H > 0 && FX_SPRITE_MAX_H <= 1 / 8,
+    `a sprite may cover ${FX_SPRITE_MAX_H} of the viewport height`);
+  const cappedPx = VIEW_H * FX_SPRITE_MAX_H;
+  assert.ok(cappedPx * cappedPx * 20 <= defaultHit * 30,
+    'the clamp is too loose to matter');
+  /* The clamp has to actually bind at the closest an effect may draw,
+     otherwise it is decoration: an uncapped sprite at FX_EFFECT_CLEAR must
+     be wider than the ceiling. */
+  for (const size of [FX_CONF_SIZE, FX_SPARK_SIZE]) {
+    const uncapped = size * (VIEW_H / 2) / FX_EFFECT_CLEAR;
+    assert.ok(uncapped > cappedPx,
+      `a ${size}m sprite is ${uncapped.toFixed(0)}px at the clear radius and ` +
+      `the clamp lets ${cappedPx.toFixed(0)}px through, so it never binds`);
   }
 });
 
