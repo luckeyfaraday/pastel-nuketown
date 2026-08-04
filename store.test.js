@@ -1061,6 +1061,19 @@ function fakeDoc() {
     byId[id] = make('div', id);
   byId.store.classes.add('off');          // the panel ships closed
 
+  /* The one thing a canvas does that a div does not, and the whole of what
+     the card pictures are taken with. The count is the point: six items are
+     six calls, once, however many frames go by. */
+  /* The case is a tall window, because the tallest thing in it is a
+     standing character. .stage-case in src/00-head.html. */
+  byId.storeCanvas.clientHeight = 272;
+  byId.storeCanvas.shots = 0;
+  byId.storeCanvas.toDataURL = function (type) {
+    byId.storeCanvas.shots++;
+    if (byId.storeCanvas.shotFails) throw new Error('tainted canvas');
+    return 'data:' + (type || 'image/png') + ';base64,' + 'A'.repeat(64);
+  };
+
   return {
     byId: byId,
     doc: {
@@ -1092,6 +1105,9 @@ function makeCase(options) {
   };
   const CHAR_BOX = { min: [-0.42, 0, -0.36], max: [0.42, 1.83, 0.36] };
   const GUN_BOX = { min: [-0.05, -0.09, -0.30], max: [0.05, 0.07, 0.19] };
+  /* A skin is allowed to be a different shape from the thing it replaces —
+     a crest, a taller cap — and the framing has to survive it. */
+  const SKIN_BOX = opts.skinBox || CHAR_BOX;
 
   const globals = {
     document: dom.doc,
@@ -1107,7 +1123,7 @@ function makeCase(options) {
     buildCharacter(colors, skinId) {
       if (opts.builderThrows) throw new Error('no geometry today');
       log.built.push({ kind: 'character', colors: colors, skinId: skinId });
-      return { root: model(CHAR_BOX) };
+      return { root: model(skinId ? SKIN_BOX : CHAR_BOX) };
     },
     buildGunMesh(weapon, skinId) {
       if (opts.builderThrows) throw new Error('no geometry today');
@@ -1262,9 +1278,16 @@ test('an id this client has never heard of degrades to a sentence, not a throw',
   assert.equal(stage.slots[1].node, null);
   assert.equal(ctx.__dom.stageEmpty.hidden, false);
   assert.ok(ctx.__dom.stageEmpty.textContent.length > 0);
-  /* Nothing to turn means nothing to draw. */
-  ctx.__pump(3);
-  assert.equal(ctx.__log.frames, 0);
+  /* Nothing to turn means nothing to draw. The cards take their pictures
+     off the first frames after the panel opens — those are the renders
+     being allowed for here — and after that an empty case costs nothing at
+     all, however long it is left open. */
+  ctx.__pump(4);
+  const settled = ctx.__log.frames;
+  ctx.__pump(6);
+  assert.equal(ctx.__log.frames, settled, 'an empty case kept drawing');
+  assert.equal(ctx.__pending(), 0, 'an empty case is still asking for frames');
+  assert.equal(ctx.__get('STAGE').raf, 0);
 
   /* A weapon-shaped id whose paint this client does not have is a softer
      miss: the gun is still the gun, so it shows the gun. */
@@ -1335,4 +1358,215 @@ test('a browser that cannot give the store a context still gets the store', asyn
       character: null, weapons: { smg: null, shotgun: null, rifle: null }
     }, label);
   }
+});
+
+/* =====================================================================
+   FRAMING
+
+   The stage used to put the camera where a number said, and the number
+   had been chosen against a gun: 0.9m of mostly horizontal detail. A
+   character is 1.8m of mostly vertical detail, and the difference is a
+   shopper looking at a headless torso while deciding whether to spend
+   four dollars on the head.
+
+   So the camera is derived from the bounding box, every time, and these
+   tests do the projection by hand: every corner of every model that is
+   mounted has to land inside the frustum, whatever shape it is. No
+   pixels are needed to know that a corner behind the glass is a corner
+   the shopper cannot see.
+   ===================================================================== */
+
+const V = {
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  unit: a => { const n = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / n, a[1] / n, a[2] / n]; }
+};
+
+/* Where a world point lands in the camera's own frame, as a fraction of
+   the half-frame: |x| and |y| under 1 is on screen. */
+function project(cam, point) {
+  const pos = [cam.position.x, cam.position.y, cam.position.z];
+  const forward = V.unit(V.sub(cam.looked, pos));
+  const right = V.unit(V.cross(forward, [0, 1, 0]));
+  const up = V.cross(right, forward);
+  const v = V.sub(point, pos);
+  const depth = V.dot(v, forward);
+  const vHalf = Math.tan(cam.fov * Math.PI / 360);
+  return {
+    depth: depth,
+    x: V.dot(v, right) / (depth * vHalf * cam.aspect),
+    y: V.dot(v, up) / (depth * vHalf)
+  };
+}
+
+/* Every corner of the box a mounted model sweeps as it turns, in stage
+   space: the stand's offset, the model's own swept radius, and its
+   height standing on the floor. */
+function cornersOf(slot) {
+  const r = slot.node.userData.pnFlat, h = slot.node.userData.pnHeight;
+  const x = slot.pivot.position.x, out = [];
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const y of [0, h])
+    out.push([x + sx * r, y, sz * r]);
+  return out;
+}
+
+function framing(ctx) {
+  const stage = ctx.__get('STAGE');
+  const cam = stage.camera;
+  const seen = [];
+  for (const slot of stage.slots) {
+    if (!slot.node) continue;
+    const points = cornersOf(slot).map(p => project(cam, p));
+    seen.push({
+      slot: slot,
+      worst: {
+        x: Math.max(...points.map(p => Math.abs(p.x))),
+        top: Math.max(...points.map(p => p.y)),
+        bottom: Math.min(...points.map(p => p.y))
+      },
+      /* Where the model's floor and its top land on the screen, which is
+         what says whether two models were framed together. */
+      floor: Math.max(...points.filter((p, i) => i % 2 === 0).map(p => p.y)),
+      height: Math.max(...points.map(p => p.y)) - Math.min(...points.map(p => p.y)),
+      near: Math.min(...points.map(p => p.depth))
+    });
+  }
+  return seen;
+}
+
+test('a 1.8m character is framed as completely as a 0.9m gun', () => {
+  const ctx = makeCase();
+  ctx.storeShow(true);
+
+  /* Both kinds, and both with and without the default beside them: four
+     different shapes of content through one piece of arithmetic. */
+  for (const id of ['char-midnight', 'smg-cottoncloud', 'rifle-berryswirl', 'char-cloudknight']) {
+    for (const compare of [true, false]) {
+      ctx.stageSelect(id);
+      if (ctx.__get('STAGE').compare !== compare) ctx.stageToggleCompare();
+      const shown = framing(ctx);
+      assert.ok(shown.length, id + ' put nothing in the case');
+      for (const model of shown) {
+        const where = id + (compare ? ' (compared)' : ' (alone)');
+        assert.ok(model.near > 0, where + ' is behind the camera');
+        assert.ok(model.worst.top <= 1, where + ' loses its head off the top: ' + model.worst.top);
+        assert.ok(model.worst.bottom >= -1, where + ' is cut off at the bottom: ' + model.worst.bottom);
+        assert.ok(model.worst.x <= 1, where + ' runs off the side: ' + model.worst.x);
+        /* The captions are drawn over the bottom of the case. A pair of
+           boots behind the word DEFAULT is not a preview of the boots. */
+        assert.ok(model.worst.bottom >= -1 + 2 * 0.16 * 0.9,
+          where + ' stands in the caption band: ' + model.worst.bottom);
+      }
+    }
+  }
+});
+
+test('the camera is derived from the box, not from what kind of thing it is', () => {
+  /* The same id, built twice at two sizes. Nothing about the item changed
+     — only its geometry — and the framing has to follow it, because that
+     is the whole difference between derived and guessed. */
+  const near = makeCase({ skinBox: { min: [-0.3, 0, -0.3], max: [0.3, 0.9, 0.3] } });
+  near.storeShow(true);
+  near.stageSelect('char-midnight');
+  near.stageToggleCompare();                      // the skin on its own
+
+  const far = makeCase({ skinBox: { min: [-0.3, 0, -0.3], max: [0.3, 3.6, 0.3] } });
+  far.storeShow(true);
+  far.stageSelect('char-midnight');
+  far.stageToggleCompare();
+
+  const z = ctx => ctx.__get('STAGE').camera.position.z;
+  assert.ok(z(far) > z(near) * 2,
+    'a model four times as tall was framed from the same distance: ' + z(near) + ' vs ' + z(far));
+  for (const ctx of [near, far])
+    for (const model of framing(ctx)) {
+      assert.ok(model.worst.top <= 1, 'cropped at the top: ' + model.worst.top);
+      assert.ok(model.worst.bottom >= -1, 'cropped at the bottom: ' + model.worst.bottom);
+    }
+});
+
+test('the default and the skin are framed as one group, so a taller skin looks taller', () => {
+  /* A skin framed on its own would be blown up to fill the same window as
+     the default beside it, and a shop that draws a hat twice the size of
+     the head it sits on is a shop lying about what it is selling. */
+  const ctx = makeCase({ skinBox: { min: [-0.42, 0, -0.36], max: [0.42, 2.20, 0.36] } });
+  ctx.storeShow(true);
+  ctx.stageSelect('char-sherbetfox');
+
+  const shown = framing(ctx);
+  assert.equal(shown.length, 2, 'the default is not beside the skin');
+  const [base, skin] = shown;
+
+  /* Both feet on the same line: one floor, one group, one camera. */
+  assert.ok(Math.abs(base.floor - skin.floor) < 0.02,
+    'the two are standing at different heights: ' + base.floor + ' vs ' + skin.floor);
+  /* And the taller one is honestly taller — 2.20m against 1.83m. */
+  const ratio = skin.height / base.height;
+  assert.ok(ratio > 1.15 && ratio < 1.30, 'the pair does not share a scale: ' + ratio);
+  for (const model of shown) {
+    assert.ok(model.worst.top <= 1, 'the group crops: ' + model.worst.top);
+    assert.ok(model.worst.bottom >= -1, 'the group crops: ' + model.worst.bottom);
+  }
+});
+
+/* =====================================================================
+   THE PICTURES ON THE CARDS
+   ===================================================================== */
+
+test('every card gets a render of its own item, drawn once and not once a frame', () => {
+  const ctx = makeCase();
+  const canvas = ctx.__dom.storeCanvas;
+  ctx.storeShow(true);
+  assert.equal(canvas.shots, 0, 'the panel waited on six renders before it appeared');
+
+  ctx.__pump(4);
+  assert.equal(canvas.shots, CASE_IDS.length,
+    'one picture per item, and no more: ' + canvas.shots);
+
+  /* Six pictures, six cards, and the gradient still under each of them for
+     the browsers that never get this far. */
+  const shots = ctx.__dom.storeGrid.querySelectorAll('.sshot');
+  assert.equal(shots.length, CASE_IDS.length);
+  for (const img of shots) assert.ok(/^data:image/.test(img.src), img.src);
+  for (const swatch of ctx.__dom.storeGrid.querySelectorAll('.swatch'))
+    assert.ok(/linear-gradient/.test(swatch.style.background), 'the fallback wash is gone');
+
+  /* The whole reason to cache them: this runs beside a live match. Frames
+     go by, the grid is redrawn, the panel is closed and opened — and the
+     renderer is not asked for another picture. */
+  ctx.__pump(30);
+  ctx.storeRenderGrid();
+  ctx.storeShow(false);
+  ctx.storeShow(true);
+  ctx.__pump(10);
+  assert.equal(canvas.shots, CASE_IDS.length, 'pictures were retaken: ' + canvas.shots);
+  assert.equal(ctx.__log.renderers.length, 1, 'a second context was made for the cards');
+
+  /* And the case itself came back from being borrowed for the cards. */
+  ctx.stageSelect('char-midnight');
+  ctx.__pump(2);
+  assert.ok(ctx.__get('STAGE').slots.some(s => s.node), 'the case never got its models back');
+  assert.deepEqual(ctx.__get('STAGE.renderer').sized.slice(0, 2), [340, 272],
+    'the renderer was left at the thumbnail size');
+});
+
+test('a card whose picture cannot be taken keeps the gradient it always had', () => {
+  const ctx = makeCase();
+  ctx.__dom.storeCanvas.shotFails = true;
+  assert.doesNotThrow(() => ctx.storeShow(true));
+  assert.doesNotThrow(() => ctx.__pump(4));
+
+  assert.equal(ctx.__dom.storeGrid.querySelectorAll('.sshot').length, 0);
+  const swatches = ctx.__dom.storeGrid.querySelectorAll('.swatch');
+  assert.equal(swatches.length, 6);
+  for (const swatch of swatches)
+    assert.ok(/linear-gradient/.test(swatch.style.background));
+
+  /* Failing to take a picture is not a reason to stop trying to show the
+     case, or to stop being a shop. */
+  assert.equal(ctx.__dom.storeStage.hidden, false);
+  assert.deepEqual(ctx.__json('EQUIPPED'), {
+    character: null, weapons: { smg: null, shotgun: null, rifle: null }
+  });
 });

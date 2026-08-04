@@ -445,14 +445,21 @@ body.touch .sens{display:none}
    --------------------------------------------------------------------- */
 .store-stage{flex:none;display:flex;flex-direction:column;gap:8px}
 .store-stage[hidden]{display:none}
-.stage-case{position:relative;height:clamp(148px,30vh,228px);overflow:hidden;
+/* Tall on purpose. A character is 1.8m of mostly vertical detail and the
+   thing being decided in front of it is whether to spend money on exactly
+   these pixels, so the case is given the height a standing figure wants
+   and the grid below it scrolls. */
+.stage-case{position:relative;height:clamp(232px,42vh,336px);overflow:hidden;
   border:2.5px solid var(--ink);border-radius:18px;
   box-shadow:0 3px 0 var(--ink),inset 0 -16px 30px rgba(74,63,92,.11);
   background:radial-gradient(122% 98% at 50% 10%,#fffdfa 0%,#fdf2fb 44%,#e3daf6 100%)}
 /* The contact shadow sits under the canvas; the canvas is positioned only so
    that it wins the stacking order over it. */
-.stage-case::before{content:'';position:absolute;z-index:0;left:50%;bottom:12%;
-  transform:translateX(-50%);width:60%;height:16px;border-radius:50%;
+/* Where the models' feet land, which the framing holds steady: the content
+   sits on a floor a fixed share of the way up the case, because the share of
+   the frame reserved for the captions does not change with what is in it. */
+.stage-case::before{content:'';position:absolute;z-index:0;left:50%;bottom:23%;
+  transform:translateX(-50%);width:64%;height:18px;border-radius:50%;
   background:rgba(74,63,92,.17);filter:blur(6px)}
 #storeCanvas{position:relative;z-index:1;display:block;width:100%;height:100%}
 /* Which half is which, under the models rather than beside them, so the two
@@ -503,8 +510,15 @@ body.touch .sens{display:none}
    target, which on a phone is the whole top of the card. */
 .spick{display:flex;flex-direction:column;gap:6px;padding:0;margin:0;border:0;
   background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;min-width:0}
-.swatch{height:56px;border:2.5px solid var(--ink);border-radius:11px;
+/* The card's picture: a render of the real item over the pastel wash. The
+   wash stays because it is what the card looks like before the picture
+   arrives, and on a browser that could not give the store a context it is
+   what the card looks like for good. */
+.swatch{position:relative;height:86px;overflow:hidden;
+  border:2.5px solid var(--ink);border-radius:11px;
   box-shadow:inset 0 -6px 12px rgba(74,63,92,.14)}
+.sshot{position:absolute;inset:0;display:block;width:100%;height:100%;
+  object-fit:contain;pointer-events:none}
 /* Same reasoning as the header: the name and the price are the relay's text
    in a two-column card 152px wide. */
 .sname{font-family:var(--disp);font-size:15px;font-weight:800;letter-spacing:.02em;line-height:1.1;
@@ -530,14 +544,14 @@ body.touch .sens{display:none}
   .store-card{padding:12px 12px 14px}
   #storeGrid{grid-template-columns:1fr 1fr;gap:8px;padding:2px}
   .sitem{padding:7px 8px 8px;border-radius:13px}
-  .swatch{height:44px}
+  .swatch{height:72px}
   .sname{font-size:13px}
   .sfoot{flex-wrap:wrap;gap:5px}
   .sitem .mini-btn{flex:1 1 100%;padding:8px 6px 9px}
   /* The case keeps its size here on purpose: it is the reason the panel
      exists, and a phone in portrait has the height to spare that a phone
      on its side does not. */
-  .stage-case{height:clamp(140px,26vh,200px);border-radius:15px}
+  .stage-case{height:clamp(216px,38vh,300px);border-radius:15px}
   #stageName{font-size:14px}
 }
 /* A phone held sideways, which is how this game is played: the title card is
@@ -551,7 +565,7 @@ body.touch .sens{display:none}
   .store-head h2{font-size:19px}
   .store-sub{font-size:10px}
   #storeGrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:7px}
-  .swatch{height:32px}
+  .swatch{height:54px}
   .sitem{gap:4px;padding:6px 8px 7px}
   .sname{font-size:13px}
   .skind{font-size:8px}
@@ -560,7 +574,7 @@ body.touch .sens{display:none}
      to a floor, because a 1.8m character in a 90px window is a thumbnail
      with a GPU behind it, and the grid below scrolls where the case
      cannot. */
-  .stage-case{height:clamp(104px,32vh,148px);border-radius:14px}
+  .stage-case{height:clamp(150px,46vh,214px);border-radius:14px}
   .store-stage{gap:6px}
   #stageName{font-size:14px}
   #stageKind{font-size:8px}
@@ -12616,6 +12630,9 @@ const STAGE = {
   /* null until the first open decides; then true, or false forever. */
   can: null,
   renderer: null, scene: null, camera: null, canvas: null,
+  /* Everything the case is showing, under one parent, because the framing
+     measures the pair as a single object — see stageBounds. */
+  group: null,
   rigs: { world: null, view: null },
   /* Two, and only ever two: the default on the left, the selection on the
      right. Each is a pivot (where it stands) holding a spinner (its own
@@ -12627,6 +12644,11 @@ const STAGE = {
      and a build that failed is remembered as a failure so it is not retried
      sixty times a second. */
   cache: new Map(),
+  /* One picture per catalog id, drawn once and kept as a data URL. The cards
+     read from here; a null is an item that could not be drawn, remembered so
+     it is not attempted again. */
+  thumbs: new Map(),
+  thumbPivot: null, thumbCam: null, thumbJob: 0,
   raf: 0, last: 0, spin: 0,
   itemId: null,
   compare: true,
@@ -12646,6 +12668,22 @@ const STAGE_CACHE_MAX = 16;
    two noticeably different sides, which is the one thing a comparison
    cannot afford. */
 const STAGE_FOV = 27;
+/* A shade above the horizon: enough to see the top of a cap and the top of a
+   barrel, not enough to look down on anything. */
+const STAGE_TILT = 0.20;
+/* Air between the content and the glass. A display case that touches its own
+   edges reads as a mistake, and six per cent also absorbs the small error in
+   treating a tilted box as an upright one. */
+const STAGE_MARGIN = 1.06;
+/* The share of the case's height the caption pills sit over. It is reserved
+   rather than drawn into: without it a character stands with their boots
+   behind the word DEFAULT, which is not a preview of the boots. */
+const STAGE_CAPTION = 0.16;
+/* The picture on a card. Rendered once per item at this size and kept as a
+   data URL, so the row of cards costs six draws for the life of the page
+   rather than six draws a frame. */
+const STAGE_THUMB_W = 256;
+const STAGE_THUMB_H = 160;
 
 /* 10-core.js owns the one conversion from authored hex to linear, and the
    store must use it or its lights will not match the game's. The fallback
@@ -12707,7 +12745,13 @@ function stageInit() {
     const renderer = new THREE.WebGLRenderer({
       canvas: canvas,
       antialias: typeof SOFTWARE_GPU === 'boolean' ? !SOFTWARE_GPU : true,
-      alpha: true
+      alpha: true,
+      /* The card pictures are taken off this same canvas with toDataURL, and
+         a drawing buffer the browser is free to throw away the moment the
+         frame is composited reads back blank about as often as it does not.
+         One small canvas that only draws while the panel is open can afford
+         to keep its buffer; six cards of empty grey cannot. */
+      preserveDrawingBuffer: true
     });
     renderer.setClearColor(stageColor(0x000000), 0);
     if (THREE.sRGBEncoding !== undefined) renderer.outputEncoding = THREE.sRGBEncoding;
@@ -12726,15 +12770,28 @@ function stageInit() {
     STAGE.rigs.view = stageViewRig();
     scene.add(STAGE.rigs.world, STAGE.rigs.view);
 
+    const group = new THREE.Group();
+    scene.add(group);
     STAGE.slots = [];
     for (let i = 0; i < 2; i++) {
       const pivot = new THREE.Group();
       const spinner = new THREE.Group();
       pivot.add(spinner);
       pivot.visible = false;
-      scene.add(pivot);
+      group.add(pivot);
       STAGE.slots.push({ pivot: pivot, spinner: spinner, node: null, yaw0: 0 });
     }
+    STAGE.group = group;
+
+    /* Where a card's picture is taken. Its own stand and its own lens, in
+       this same scene and under these same lights, because the alternative
+       is a second rig — and a second rig is a second set of numbers to keep
+       matching the game's. */
+    STAGE.thumbPivot = new THREE.Group();
+    STAGE.thumbPivot.visible = false;
+    scene.add(STAGE.thumbPivot);
+    STAGE.thumbCam = new THREE.PerspectiveCamera(
+      STAGE_FOV, STAGE_THUMB_W / STAGE_THUMB_H, 0.05, 80);
 
     STAGE.renderer = renderer;
     STAGE.scene = scene;
@@ -12765,6 +12822,7 @@ function stageGiveUp() {
   STAGE.can = false;
   STAGE.renderer = null;
   STAGE.cache.clear();
+  STAGE.thumbs.clear();
   const wrap = stageEl('storeStage');
   if (wrap) wrap.hidden = true;
   /* The cards were drawn with a preview button on them; they are not any
@@ -12784,16 +12842,22 @@ function stagePreviewJersey() {
   };
 }
 
-/* Centre the model on the origin and record the two half-extents the
-   framing needs. Both are exact under the only transform the case applies,
-   which is a turn about Y: the vertical half never changes, and the
-   horizontal half is the radius of the circle the footprint sweeps. Doing
-   this once, at build time, is also what stops a model drifting — measuring
-   a node that has already been offset would offset it again. */
+/* Measure the model — the real thing, `new THREE.Box3().setFromObject`, not
+   a number per category. A gun is about 0.9m end to end and a character
+   about 1.8m tall, and any framing that treats those two the same crops one
+   of them; which one depends only on which the numbers were guessed against.
+
+   Two things come out of it. The model is stood on y = 0, so a default and
+   a skin of slightly different heights share a floor and the taller one
+   honestly looks taller. And two extents are recorded: how tall it is, and
+   the radius of the circle its footprint sweeps, which is the horizontal
+   half-extent under the only transform the case applies — a turn about Y.
+   Measuring once, at build time, is also what stops a model drifting:
+   measuring a node that has already been offset would offset it again. */
 function stageMeasure(node) {
   node.userData = node.userData || {};
   node.userData.pnFlat = 0.5;
-  node.userData.pnHalfY = 0.5;
+  node.userData.pnHeight = 1;
   if (typeof THREE.Box3 !== 'function' || typeof THREE.Vector3 !== 'function') return;
   try {
     const box = new THREE.Box3().setFromObject(node);
@@ -12802,9 +12866,9 @@ function stageMeasure(node) {
     box.getCenter(centre);
     box.getSize(size);
     if (!Number.isFinite(size.x) || !Number.isFinite(size.y) || !Number.isFinite(size.z)) return;
-    node.position.set(-centre.x, -centre.y, -centre.z);
+    node.position.set(-centre.x, -(centre.y - size.y / 2), -centre.z);
     node.userData.pnFlat = Math.max(1e-3, 0.5 * Math.hypot(size.x, size.z));
-    node.userData.pnHalfY = Math.max(1e-3, 0.5 * size.y);
+    node.userData.pnHeight = Math.max(1e-3, size.y);
   } catch (e) {}
 }
 
@@ -12885,51 +12949,111 @@ function stageMount(index, node, yaw0) {
   slot.pivot.visible = !!slot.node;
 }
 
-/* Stand the models where they go and put the camera where all of them fit.
-   The distance comes out of the measured half-extents and the lens, never
-   out of a number that looked right against one model: a character is 1.8m
-   and a viewmodel gun is a third of that, and a guessed distance flatters
-   exactly one of them. */
+/* The box the camera has to fit, measured off what is actually mounted
+   right now rather than off what category the item is in.
+
+   The vertical half comes from a live `Box3` over the whole group — the
+   default and the skin together, so the pair is framed as one object and
+   shares a scale. A skin that is framed tighter than the default looks
+   bigger than it is, which is a shop lying about the thing it is selling.
+
+   The horizontal and depth halves come from the swept radii instead, so
+   the frame does not breathe in and out as the models turn: a box measured
+   at one yaw is not the box at the next. */
+function stageBounds(shown) {
+  if (!shown.length) return null;
+
+  let flat = 0, top = 0;
+  for (const s of shown) {
+    flat = Math.max(flat, s.node.userData.pnFlat || 0.5);
+    top = Math.max(top, s.node.userData.pnHeight || 1);
+  }
+  let minX = Infinity, maxX = -Infinity;
+  for (const s of shown) {
+    minX = Math.min(minX, s.pivot.position.x - flat);
+    maxX = Math.max(maxX, s.pivot.position.x + flat);
+  }
+
+  /* The models stand on y = 0 and the tallest decides the top, which the
+     measured heights already say. The Box3 is asked all the same, because
+     it is the one answer that cannot go stale: a builder that grows a hat
+     moves this without anybody remembering to change a constant. */
+  let minY = 0, maxY = top;
+  if (STAGE.group && typeof THREE.Box3 === 'function' && typeof THREE.Vector3 === 'function') {
+    try {
+      const box = new THREE.Box3().setFromObject(STAGE.group);
+      if (!(typeof box.isEmpty === 'function' && box.isEmpty())) {
+        const centre = new THREE.Vector3(), size = new THREE.Vector3();
+        box.getCenter(centre);
+        box.getSize(size);
+        if (Number.isFinite(centre.y) && Number.isFinite(size.y) && size.y > 0) {
+          minY = Math.min(minY, centre.y - size.y / 2);
+          maxY = Math.max(maxY, centre.y + size.y / 2);
+        }
+      }
+    } catch (e) {}
+  }
+  return { minX: minX, maxX: maxX, minY: minY, maxY: maxY, halfZ: flat };
+}
+
+/* Put a camera where the whole of `bounds` fits in front of it, with
+   `band` of the bottom of the frame left empty for whatever is drawn over
+   it. Nothing here knows what it is looking at — a 0.9m gun and a 1.8m
+   character go through the same arithmetic and come out framed the same
+   way, which is the only version of this that a redesign cannot break. */
+function stageFrame(cam, bounds, band) {
+  if (!cam || !bounds) return;
+  const fov = (cam.fov || STAGE_FOV) * Math.PI / 180;
+  const aspect = cam.aspect && Number.isFinite(cam.aspect) && cam.aspect > 0 ? cam.aspect : 1;
+  const vHalf = Math.tan(fov / 2);                 // half the frame, per unit of distance
+  const hHalf = vHalf * aspect;
+
+  const halfX = Math.max(1e-3, (bounds.maxX - bounds.minX) / 2);
+  const halfY = Math.max(1e-3, (bounds.maxY - bounds.minY) / 2);
+  const halfZ = Math.max(0, bounds.halfZ);
+  const midX = (bounds.minX + bounds.maxX) / 2;
+  const midY = (bounds.minY + bounds.maxY) / 2;
+  const midZ = Number.isFinite(bounds.midZ) ? bounds.midZ : 0;
+
+  /* Seen from a camera pitched down by STAGE_TILT, an upright box stands
+     taller on the screen than it does in the world: the far top corner
+     lifts by the depth times the sine of the tilt. */
+  const needY = halfY * Math.cos(STAGE_TILT) + halfZ * Math.sin(STAGE_TILT);
+  /* The content has to fit the part of the frame that is not the caption
+     band, so the frame itself is that much taller than the content. */
+  const frameHalf = needY / Math.max(0.2, 1 - (band || 0)) * STAGE_MARGIN;
+  /* Whichever axis runs out first, and then stand back by the depth, since
+     the near face of a turning model is `halfZ` closer than its middle. */
+  const dist = Math.max(frameHalf / vHalf, halfX * STAGE_MARGIN / hHalf) + halfZ;
+
+  /* Aiming below the middle by half the band is what lifts the content out
+     of the captions; the frame was made taller by exactly that much above,
+     so nothing goes off the top to pay for it. */
+  const aimY = midY - frameHalf * (band || 0);
+  cam.position.set(midX, aimY + Math.sin(STAGE_TILT) * dist, midZ + Math.cos(STAGE_TILT) * dist);
+  if (typeof cam.lookAt === 'function') cam.lookAt(midX, aimY, midZ);
+  return dist;
+}
+
+/* Stand the models where they go and put the camera where all of them fit. */
 function stageLayout() {
   const cam = STAGE.camera;
   if (!cam) return;
   const shown = STAGE.slots.filter(s => s.node);
   if (!shown.length) return;
 
-  let flat = 0, halfY = 0;
-  for (const s of shown) {
-    flat = Math.max(flat, s.node.userData.pnFlat || 0.5);
-    halfY = Math.max(halfY, s.node.userData.pnHalfY || 0.5);
-  }
+  let flat = 0;
+  for (const s of shown) flat = Math.max(flat, s.node.userData.pnFlat || 0.5);
 
-  const gap = flat * 0.40;
-  let halfX = flat;
   if (shown.length > 1) {
-    const offset = flat + gap * 0.5;
+    const offset = flat * 1.20;                   // a fifth of a model's width between them
     shown[0].pivot.position.x = -offset;
     shown[1].pivot.position.x = offset;
-    halfX = offset + flat;
   } else {
     shown[0].pivot.position.x = 0;
   }
 
-  const fov = (cam.fov || STAGE_FOV) * Math.PI / 180;
-  const aspect = cam.aspect && Number.isFinite(cam.aspect) && cam.aspect > 0 ? cam.aspect : 1;
-  const half = Math.tan(fov / 2);
-  /* Fit whichever axis runs out first, then stand back by the model's own
-     depth — the near face of a turning model is `flat` closer than its
-     centre — and leave a twentieth for air, because a display case that
-     touches its own glass looks like a mistake. The vertical gets an eighth
-     because the captions are drawn over the bottom of the case, and a pair
-     of boots behind the word DEFAULT is not a preview of the boots. */
-  const dist = Math.max(halfY * 1.12 / half, halfX / (half * aspect)) * 1.05 + flat;
-
-  /* A shade above the horizon: enough to see the top of a cap and the top
-     of a barrel, not enough to look down on anything. Aimed slightly under
-     the models' waist, which lifts them clear of the captions. */
-  const tilt = 0.20;
-  cam.position.set(0, Math.sin(tilt) * dist, Math.cos(tilt) * dist);
-  if (typeof cam.lookAt === 'function') cam.lookAt(0, -halfY * 0.09, 0);
+  const dist = stageFrame(cam, stageBounds(shown), STAGE_CAPTION) || 1;
 
   /* Toe the pair in towards the lens. Two models a metre apart under a
      perspective camera are seen from two different sides — the left one
@@ -12940,6 +13064,164 @@ function stageLayout() {
      turntables in it actually does. */
   for (const slot of shown)
     slot.pivot.rotation.y = Math.atan2(-slot.pivot.position.x, dist);
+}
+
+/* =====================================================================
+   THE PICTURE ON THE CARD
+
+   A two-tone gradient labelled "Cotton Cloud" tells a shopper nothing:
+   every card looks like every other card and none of them looks like the
+   thing being sold. So each card gets a render of its own item.
+
+   It is drawn on the same renderer as the case, in the same scene and
+   under the same lights, once per item, and kept as a data URL. Once is
+   the whole point — six models redrawn every frame, behind a live game, is
+   the sort of thing that is only ever noticed on somebody's phone. A card
+   whose picture cannot be taken keeps the gradient it always had, which is
+   also what every card looks like on a browser that gave the store no
+   context at all.
+   ===================================================================== */
+
+/* The box something occupies exactly as it stands, straight off THREE, or
+   null if that cannot be had. Only good for a still: the moment the thing
+   turns, this is last frame's answer. */
+function stageStillBounds(obj) {
+  if (!obj || typeof THREE.Box3 !== 'function' || typeof THREE.Vector3 !== 'function') return null;
+  try {
+    const box = new THREE.Box3().setFromObject(obj);
+    if (typeof box.isEmpty === 'function' && box.isEmpty()) return null;
+    const centre = new THREE.Vector3(), size = new THREE.Vector3();
+    box.getCenter(centre);
+    box.getSize(size);
+    if (!Number.isFinite(size.x) || !Number.isFinite(size.y) || !Number.isFinite(size.z)) return null;
+    if (!(size.x > 0) && !(size.y > 0)) return null;
+    return {
+      minX: centre.x - size.x / 2, maxX: centre.x + size.x / 2,
+      minY: centre.y - size.y / 2, maxY: centre.y + size.y / 2,
+      halfZ: size.z / 2, midZ: centre.z
+    };
+  } catch (e) {}
+  return null;
+}
+
+/* Empty both stands, so the models they were holding can be borrowed. */
+function stageClearSlots() {
+  for (const slot of STAGE.slots) {
+    if (slot.node) { try { slot.spinner.remove(slot.node); } catch (e) {} }
+    slot.node = null;
+    slot.pivot.visible = false;
+  }
+}
+
+/* One item, one picture, or null. Everything is put back afterwards by the
+   caller — this leaves the renderer at the thumbnail's size and the stage
+   stands empty. */
+function stageDrawThumb(id, type) {
+  const where = stageKindOf(id, type);
+  if (!where || !STAGE.renderer || !STAGE.thumbPivot || !STAGE.thumbCam) return null;
+  const node = stagePreviewNode(where.kind, where.slot, id);
+  if (!node) return null;
+
+  const canvas = (STAGE.renderer && STAGE.renderer.domElement) || STAGE.canvas;
+  if (!canvas || typeof canvas.toDataURL !== 'function') return null;
+
+  const pivot = STAGE.thumbPivot;
+  let url = null;
+  try {
+    pivot.add(node);
+    pivot.visible = true;
+    pivot.rotation.y = stageRestYaw(where.kind);
+    if (STAGE.rigs.world) STAGE.rigs.world.visible = where.kind !== 'weapon';
+    if (STAGE.rigs.view) STAGE.rigs.view.visible = where.kind === 'weapon';
+
+    /* A card's picture does not turn, so it is framed on the box the model
+       actually occupies at the yaw it is drawn at rather than on the circle
+       it would sweep — which is the difference between a gun that fills its
+       card and a gun sitting in the middle of one. */
+    const swept = {
+      minX: -node.userData.pnFlat, maxX: node.userData.pnFlat,
+      minY: 0, maxY: node.userData.pnHeight,
+      halfZ: node.userData.pnFlat
+    };
+    stageFrame(STAGE.thumbCam, stageStillBounds(pivot) || swept, 0);
+    if (typeof STAGE.thumbCam.updateProjectionMatrix === 'function')
+      STAGE.thumbCam.updateProjectionMatrix();
+
+    STAGE.renderer.setSize(STAGE_THUMB_W, STAGE_THUMB_H, false);
+    STAGE.renderer.render(STAGE.scene, STAGE.thumbCam);
+    url = canvas.toDataURL('image/png');
+    if (typeof url !== 'string' || url.length < 32) url = null;
+  } catch (e) {
+    url = null;
+  }
+  try { pivot.remove(node); } catch (e) {}
+  pivot.visible = false;
+  return url;
+}
+
+/* Take whatever pictures are still missing, then put the case back exactly
+   as it was. Called from the grid; a second call once every card has its
+   picture does nothing at all, which is what makes this once per item
+   rather than once per render. */
+function stageMakeThumbs(items) {
+  if (STAGE.can !== true || !STAGE.renderer) return false;
+  let made = 0;
+  for (const item of items) {
+    if (STAGE.thumbs.has(item.id)) continue;
+    if (STAGE.thumbs.size >= STAGE_CACHE_MAX) break;
+    if (!made) stageClearSlots();          // the stands may be holding a model we need
+    made++;
+    STAGE.thumbs.set(item.id, stageDrawThumb(item.id, item.type));
+  }
+  if (!made) return false;
+  /* The renderer is the thumbnail's size and the stands are empty; putting
+     the case back is a re-apply, which re-mounts, re-sizes and re-frames. */
+  STAGE.w = 0; STAGE.h = 0;
+  stageApply();
+  return true;
+}
+
+/* Drop the pictures into the cards that are already on screen, rather than
+   rebuilding the grid — a card replaced under a finger is a card that was
+   not pressed, and a keyboard would lose its place. */
+function stageFillThumbs() {
+  const grid = document.getElementById('storeGrid');
+  if (!grid || typeof grid.querySelectorAll !== 'function') return;
+  for (const swatch of grid.querySelectorAll('.swatch')) {
+    if (!swatch.dataset || swatch.dataset.shot === '1') continue;
+    const url = STAGE.thumbs.get(swatch.dataset.id);
+    if (!url) continue;
+    const img = document.createElement('img');
+    img.className = 'sshot';
+    img.src = url;
+    /* Decoration on a control that the name and the kind underneath
+       already say out loud. */
+    img.alt = '';
+    img.setAttribute('aria-hidden', 'true');
+    swatch.appendChild(img);
+    swatch.dataset.shot = '1';
+  }
+}
+
+/* Off the frame the panel opened on. Six models built and drawn is not
+   free, and it is not worth making the panel wait to appear. */
+function stageThumbsSoon(items) {
+  if (STAGE.can !== true || STAGE.thumbJob) return;
+  if (!storeIsOpen()) return;
+  if (!items.some(item => !STAGE.thumbs.has(item.id))) return;
+  const run = () => {
+    STAGE.thumbJob = 0;
+    if (STAGE.can !== true || !storeIsOpen()) return;
+    if (stageMakeThumbs(items)) stageFillThumbs();
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    STAGE.thumbJob = requestAnimationFrame(run);
+    /* requestAnimationFrame answers 0 on nothing real, and 0 is also the
+       marker for "no job pending". */
+    if (!STAGE.thumbJob) STAGE.thumbJob = -1;
+  } else {
+    run();
+  }
 }
 
 /* The drawing buffer follows the element, the same way the game's does and
@@ -13213,8 +13495,13 @@ function storeRenderGrid() {
     }
     card.appendChild(pick);
 
+    /* The gradient is the backdrop the picture is drawn against, and on a
+       browser with no context — or for an item whose model this client
+       cannot build — it is the whole card, exactly as it was before any of
+       this existed. */
     const swatch = document.createElement('div');
     swatch.className = 'swatch';
+    swatch.dataset.id = item.id;
     const tint = known ? known.tint : ['#fff8f0', '#d4c5f9'];
     swatch.style.background = 'linear-gradient(150deg,' + tint[0] + ',' + tint[1] + ')';
     pick.appendChild(swatch);
@@ -13258,6 +13545,11 @@ function storeRenderGrid() {
     card.appendChild(foot);
     grid.appendChild(card);
   }
+
+  /* Whatever pictures have already been taken go straight on; the rest are
+     taken once, off the next frame. */
+  stageFillThumbs();
+  stageThumbsSoon(items);
 }
 
 /* =====================================================================

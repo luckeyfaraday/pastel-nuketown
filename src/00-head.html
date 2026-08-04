@@ -443,14 +443,21 @@ body.touch .sens{display:none}
    --------------------------------------------------------------------- */
 .store-stage{flex:none;display:flex;flex-direction:column;gap:8px}
 .store-stage[hidden]{display:none}
-.stage-case{position:relative;height:clamp(148px,30vh,228px);overflow:hidden;
+/* Tall on purpose. A character is 1.8m of mostly vertical detail and the
+   thing being decided in front of it is whether to spend money on exactly
+   these pixels, so the case is given the height a standing figure wants
+   and the grid below it scrolls. */
+.stage-case{position:relative;height:clamp(232px,42vh,336px);overflow:hidden;
   border:2.5px solid var(--ink);border-radius:18px;
   box-shadow:0 3px 0 var(--ink),inset 0 -16px 30px rgba(74,63,92,.11);
   background:radial-gradient(122% 98% at 50% 10%,#fffdfa 0%,#fdf2fb 44%,#e3daf6 100%)}
 /* The contact shadow sits under the canvas; the canvas is positioned only so
    that it wins the stacking order over it. */
-.stage-case::before{content:'';position:absolute;z-index:0;left:50%;bottom:12%;
-  transform:translateX(-50%);width:60%;height:16px;border-radius:50%;
+/* Where the models' feet land, which the framing holds steady: the content
+   sits on a floor a fixed share of the way up the case, because the share of
+   the frame reserved for the captions does not change with what is in it. */
+.stage-case::before{content:'';position:absolute;z-index:0;left:50%;bottom:23%;
+  transform:translateX(-50%);width:64%;height:18px;border-radius:50%;
   background:rgba(74,63,92,.17);filter:blur(6px)}
 #storeCanvas{position:relative;z-index:1;display:block;width:100%;height:100%}
 /* Which half is which, under the models rather than beside them, so the two
@@ -501,8 +508,15 @@ body.touch .sens{display:none}
    target, which on a phone is the whole top of the card. */
 .spick{display:flex;flex-direction:column;gap:6px;padding:0;margin:0;border:0;
   background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;min-width:0}
-.swatch{height:56px;border:2.5px solid var(--ink);border-radius:11px;
+/* The card's picture: a render of the real item over the pastel wash. The
+   wash stays because it is what the card looks like before the picture
+   arrives, and on a browser that could not give the store a context it is
+   what the card looks like for good. */
+.swatch{position:relative;height:86px;overflow:hidden;
+  border:2.5px solid var(--ink);border-radius:11px;
   box-shadow:inset 0 -6px 12px rgba(74,63,92,.14)}
+.sshot{position:absolute;inset:0;display:block;width:100%;height:100%;
+  object-fit:contain;pointer-events:none}
 /* Same reasoning as the header: the name and the price are the relay's text
    in a two-column card 152px wide. */
 .sname{font-family:var(--disp);font-size:15px;font-weight:800;letter-spacing:.02em;line-height:1.1;
@@ -528,14 +542,14 @@ body.touch .sens{display:none}
   .store-card{padding:12px 12px 14px}
   #storeGrid{grid-template-columns:1fr 1fr;gap:8px;padding:2px}
   .sitem{padding:7px 8px 8px;border-radius:13px}
-  .swatch{height:44px}
+  .swatch{height:72px}
   .sname{font-size:13px}
   .sfoot{flex-wrap:wrap;gap:5px}
   .sitem .mini-btn{flex:1 1 100%;padding:8px 6px 9px}
   /* The case keeps its size here on purpose: it is the reason the panel
      exists, and a phone in portrait has the height to spare that a phone
      on its side does not. */
-  .stage-case{height:clamp(140px,26vh,200px);border-radius:15px}
+  .stage-case{height:clamp(216px,38vh,300px);border-radius:15px}
   #stageName{font-size:14px}
 }
 /* A phone held sideways, which is how this game is played: the title card is
@@ -549,7 +563,7 @@ body.touch .sens{display:none}
   .store-head h2{font-size:19px}
   .store-sub{font-size:10px}
   #storeGrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:7px}
-  .swatch{height:32px}
+  .swatch{height:54px}
   .sitem{gap:4px;padding:6px 8px 7px}
   .sname{font-size:13px}
   .skind{font-size:8px}
@@ -558,7 +572,7 @@ body.touch .sens{display:none}
      to a floor, because a 1.8m character in a 90px window is a thumbnail
      with a GPU behind it, and the grid below scrolls where the case
      cannot. */
-  .stage-case{height:clamp(104px,32vh,148px);border-radius:14px}
+  .stage-case{height:clamp(150px,46vh,214px);border-radius:14px}
   .store-stage{gap:6px}
   #stageName{font-size:14px}
   #stageKind{font-size:8px}
