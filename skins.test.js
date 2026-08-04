@@ -15,10 +15,31 @@ function loadWeaponCosmetics() {
   return sandbox.api;
 }
 
-test('weapon skins preserve every gameplay stat for every weapon pairing', () => {
-  const { WBY, WEAPONS, WEAPON_SKINS, weaponForSkin } = loadWeaponCosmetics();
-  const hostileSkinId = '__test-hostile-stat-skin__';
-  const hostileSkin = {
+/* Every field any weapon record carries, not the smg's alone.
+   The three records happen to agree today, which is what made reading the keys
+   off one of them look safe — but a field added to the shotgun and nowhere else
+   (pellets, say) would then never be given a poison value, and a skin leaking
+   exactly that field would sail through a green test. The union cannot miss it,
+   and the assertion below says so out loud if the records ever diverge. */
+function statKeys(WBY, WEAPONS) {
+  const ids = Object.keys(WBY);
+  const union = new Set();
+  for (const record of [...ids.map(id => WBY[id]), ...WEAPONS])
+    for (const key of Object.keys(record)) union.add(key);
+  for (const id of ids) {
+    assert.deepEqual(Object.keys(WBY[id]).sort(), [...union].sort(),
+      `${id} no longer carries the same fields as the other weapons — the guard ` +
+      'below poisons the union, but a field only one weapon has is a field ' +
+      'worth looking at twice');
+  }
+  return [...union];
+}
+
+/* What a skin is allowed to bring, and what it may never reach. Shared by both
+   tests below so a new geometry field cannot be added to one and forgotten in
+   the other. */
+function hostileSkinBase() {
+  return {
     weapon: 'smg',
     col: { body: 0xffffff, accent: 0xffffff, metal: 0xffffff, grip: 0xffffff },
     flash: 0xffffff, tracer: 0xffffff,
@@ -28,22 +49,32 @@ test('weapon skins preserve every gameplay stat for every weapon pairing', () =>
     hands: [[0, 0, 0]],
     muzzle: [0, 0, -99],
   };
-  for (const key of Object.keys(WBY.smg)) {
+}
+
+/* A value of the right shape that no real weapon holds, so a leak of `key` is
+   visible as itself rather than as a coincidence. */
+function poisonFor(key, sample, realValues) {
+  if (typeof sample === 'number') {
+    const numbers = realValues.filter(value => typeof value === 'number' && Number.isFinite(value));
+    let poison = (numbers.length ? Math.max(...numbers) : 0) + 999;
+    while (realValues.some(value => Object.is(value, poison))) poison++;
+    return poison;
+  }
+  if (typeof sample === 'string' || typeof sample === 'boolean') {
+    let poison = `__hostile_${key}__`;
+    while (realValues.some(value => Object.is(value, poison))) poison += '_';
+    return poison;
+  }
+  return { hostile: key };
+}
+
+test('weapon skins preserve every gameplay stat for every weapon pairing', () => {
+  const { WBY, WEAPONS, WEAPON_SKINS, weaponForSkin } = loadWeaponCosmetics();
+  const hostileSkinId = '__test-hostile-stat-skin__';
+  const hostileSkin = hostileSkinBase();
+  for (const key of statKeys(WBY, WEAPONS)) {
     if (Object.prototype.hasOwnProperty.call(hostileSkin, key)) continue;
-    const realValues = WEAPONS.map(weapon => weapon[key]);
-    const sample = WBY.smg[key];
-    if (typeof sample === 'number') {
-      const numbers = realValues.filter(value => typeof value === 'number' && Number.isFinite(value));
-      let poison = (numbers.length ? Math.max(...numbers) : 0) + 999;
-      while (realValues.some(value => Object.is(value, poison))) poison++;
-      hostileSkin[key] = poison;
-    } else if (typeof sample === 'string' || typeof sample === 'boolean') {
-      let poison = `__hostile_${key}__`;
-      while (realValues.some(value => Object.is(value, poison))) poison += '_';
-      hostileSkin[key] = poison;
-    } else {
-      hostileSkin[key] = { hostile: key };
-    }
+    hostileSkin[key] = poisonFor(key, WBY.smg[key], WEAPONS.map(weapon => weapon[key]));
   }
   WEAPON_SKINS[hostileSkinId] = hostileSkin;
 
@@ -66,6 +97,53 @@ test('weapon skins preserve every gameplay stat for every weapon pairing', () =>
   } finally {
     delete WEAPON_SKINS[hostileSkinId];
   }
+});
+
+/* The test above asserts an absence: no field leaked. An absence passes just as
+   well when the check is blind, and this one has been blind before — it read
+   its key list off a single weapon, so a field the other two did not share was
+   never poisoned at all.
+
+   So this one asserts the detector instead of the code. For every field, it
+   builds the record a leak of that field would produce — the shape
+   `stat: skin.stat || base.stat` yields when a skin carries `stat` — and
+   requires the comparison to reject it. A field that cannot be caught this way
+   is a field the guard above cannot see, whether it exists today or arrives in
+   a year. */
+test('the stat guard detects a leak of any weapon field, not just the ones that exist now', () => {
+  const { WBY, WEAPONS, weaponForSkin } = loadWeaponCosmetics();
+  const skinned = Object.keys(hostileSkinBase());
+  let checked = 0;
+
+  for (const key of statKeys(WBY, WEAPONS)) {
+    /* col, flash and tracer are the skin's to change — a "leak" of those is
+       the feature. Everything else is the simulation's. */
+    if (skinned.includes(key)) continue;
+    for (const weapon of WEAPONS) {
+      const base = WBY[weapon.id];
+      const clean = weaponForSkin(base, null);
+      const poison = poisonFor(key, base[key], WEAPONS.map(w => w[key]));
+      const leaked = Object.assign({}, clean, { [key]: poison });
+
+      let caught = false;
+      try {
+        for (const field of Object.keys(base)) {
+          if (field === 'col' || field === 'flash' || field === 'tracer') continue;
+          assert.strictEqual(leaked[field], weapon[field]);
+        }
+        assert.deepEqual(Object.keys(leaked).sort(), Object.keys(base).sort());
+      } catch (e) { caught = true; }
+
+      assert.ok(caught,
+        `a skin leaking ${weapon.id}.${key} would pass the guard above unnoticed`);
+      checked++;
+    }
+  }
+
+  /* If a refactor ever empties the key list, every loop above passes by never
+     running. Twenty-one fields across three weapons, less the four the skin
+     owns. */
+  assert.ok(checked >= 45, `the guard only exercised ${checked} field/weapon pairs`);
 });
 
 /* Two failures the store has already shipped once: an eight-digit literal
