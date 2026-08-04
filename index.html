@@ -4949,26 +4949,326 @@ const CH = {
   shoulder: 1.28, armLen: 0.50, hipW: 0.115, legW: 0.155
 };
 
-/* The jersey remains the large, readable colour field on every character.
-   Skin-specific colours are reserved for small costume pieces, which lets a
-   player recognize a fox or a knight without losing track of whose team
-   colour is moving across the street. */
+/* =====================================================================
+   THE THREE PURCHASABLE CHARACTERS
+   Each id is its own creature, not a recolour: a fox, a knight in plate and
+   a little robot. Hit detection is analytic (30-physics.js castRayActors:
+   sphere at HIT.headY 1.60 r .30, capsule r HIT.bodyR .36) and reads no
+   mesh, so shape is free — but a character that is bigger or smaller than
+   the default is a character that lies about where the bullets go. So every
+   one of them is built inside the DEFAULT'S OWN ENVELOPE:
+
+     measured by characters.test.js, gun excluded, in metres
+                        default   fox    knight  robot
+       height            1.890   1.890   1.890   1.890
+       max |x|           0.388   0.388   0.388   0.388  (the arms, all four)
+       max |x| no arms   0.282   0.270   0.285   0.282
+       forward  -z       0.350   0.350   0.330   0.315
+       rearward +z       0.257   0.245   0.245   0.246
+       max radial        0.433   0.398   0.399   0.398
+       torso half-width  0.250   0.255   0.250   0.250
+       torso half-depth  0.255   0.245   0.245   0.246
+       head half-width   0.265   0.265   0.265   0.265
+
+   Nothing reaches further than the default in any horizontal direction, so
+   nobody is seen around a corner first; and nothing is thinner than it
+   either — every torso still fills the r=.36 capsule about as well as the
+   default's does, so hits keep landing where they look like they land.
+   Head mass stays centred on the sphere at y 1.60 in all four. (The one
+   place the default is bigger is its cap brim, which owns both its -.350
+   forward reach and its .433 diagonal; a helm and a snout reach nearly as
+   far, a visor stops 3.5 cm short. None of it is torso mass.)
+
+   Team readability: the jersey (colors.body / colors.trim) keeps the torso
+   core and the sleeves on every character — the two biggest surfaces you
+   read at range — plus the knight's pauldrons and the thighs the fox and
+   the robot do not armour. A skin only owns what makes it that creature: head,
+   ears, tail, plate, shell. characters.test.js measures the jersey's share
+   of that surface and holds it above half — it comes out at torso/arms
+   56%/59% for the fox, 64%/56% for the knight and 59%/56% for the robot.
+   ===================================================================== */
 const CHARACTER_SKINS = {
   'char-midnight': {
     name: 'Midnight',
-    cap: 0x5c6689, backpack: 0x69749a, boot: 0x48516f, badge: 0xb7b9e6
+    col: { shell: 0x8f9bd6, deep: 0x5f679c, dark: 0x3d3856,
+           glow: 0xa9f5e4, lens: 0x2f2b44 }
   },
   'char-sherbetfox': {
     name: 'Sherbet Fox',
-    cap: 0xffb77d, backpack: 0xffc28f, boot: 0xd78378, badge: 0xffe0a8,
-    fur: 0xed8958, inner: 0xfff1c4, tailTip: 0xffefb0
+    col: { fur: 0xf6a768, deep: 0xdd8352, cream: 0xfff2d6,
+           nose: 0x574a66, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
   },
   'char-cloudknight': {
     name: 'Cloud Knight',
-    cap: 0xf8fbff, backpack: 0xb9dcf0, boot: 0x9fc9df, badge: 0xdff5ff,
-    armor: 0xf8fbff, armorShade: 0xb9dcf0,
-    crest: 0xc8ecfa, crestShade: 0xffffff
+    col: { plate: 0xf7fbff, shade: 0xc6dcf0, gold: 0xffd9a8,
+           visor: 0x40395a, glow: 0xa9ecff }
   }
+};
+
+/* Every character is the same seven pivots (torso, head, two legs, two arms,
+   gun) so the hand animation in animateCharacter drives all of them, and so
+   nine of them on a phone still cost what one costs today: a skin swaps the
+   four builders below, it never adds a mesh. Anything that has to follow a
+   limb — a pauldron, a paw — is built into that limb's own builder. */
+const DEFAULT_PARTS = {
+  torso(B, p) {
+    B.box([-0.235, CH.legTop - 0.06, -0.145], [0.235, CH.torsoTop, 0.145], p.cB, { top: p.cTop });
+    B.box([-0.245, CH.torsoTop - 0.10, -0.155], [0.245, CH.torsoTop, 0.155], p.cT);        // collar
+    B.box([-0.165, CH.legTop + 0.10, 0.145], [0.165, CH.torsoTop - 0.12, 0.255], p.cD);    // backpack
+    B.box([-0.10, CH.legTop + 0.16, -0.16], [0.10, CH.legTop + 0.30, -0.145], p.cT);       // chest badge
+    B.box([-0.25, CH.legTop - 0.10, -0.15], [0.25, CH.legTop + 0.02, 0.15], p.cT);         // belt
+  },
+  head(B, p) {
+    const r = CH.headR;
+    B.box([-r, -r, -r], [r, r, r], p.skin, { top: p.skinTop });
+    B.box([-r - 0.022, r - 0.03, -r - 0.022], [r + 0.022, r + 0.055, r + 0.022], p.cT);   // cap
+    B.box([-r - 0.02, r - 0.055, -r - 0.115], [r + 0.02, r + 0.012, -r + 0.01], p.cT);    // brim
+    for (const s of [-1, 1]) {                                                            // eyes
+      B.box([s * 0.075 - 0.048, -0.015, -r - 0.012], [s * 0.075 + 0.048, 0.075, -r + 0.01], C(0xfffdf8));
+      B.box([s * 0.075 - 0.024, 0.005, -r - 0.024], [s * 0.075 + 0.024, 0.052, -r - 0.006], C(0x4a3f5c));
+    }
+    B.box([-0.055, -0.115, -r - 0.014], [0.055, -0.085, -r + 0.005], C(0xe8a0a8));       // mouth
+    B.box([-r - 0.03, -0.06, -0.05], [-r, 0.03, 0.05], p.skin);                          // ears
+    B.box([r, -0.06, -0.05], [r + 0.03, 0.03, 0.05], p.skin);
+  },
+  leg(B, p) {
+    B.box([-CH.legW, -CH.legTop + 0.10, -0.10], [CH.legW, 0, 0.10], p.cD);
+    B.box([-CH.legW - 0.012, -CH.legTop, -0.145], [CH.legW + 0.012, -CH.legTop + 0.14, 0.115], p.boot);
+  },
+  arm(B, p) {
+    B.box([-0.088, -CH.armLen + 0.10, -0.088], [0.088, 0, 0.088], p.cB);
+    B.box([-0.075, -CH.armLen + 0.06, -0.075], [0.075, -CH.armLen + 0.14, 0.075], p.cT);   // cuff
+    B.box([-0.082, -CH.armLen, -0.082], [0.082, -CH.armLen + 0.075, 0.082], p.skin);       // mitt
+  }
+};
+
+/* ---------------------------------------------------------------------
+   SHERBET FOX — a fox standing where the person was.
+   The read is snout + tall ears + brush tail: the muzzle takes the head's
+   forward volume the cap's brim used to (-.350, exactly the default), the
+   ears take its height (1.890, exactly the default), and the tail sweeps up
+   the back inside the backpack's old rear volume (+.245 against +.255).
+   Legs are digitigrade — thigh, angled shank, long paw — which changes the
+   walk's silhouette without moving a single pivot.
+   --------------------------------------------------------------------- */
+const FOX_PARTS = {
+  torso(B, p) {
+    const a = p.a;
+    B.box([-0.235, CH.legTop - 0.06, -0.145], [0.235, CH.torsoTop, 0.145], p.cB, { top: p.cTop });
+    B.box([-0.25, CH.legTop - 0.10, -0.15], [0.25, CH.legTop + 0.04, 0.15], p.cT);        // belt
+    B.box([-0.09, CH.legTop + 0.12, -0.156], [0.09, CH.torsoTop - 0.16, -0.145], p.cT);   // jersey placket
+    /* Chest fluff + neck ruff: the fur reads as fur where it meets the head,
+       but stops at the collar line so the jersey keeps the whole chest. */
+    B.box([-0.255, CH.torsoTop - 0.11, -0.165], [0.255, CH.torsoTop, 0.165], a.cream);
+    B.box([-0.13, CH.torsoTop - 0.30, -0.175], [0.13, CH.torsoTop - 0.08, -0.145], a.cream);
+    B.box([-0.20, CH.torsoTop - 0.05, -0.15], [0.20, CH.torsoTop + 0.045, 0.15], a.fur);  // shoulders
+    /* Brush tail, three tapering blocks rising up the back. Rearmost face
+       +.245, inside the default backpack's +.255; widest corner is
+       sqrt(.135^2 + .245^2) = .280 radial, under HIT.bodyR = .36. */
+    B.box([-0.135, CH.legTop - 0.04, 0.135], [0.135, CH.legTop + 0.20, 0.245], a.fur);
+    B.box([-0.125, CH.legTop + 0.16, 0.145], [0.105, CH.legTop + 0.42, 0.24], a.fur);
+    B.box([-0.105, CH.legTop + 0.38, 0.15], [0.075, CH.legTop + 0.56, 0.23], a.cream);
+  },
+  head(B, p) {
+    const a = p.a;
+    /* Skull is wider than it is tall — a fox's head, not a cube. Corner
+       radial sqrt(.215^2 + .205^2) = .297, matching the default's .303. */
+    B.box([-0.215, -0.185, -0.145], [0.215, 0.165, 0.205], a.fur, { top: Cx(0xf6a768, 1.04) });
+    B.box([-0.19, -0.20, -0.12], [0.19, -0.13, 0.17], a.deep);                            // jaw shade
+    // muzzle: two steps out to the nose, tip at -.350 = the default brim
+    B.box([-0.105, -0.165, -0.29], [0.105, -0.015, -0.135], a.cream);
+    B.box([-0.072, -0.15, -0.335], [0.072, -0.045, -0.285], a.cream);
+    B.box([-0.056, -0.135, -0.35], [0.056, -0.06, -0.32], a.nose);                        // nose
+    B.box([-0.038, -0.168, -0.30], [0.038, -0.148, -0.24], a.mouth);                      // mouth
+    for (const s of [-1, 1]) {                                                            // eyes
+      B.box([s * 0.115 - 0.055, 0.0, -0.16], [s * 0.115 + 0.055, 0.085, -0.14], a.eye);
+      B.box([s * 0.115 - 0.028, 0.018, -0.172], [s * 0.115 + 0.028, 0.066, -0.152], a.pupil);
+      // cheek ruff, flaring back behind the eye — .265 wide, the same as the default's ears
+      B.box([s * 0.24 - 0.025, -0.145, -0.015], [s * 0.24 + 0.025, 0.085, 0.155], a.cream);
+      /* Ears: the skull stops at +.165 so that three tapering steps of ear
+         stand 12 cm clear of it, leaning outward as they rise to +.290 —
+         i.e. 1.890, the default cap's exact height. Widest face |x| = .220. */
+      B.box([s * 0.135 - 0.085, 0.075, -0.055], [s * 0.135 + 0.085, 0.205, 0.09], a.fur);
+      B.box([s * 0.155 - 0.06, 0.195, -0.04], [s * 0.155 + 0.06, 0.255, 0.075], a.fur);
+      B.box([s * 0.17 - 0.035, 0.245, -0.025], [s * 0.17 + 0.035, 0.29, 0.06], a.deep);
+      B.box([s * 0.14 - 0.05, 0.10, -0.065], [s * 0.14 + 0.05, 0.25, -0.05], a.cream);
+    }
+  },
+  leg(B, p) {
+    const a = p.a;
+    B.box([-CH.legW, -0.30, -0.075], [CH.legW, 0.02, 0.125], p.cD);                       // thigh
+    B.box([-0.115, -0.60, -0.115], [0.115, -0.27, 0.085], a.fur);                         // shank
+    B.box([-0.125, -0.66, -0.10], [0.125, -0.56, 0.06], a.deep);                          // hock
+    B.box([-0.135, -CH.legTop, -0.195], [0.135, -0.60, 0.065], a.fur);                    // paw
+    B.box([-0.135, -CH.legTop, -0.195], [0.135, -0.685, -0.105], a.cream);                // toes
+  },
+  arm(B, p) {
+    const a = p.a;
+    B.box([-0.088, -CH.armLen + 0.075, -0.088], [0.088, 0.015, 0.088], p.cB);             // jersey sleeve
+    B.box([-0.078, -CH.armLen + 0.055, -0.078], [0.078, -CH.armLen + 0.145, 0.078], a.cream); // fur cuff
+    B.box([-0.085, -CH.armLen, -0.085], [0.085, -CH.armLen + 0.08, 0.085], a.fur);        // paw
+    B.box([-0.085, -CH.armLen, -0.085], [0.085, -CH.armLen + 0.03, 0.0], a.cream);        // pads
+  }
+};
+
+/* ---------------------------------------------------------------------
+   CLOUD KNIGHT — a suit of plate with nobody's face in it.
+   The helm replaces the head entirely: no skin, no eyes, a dark visor slit
+   with a cold glow behind it, and a crest that takes the cap's height
+   (1.890). The jersey survives as a tabard down the front and a short cape
+   at the back, which is what keeps nine knights apart at range. The cuisses
+   ride on the legs and the pauldrons on the arms, so plate follows the limb
+   it belongs to instead of clipping through it.
+   --------------------------------------------------------------------- */
+const KNIGHT_PARTS = {
+  torso(B, p) {
+    const a = p.a;
+    B.box([-0.235, CH.legTop - 0.06, -0.145], [0.235, CH.torsoTop, 0.145], p.cB, { top: p.cTop });
+    B.box([-0.25, CH.torsoTop - 0.14, -0.16], [0.25, CH.torsoTop, 0.16], a.plate);        // gorget
+    B.box([-0.235, CH.torsoTop - 0.155, -0.155], [0.235, CH.torsoTop - 0.115, 0.155], a.shade);
+    // side plates: 1.5 cm proud of the jersey, so |x| .250 against the default collar's .245
+    for (const s of [-1, 1]) {
+      B.box([s * 0.2425 - 0.0075, CH.legTop + 0.10, -0.13], [s * 0.2425 + 0.0075, CH.torsoTop - 0.16, 0.13], a.plate);
+    }
+    B.box([-0.075, CH.legTop + 0.02, -0.157], [0.075, CH.torsoTop - 0.08, -0.145], p.cT); // tabard stripe
+    B.box([-0.065, CH.legTop + 0.30, -0.168], [0.065, CH.legTop + 0.42, -0.152], a.gold); // heraldry
+    B.box([-0.25, CH.legTop - 0.10, -0.155], [0.25, CH.legTop + 0.03, 0.155], p.cT);      // belt
+    B.box([-0.07, CH.legTop - 0.085, -0.166], [0.07, CH.legTop + 0.015, -0.15], a.gold);  // buckle
+    /* Cape in the team trim: the largest rear surface on the character and
+       the reason a knight still reads as your colour from behind. Rearmost
+       face +.245 against the default backpack's +.255. */
+    B.box([-0.215, CH.legTop + 0.24, 0.145], [0.215, CH.torsoTop - 0.055, 0.215], p.cT);
+    B.box([-0.235, CH.legTop + 0.12, 0.15], [0.235, CH.legTop + 0.30, 0.245], p.cT);
+    B.box([-0.235, CH.torsoTop - 0.10, 0.14], [0.235, CH.torsoTop - 0.02, 0.20], a.plate); // cape clasp
+  },
+  head(B, p) {
+    const a = p.a;
+    /* Helm. Same volume the head + cap occupied: |x| max .265 (cheek wings)
+       against the default ear's .265, front -.325 against the brim's -.350. */
+    B.box([-0.225, -0.20, -0.215], [0.225, 0.20, 0.215], a.plate, { top: Cx(0xf7fbff, 1.03) });
+    B.box([-0.235, 0.115, -0.225], [0.235, 0.185, 0.225], a.shade);                       // crown band
+    B.box([-0.195, -0.245, -0.19], [0.195, -0.185, 0.18], a.shade);                       // chin
+    B.box([-0.185, -0.06, -0.245], [0.185, 0.05, -0.20], a.visor);                        // visor slit
+    for (const s of [-1, 1])                                                              // the cold light behind it
+      B.box([s * 0.095 - 0.038, -0.035, -0.255], [s * 0.095 + 0.038, 0.025, -0.235], a.glow);
+    B.box([-0.032, -0.055, -0.25], [0.032, 0.13, -0.205], a.shade);                       // nasal bar
+    /* Beaked bascinet: the muzzle under the visor is what carries the helm
+       forward to -.330, just inside the default cap brim's -.350. */
+    B.box([-0.115, -0.225, -0.30], [0.115, -0.05, -0.185], a.plate);
+    B.box([-0.085, -0.20, -0.325], [0.085, -0.075, -0.29], a.plate);
+    for (const s of [-1, 1])                                                              // breath slots
+      B.box([s * 0.045 - 0.018, -0.185, -0.33], [s * 0.045 + 0.018, -0.095, -0.30], a.visor);
+    for (const s of [-1, 1])                                                              // cheek wings
+      B.box([s * 0.245 - 0.02, -0.135, -0.09], [s * 0.245 + 0.02, 0.09, 0.115], a.shade);
+    /* Crest, front to back over the crown, topping out at +.290 = 1.890. */
+    B.box([-0.048, 0.19, -0.165], [0.048, 0.255, 0.165], a.gold);
+    B.box([-0.034, 0.245, -0.10], [0.034, 0.29, 0.13], a.gold);
+    B.box([-0.034, 0.13, 0.19], [0.034, 0.255, 0.245], a.gold);                           // crest tail
+  },
+  leg(B, p) {
+    const a = p.a;
+    B.box([-CH.legW, -CH.legTop + 0.10, -0.10], [CH.legW, 0, 0.10], p.cD);                // jersey hose
+    B.box([-0.17, -0.16, -0.125], [0.17, 0.03, 0.125], a.plate);                          // cuisse
+    B.box([-0.16, -0.20, -0.115], [0.16, -0.145, 0.115], a.shade);
+    B.box([-0.155, -0.44, -0.115], [0.155, -0.30, 0.115], a.plate);                       // knee cop + greave
+    B.box([-0.14, -0.60, -0.11], [0.14, -0.42, 0.11], a.shade);
+    B.box([-CH.legW - 0.012, -CH.legTop, -0.175], [CH.legW + 0.012, -CH.legTop + 0.135, 0.115], a.plate); // sabaton
+    B.box([-CH.legW - 0.012, -CH.legTop, -0.175], [CH.legW + 0.012, -CH.legTop + 0.05, -0.10], a.shade);
+  },
+  arm(B, p, isRight) {
+    const a = p.a;
+    B.box([-0.088, -CH.armLen + 0.14, -0.088], [0.088, 0.02, 0.088], p.cB);               // jersey sleeve
+    /* Pauldron: it grows upward over the shoulder rather than outward, so the
+       arm's reach stays the default's — |x| .388, corner radial .398. It is
+       painted in the team's trim, which is what a knight's livery would be
+       and what keeps two knights on two teams apart from the side. */
+    const x0 = isRight ? -0.05 : -0.088, x1 = isRight ? 0.088 : 0.05;
+    B.box([x0, -0.115, -0.095], [x1, 0.10, 0.095], p.cT);
+    B.box([x0 + 0.012, 0.085, -0.078], [x1 - 0.012, 0.15, 0.078], a.shade);
+    B.box([-0.082, -0.30, -0.082], [0.082, -0.22, 0.082], a.shade);                       // couter
+    B.box([-0.085, -CH.armLen + 0.045, -0.085], [0.085, -CH.armLen + 0.15, 0.085], a.plate); // gauntlet
+    B.box([-0.082, -CH.armLen, -0.082], [0.082, -CH.armLen + 0.075, 0.082], a.shade);     // fist
+  }
+};
+
+/* ---------------------------------------------------------------------
+   MIDNIGHT — a small toy robot in the team's colours.
+   No face at all: a wraparound visor with one mint light behind it, a
+   crown antenna to the default's exact height (1.890), and a vent pack on
+   the back where the default's satchel was (+.235 against +.255). The
+   chassis is jersey-painted, the shell is the store card's own indigo.
+   --------------------------------------------------------------------- */
+const ROBOT_PARTS = {
+  torso(B, p) {
+    const a = p.a;
+    B.box([-0.235, CH.legTop - 0.06, -0.145], [0.235, CH.torsoTop, 0.145], p.cB, { top: p.cTop });
+    B.box([-0.25, CH.torsoTop - 0.12, -0.155], [0.25, CH.torsoTop, 0.155], a.deep);       // shoulder yoke
+    for (const s of [-1, 1])                                                              // chassis rails
+      B.box([s * 0.2425 - 0.0075, CH.legTop + 0.06, -0.135], [s * 0.2425 + 0.0075, CH.torsoTop - 0.14, 0.135], a.shell);
+    B.box([-0.10, CH.legTop + 0.30, -0.16], [0.10, CH.legTop + 0.48, -0.145], a.shell);   // core housing
+    B.box([-0.062, CH.legTop + 0.325, -0.172], [0.062, CH.legTop + 0.455, -0.155], a.glow); // core light
+    B.box([-0.235, CH.legTop + 0.20, -0.152], [0.235, CH.legTop + 0.245, 0.152], p.cD);   // panel seam
+    B.box([-0.25, CH.legTop - 0.10, -0.15], [0.25, CH.legTop + 0.04, 0.15], p.cT);        // hip band
+    B.box([-0.175, CH.legTop - 0.14, -0.12], [0.175, CH.legTop - 0.02, 0.12], p.cD);      // waist actuator
+    /* Vent pack, two stacks either side of the spine. Rearmost +.245,
+       inside the default backpack's +.255; corner sqrt(.20^2 + .245^2) =
+       .316, against the default backpack corner's .303. */
+    for (const s of [-1, 1]) {
+      B.box([s * 0.13 - 0.07, CH.legTop + 0.10, 0.14], [s * 0.13 + 0.07, CH.torsoTop - 0.10, 0.245], a.deep);
+      B.box([s * 0.13 - 0.042, CH.legTop + 0.16, 0.235], [s * 0.13 + 0.042, CH.torsoTop - 0.18, 0.246], a.glow);
+    }
+  },
+  head(B, p) {
+    const a = p.a;
+    /* Rounded chassis head: a low box with a stepped dome, so the mass sits
+       on the hit sphere at 1.60 and the antenna, not the skull, reaches the
+       default's 1.890. */
+    B.box([-0.215, -0.185, -0.20], [0.215, 0.15, 0.20], a.shell, { top: Cx(0x8f9bd6, 1.05) });
+    B.box([-0.175, 0.14, -0.165], [0.175, 0.225, 0.165], a.deep);                         // dome
+    B.box([-0.20, -0.075, -0.245], [0.20, 0.07, -0.185], a.lens);                         // visor, front
+    for (const s of [-1, 1])                                                              // visor, wrapping the sides
+      B.box([s * 0.2275 - 0.0175, -0.06, -0.20], [s * 0.2275 + 0.0175, 0.055, 0.075], a.lens);
+    B.box([-0.125, -0.045, -0.255], [0.125, 0.038, -0.238], a.glow);                      // eye light
+    B.box([-0.20, 0.055, -0.255], [0.20, 0.115, -0.195], a.deep);                         // brow
+    /* The lens housing is the only thing on this head that leaves the visor
+       plane; at -.310 it stops 4 cm inside the default cap brim's -.350. */
+    B.box([-0.058, -0.03, -0.30], [0.058, 0.045, -0.235], a.shell);
+    B.box([-0.04, -0.015, -0.31], [0.04, 0.03, -0.29], a.lens);
+    B.box([-0.022, -0.005, -0.315], [0.022, 0.018, -0.305], a.glow);
+    B.box([-0.16, -0.185, -0.215], [0.16, -0.10, -0.185], a.deep);                        // chin vent
+    B.box([-0.09, -0.175, -0.222], [0.09, -0.12, -0.20], a.dark);
+    for (const s of [-1, 1]) {                                                            // ear pods
+      B.box([s * 0.2375 - 0.0275, -0.10, -0.02], [s * 0.2375 + 0.0275, 0.07, 0.13], a.deep);
+      B.box([s * 0.2575 - 0.0075, -0.06, 0.02], [s * 0.2575 + 0.0075, 0.03, 0.09], a.glow);
+    }
+    B.box([-0.022, 0.215, 0.0], [0.022, 0.255, 0.045], a.dark);                           // antenna
+    B.box([-0.045, 0.245, -0.02], [0.045, 0.29, 0.07], a.glow);
+  },
+  leg(B, p) {
+    const a = p.a;
+    B.box([-0.10, -0.11, -0.09], [0.10, 0.02, 0.09], a.dark);                             // hip joint
+    B.box([-CH.legW, -0.36, -0.095], [CH.legW, -0.07, 0.10], p.cD);                       // jersey thigh
+    B.box([-0.115, -0.44, -0.125], [0.115, -0.33, 0.105], a.shell);                       // knee
+    B.box([-0.12, -0.63, -0.095], [0.12, -0.42, 0.095], a.deep);                          // shin
+    B.box([-0.125, -0.65, -0.10], [0.125, -0.56, -0.075], a.glow);                        // shin light
+    B.box([-CH.legW - 0.012, -CH.legTop, -0.185], [CH.legW + 0.012, -CH.legTop + 0.125, 0.075], a.shell); // foot
+    B.box([-0.10, -CH.legTop, 0.06], [0.10, -CH.legTop + 0.09, 0.14], a.deep);            // heel
+  },
+  arm(B, p) {
+    const a = p.a;
+    B.box([-0.088, -CH.armLen + 0.19, -0.088], [0.088, 0.02, 0.088], p.cB);               // jersey upper arm
+    B.box([-0.088, -0.02, -0.088], [0.088, 0.065, 0.088], a.dark);                        // shoulder bolt
+    B.box([-0.082, -0.28, -0.082], [0.082, -0.20, 0.082], a.shell);                       // elbow ring
+    B.box([-0.078, -CH.armLen + 0.055, -0.078], [0.078, -0.255, 0.078], p.cB);            // forearm
+    B.box([-0.085, -CH.armLen, -0.085], [0.085, -CH.armLen + 0.08, 0.085], a.shell);      // gripper
+    B.box([-0.085, -CH.armLen + 0.022, -0.03], [0.085, -CH.armLen + 0.042, 0.03], a.dark);
+  }
+};
+
+const SKIN_PARTS = {
+  'char-midnight': ROBOT_PARTS,
+  'char-sherbetfox': FOX_PARTS,
+  'char-cloudknight': KNIGHT_PARTS
 };
 
 function partMesh(build, withLines) {
@@ -4980,127 +5280,42 @@ function partMesh(build, withLines) {
   return g;
 }
 
+/* An unknown, absent, null, non-string — or inherited, e.g. 'constructor' —
+   id is not an error: the player just gets the default character. */
+function characterSkin(skinId) {
+  if (typeof skinId !== 'string') return null;
+  return Object.prototype.hasOwnProperty.call(CHARACTER_SKINS, skinId)
+    ? CHARACTER_SKINS[skinId] : null;
+}
+
 function buildCharacter(colors, skinId) {
-  const cosmetic = typeof skinId === 'string' ? CHARACTER_SKINS[skinId] : null;
+  const cosmetic = characterSkin(skinId);
+  const parts = cosmetic ? SKIN_PARTS[skinId] : DEFAULT_PARTS;
   const body = colors.body, trim = colors.trim;
-  const cB = C(body), cT = C(trim), cD = Cx(body, 0.9), skin = C(0xffe0c8), boot = C(0x6b5f80);
-  const skinColor = (key, fallback) => cosmetic && cosmetic[key] !== undefined ? C(cosmetic[key]) : fallback;
-  /* Keep the backpack in the skin palette because it is the large rear-facing
-     costume anchor that makes a selected outfit recognizable from cover;
-     the jersey remains the larger team-colour field across the front and
-     sides, so this does not turn the silhouette into a team-blind marker. */
-  const cCap = skinColor('cap', cT), cPack = skinColor('backpack', cD);
-  const cBoot = skinColor('boot', boot), cBadge = skinColor('badge', cT);
-  const cFur = skinColor('fur', cT), cInner = skinColor('inner', cT), cTailTip = skinColor('tailTip', cFur);
-  const cArmor = skinColor('armor', cT), cArmorShade = skinColor('armorShade', cT);
-  const cCrest = skinColor('crest', cT), cCrestShade = skinColor('crestShade', cCrest);
+  const p = {
+    cB: C(body), cT: C(trim), cD: Cx(body, 0.9), cTop: Cx(body, 1.05),
+    skin: C(0xffe0c8), skinTop: Cx(0xffe0c8, 1.03), boot: C(0x6b5f80), a: {}
+  };
+  if (cosmetic) for (const k in cosmetic.col) p.a[k] = C(cosmetic.col[k]);
 
   const root = new THREE.Group();          // origin at the feet
   const hips = new THREE.Group();
   root.add(hips);
 
-  // ---- torso (+ a little backpack + collar) ----
-  const torso = partMesh(B => {
-    B.box([-0.235, CH.legTop - 0.06, -0.145], [0.235, CH.torsoTop, 0.145], cB, { top: Cx(body, 1.05) });
-    B.box([-0.245, CH.torsoTop - 0.10, -0.155], [0.245, CH.torsoTop, 0.155], cT);        // collar
-    B.box([-0.165, CH.legTop + 0.10, 0.145], [0.165, CH.torsoTop - 0.12, 0.255], cPack);  // backpack
-    B.box([-0.10, CH.legTop + 0.16, -0.16], [0.10, CH.legTop + 0.30, -0.145], cBadge);    // chest badge
-    B.box([-0.25, CH.legTop - 0.10, -0.15], [0.25, CH.legTop + 0.02, 0.15], cT);         // belt
-
-    if (skinId === 'char-sherbetfox') {
-      /* Hang the stepped fan from the hips, below the backpack's y=.84 floor,
-         so it reads as a tail from behind and in profile without becoming a
-         rearward hitbox cue. A 100^3 sample per box against torso/backpack/
-         belt volumes gives torso 0.0/0.0/0.0%, backpack 0.0/0.0/0.0% and
-         belt 3.6/11.0/6.6%; the furthest corner is
-         sqrt(.18^2 + .23^2) = .292 radial, below HIT.bodyR=.36. Its +z=.230
-         stays inside the default character's rearmost +.255. A tail-only
-         orthographic outline comparison at yaw 0/30/45/60/90/135/180 adds
-         0.0/0.0/15.6/54.9/121.0/16.3/0.0 cm^2 outside the default outline,
-         giving it real outline at oblique and side yaws without extending
-         the rearward silhouette. z audit, tail base/mid/tip maxima:
-         +.230/.190/.170. */
-      B.box([-0.18, 0.60, 0.145], [0.18, 0.70, 0.23], cFur);
-      B.box([-0.205, 0.64, 0.145], [0.205, 0.76, 0.19], cFur);
-      B.box([-0.215, 0.73, 0.145], [-0.16, 0.82, 0.17], cTailTip);
-    }
-
-    if (skinId === 'char-cloudknight') {
-      /* z audit, chest plate/shade maxima: -.148/-.146; both are forward of
-         the character and well inside the +.255 rearward limit. */
-      B.box([-0.14, CH.legTop + 0.20, -0.17], [0.14, CH.torsoTop - 0.19, -0.148], cArmor);
-      B.box([-0.10, CH.legTop + 0.27, -0.174], [0.10, CH.legTop + 0.33, -0.146], cArmorShade);
-    }
-  }, true);
+  // ---- torso ----
+  const torso = partMesh(B => parts.torso(B, p), true);
   hips.add(torso);
 
-  // ---- head: rounded cube + cap + big cartoon eyes ----
+  // ---- head ----
   const headPiv = new THREE.Group();
   headPiv.position.set(0, CH.headC, 0);
-  const head = partMesh(B => {
-    const r = CH.headR;
-    B.box([-r, -r, -r], [r, r, r], skin, { top: Cx(0xffe0c8, 1.03) });
-    B.box([-r - 0.022, r - 0.03, -r - 0.022], [r + 0.022, r + 0.055, r + 0.022], cCap);  // cap
-    B.box([-r - 0.02, r - 0.055, -r - 0.115], [r + 0.02, r + 0.012, -r + 0.01], cCap);   // brim
-    for (const s of [-1, 1]) {                                                            // eyes
-      B.box([s * 0.075 - 0.048, -0.015, -r - 0.012], [s * 0.075 + 0.048, 0.075, -r + 0.01], C(0xfffdf8));
-      B.box([s * 0.075 - 0.024, 0.005, -r - 0.024], [s * 0.075 + 0.024, 0.052, -r - 0.006], C(0x4a3f5c));
-    }
-    B.box([-0.055, -0.115, -r - 0.014], [0.055, -0.085, -r + 0.005], C(0xe8a0a8));       // mouth
-    B.box([-r - 0.03, -0.06, -0.05], [-r, 0.03, 0.05], skin);                            // ears
-    B.box([r, -0.06, -0.05], [r + 0.03, 0.03, 0.05], skin);
-
-    if (skinId === 'char-sherbetfox') {
-      /* The fur is now clearly warmer than the cap and the tips rise to
-         y=.340 (from .300), so the ears remain distinct at side and rear
-         yaws. On the 120^3 cap/brim/skull overlap sample the lower, upper and
-         inner pieces are 61.1%, 19.8% and 13.8% buried; the exposed top and
-         outer edges are inside the existing head-scale envelope. z audit,
-         each lower/upper/inner ear box maxes at +.120/+.120/-.040. */
-      for (const s of [-1, 1]) {
-        const x0 = s < 0 ? -0.295 : 0.18, x1 = s < 0 ? -0.18 : 0.295;
-        const t0 = s < 0 ? -0.275 : 0.215, t1 = s < 0 ? -0.215 : 0.275;
-        const i0 = s < 0 ? -0.285 : 0.245, i1 = s < 0 ? -0.245 : 0.285;
-        B.box([x0, 0.235, -0.08], [x1, 0.295, 0.12], cFur);
-        B.box([t0, 0.270, -0.06], [t1, 0.340, 0.12], cFur);
-        B.box([i0, 0.255, -0.11], [i1, 0.332, -0.04], cInner);
-      }
-    }
-
-    if (skinId === 'char-cloudknight') {
-      /* These front/rear lobes are merged into the head mesh, but their real
-         z depth still gives the crest a readable wrap from every yaw. The
-         rearward silhouette was +.300 (4.5 cm beyond the +.255 limit) and is
-         now +.255 (0.0 cm beyond it); the rear shade makes the same
-         +.300-to+.255 change. z audit, front/rear lobe maxima:
-         -.200/+.255; front/rear shade maxima: -.280/+.255. */
-      B.box([-0.14, 0.245, -0.30], [0.14, 0.30, -0.20], cCrest);
-      B.box([-0.14, 0.245, 0.20], [0.14, 0.30, 0.255], cCrest);
-      B.box([-0.065, 0.265, -0.30], [0.065, 0.295, -0.28], cCrestShade);
-      B.box([-0.065, 0.265, 0.235], [0.065, 0.295, 0.255], cCrestShade);
-    }
-  }, true);
+  const head = partMesh(B => parts.head(B, p), true);
   headPiv.add(head);
   hips.add(headPiv);
 
   // ---- limbs ----
-  const mkLeg = () => partMesh(B => {
-    B.box([-CH.legW, -CH.legTop + 0.10, -0.10], [CH.legW, 0, 0.10], cD);
-    B.box([-CH.legW - 0.012, -CH.legTop, -0.145], [CH.legW + 0.012, -CH.legTop + 0.14, 0.115], cBoot);
-  }, false);
-  const mkArm = (isRight) => partMesh(B => {
-    B.box([-0.088, -CH.armLen + 0.10, -0.088], [0.088, 0, 0.088], cB);
-    B.box([-0.075, -CH.armLen + 0.06, -0.075], [0.075, -CH.armLen + 0.14, 0.075], cT);   // cuff
-    B.box([-0.082, -CH.armLen, -0.082], [0.082, -CH.armLen + 0.075, 0.082], skin);       // mitt
-    if (skinId === 'char-cloudknight') {
-      /* Each pauldron is in its own arm's builder, rather than on hips. The
-         local shoulder box therefore follows the same x/z aim rotations as
-         the arm, with its inner edge overlapping the shoulder volume. z audit:
-         each pauldron's local maximum is +.120. */
-      const x0 = isRight ? -0.045 : -0.09, x1 = isRight ? 0.09 : 0.045;
-      B.box([x0, -0.10, -0.12], [x1, 0.10, 0.12], cArmor);
-    }
-  }, false);
+  const mkLeg = () => partMesh(B => parts.leg(B, p), false);
+  const mkArm = (isRight) => partMesh(B => parts.arm(B, p, isRight), false);
 
   const legL = new THREE.Group(), legR = new THREE.Group();
   legL.position.set(-CH.hipW, CH.legTop, 0); legL.add(mkLeg());
@@ -5116,8 +5331,8 @@ function buildCharacter(colors, skinId) {
   const gun = partMesh(B => {
     B.box([-0.045, -0.045, -0.36], [0.045, 0.045, 0.10], C(0xe9e2f2));
     B.box([-0.030, -0.020, -0.52], [0.030, 0.028, -0.36], C(0xd6cee6));
-    B.box([-0.038, -0.16, -0.10], [0.038, -0.035, 0.02], cT);
-    B.box([-0.036, 0.045, -0.20], [0.036, 0.070, 0.02], cT);
+    B.box([-0.038, -0.16, -0.10], [0.038, -0.035, 0.02], p.cT);
+    B.box([-0.036, 0.045, -0.20], [0.036, 0.070, 0.02], p.cT);
     B.box([-0.040, -0.02, 0.10], [0.040, 0.055, 0.26], C(0xe9e2f2));
   }, false);
   gun.position.set(0, -CH.armLen + 0.02, -0.10);
