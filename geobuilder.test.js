@@ -174,6 +174,39 @@ test('taper 0 makes a cone: no zero-area faces, no zero-length ink', () => {
   for (const l of lines(B)) assert.ok(lengthOf(l) > 1e-9, 'a zero-length ink line reached the line buffer');
 });
 
+/* The face order in SOLID_FACES puts the duplicated corner pair last for a
+   cone up the Y axis, so that one shades correctly by luck. Down any other
+   axis the pair lands on a-b or a-d instead, quad()'s (b-a) x (d-a) cancels,
+   and the cone grows two unlit near-black sides — which in a game with no
+   black in it is the most visible bug the builder can have. */
+test('a cone is lit down every axis and off either end', () => {
+  for (const taper of [0, [0, 0.4], [0.4, 0]]) {
+    for (const taperAxis of ['x', 'y', 'z']) {
+      for (const taperEnd of ['min', 'max']) {
+        const B = new GeoBuilder();
+        B.prism([-1, -2, -3], [1, 2, 3], RED, { taper, taperAxis, taperEnd });
+        const where = `taper ${JSON.stringify(taper)} ${taperAxis} ${taperEnd}`;
+        assert.ok(verts(B).length, `${where} drew nothing`);
+        for (const v of verts(B))
+          assert.ok(Math.abs(Math.hypot(...v.n) - 1) < 1e-9, `${where}: a face has no normal`);
+        for (const l of lines(B))
+          assert.ok(lengthOf(l) > 1e-9, `${where}: a zero-length ink line reached the buffer`);
+      }
+    }
+  }
+});
+
+test('turning a collapsed face to shade it does not move it', () => {
+  const B = new GeoBuilder();
+  B.prism([-1, -2, -3], [1, 2, 3], RED, { taperAxis: 'z', taperEnd: 'min', taper: 0 });
+  // the tip is one point, the base is the four corners it was built from
+  const tip = verts(B).filter(v => Math.abs(v.p[2] + 3) < 1e-9);
+  assert.ok(tip.length, 'no tip');
+  for (const v of tip) assert.ok(Math.abs(v.p[0]) < 1e-9 && Math.abs(v.p[1]) < 1e-9);
+  const base = new Set(verts(B).filter(v => Math.abs(v.p[2] - 3) < 1e-9).map(v => v.p.join()));
+  assert.deepEqual([...base].sort(), ['-1,-2,3', '-1,2,3', '1,-2,3', '1,2,3']);
+});
+
 test('new solids ink themselves into the same line buffer as everything else', () => {
   const B = new GeoBuilder();
   B.prism([-1, 0, -1], [1, 1, 1], RED, { rot: [0, 0.4, 0] });

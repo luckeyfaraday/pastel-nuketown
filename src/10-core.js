@@ -307,8 +307,20 @@ GeoBuilder.prototype.solid = function (v, color, opt) {
     let distinct = 0;
     for (let i = 0; i < 4; i++) if (!q.slice(0, i).some(p => same(p, q[i]))) distinct++;
     if (distinct < 3) continue;
-    const col = grad ? f.v.map(i => grad[i]) : tints[f.tint];
-    this.quad(q[0], q[1], q[2], q[3], col, true);
+    /* A partly collapsed end leaves a face with two of its corners on the
+       same point, and where that pair sits decides whether the face is lit:
+       quad() takes its normal from (b-a) x (d-a), so a duplicate landing on
+       a-b or on a-d cancels one of those edges and yields a zero normal — an
+       unlit, near-black triangle on the side of every cone. Turn the quad so
+       the pair sits at c-d instead, which is exactly the degenerate corner
+       tri() has always handed quad() and which shades correctly. The corners
+       are the same four in the same cyclic order, so the winding, the edges
+       and the per-corner colours all follow round with it. */
+    let turn = 0;
+    for (let i = 0; i < 4; i++) if (same(q[i], q[(i + 1) % 4])) { turn = (i + 2) % 4; break; }
+    const idx = [0, 1, 2, 3].map(i => (i + turn) % 4);
+    const col = grad ? idx.map(i => grad[f.v[i]]) : tints[f.tint];
+    this.quad(q[idx[0]], q[idx[1]], q[idx[2]], q[idx[3]], col, true);
     if (ne) continue;
     for (let i = 0; i < 4; i++) {
       const p = q[i], r = q[(i + 1) % 4];

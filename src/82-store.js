@@ -27,9 +27,9 @@
    skin whose renderer has not landed yet still draws a card instead of
    throwing. */
 const STORE_ITEMS = [
-  { id: 'smg-cottoncloud',       type: 'weapon',    name: 'Cotton Cloud',   tint: ['#fff2f7', '#ffb7c5'] },
-  { id: 'shotgun-toastedmallow', type: 'weapon',    name: 'Toasted Mallow', tint: ['#fff4e2', '#ffd3b6'] },
-  { id: 'rifle-berryswirl',      type: 'weapon',    name: 'Berry Swirl',    tint: ['#f7ecff', '#d4c5f9'] },
+  { id: 'smg-cottoncloud',       type: 'weapon',    name: 'Folded Paper Crane',   tint: ['#f7b3c8', '#8c7ad6'] },
+  { id: 'shotgun-toastedmallow', type: 'weapon',    name: 'Cobalt Willow Teapot', tint: ['#9fb3ee', '#6f7bd4'] },
+  { id: 'rifle-berryswirl',      type: 'weapon',    name: 'Twisted Glass Cane',   tint: ['#63c9d6', '#c25fae'] },
   { id: 'char-midnight',         type: 'character', name: 'Midnight',       tint: ['#8f9bd6', '#4a3f5c'] },
   { id: 'char-sherbetfox',       type: 'character', name: 'Sherbet Fox',    tint: ['#ffe6c9', '#ff9aa2'] },
   { id: 'char-cloudknight',      type: 'character', name: 'Cloud Knight',   tint: ['#eaf7ff', '#a8dcf0'] }
@@ -1384,7 +1384,7 @@ function stageLayout() {
 /* =====================================================================
    THE PICTURE ON THE CARD
 
-   A two-tone gradient labelled "Cotton Cloud" tells a shopper nothing:
+   A two-tone gradient labelled "Folded Paper Crane" tells a shopper nothing:
    every card looks like every other card and none of them looks like the
    thing being sold. So each card gets a render of its own item.
 
