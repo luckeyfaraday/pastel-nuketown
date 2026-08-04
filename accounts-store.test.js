@@ -744,7 +744,7 @@ test('catalog reads Stripe prices and reports missing price configuration unavai
   });
 
   const items = await store.catalog();
-  assert.equal(items.length, 6);
+  assert.equal(items.length, 9);
   assert.deepEqual(items[0].price, { unitAmount: 425, currency: 'eur' });
   assert.equal(items[0].available, true);
   assert.equal(items[1].price, null);
@@ -852,7 +852,7 @@ test('account HTTP routes reject foreign CORS and unknown or owned checkout item
 
   const publicCatalog = await httpRequest(accounts, '/shop/catalog');
   assert.equal(publicCatalog.status, 200);
-  assert.equal(publicCatalog.json().items.length, 6);
+  assert.equal(publicCatalog.json().items.length, 9);
   assert.equal(stripeRequests, 0);
 
   const malformedAuthorization = await httpRequest(accounts, '/auth/me', {

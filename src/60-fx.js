@@ -13,6 +13,12 @@ const FX = {
   ringMesh: null, rings: [], ringI: 0,
   impacts: [], impactI: 0,
   activeWeapon: 'smg', impactDelay: 0.02,
+  /* The effect the shot being drawn right now is wearing, and the colour its
+     owner is drawn in — set by fxTracer and read by fxImpact, exactly the way
+     activeWeapon and impactDelay already bridge that gap. Both are copied
+     onto the queued impact record, so a shotgun with nine pellets in flight
+     does not lose them to the next shot. */
+  activeEffect: null,
   shake: 0, shakeV: 0,
   muzzleLights: [], muzzleI: 0
 };
@@ -30,6 +36,13 @@ const FX_SUGAR = C(0xfff4df);
 const FX_GLASS = C(0x9fe8ff);
 const _fxColorA = C(0xffffff);
 const _fxColorB = C(0xffffff);
+/* The shooter's colour for the shot in flight. Held here rather than kept as
+   a reference to the caller's Color so nothing downstream can be surprised by
+   it changing under them. */
+const _fxOwner = C(0xffffff);
+/* The default muzzle flash. An effect may move this hue; it may not move the
+   intensity or the range, which is why both are literals at their one use. */
+const FX_MUZZLE = C(0xffd38c);
 const _fxMatrix = new THREE.Matrix4();
 const _fxPosition = new THREE.Vector3();
 const _fxScale = new THREE.Vector3();
@@ -486,13 +499,14 @@ function initFX() {
   for (let i = 0; i < impactCount; i++) {
     FX.impacts.push({
       t: -1, weapon: 'smg', x: 0, y: 0, z: 0,
-      nx: 0, ny: 1, nz: 0, kind: 'map', surface: 0xffffff
+      nx: 0, ny: 1, nz: 0, kind: 'map', surface: 0xffffff,
+      effect: null, tintR: 1, tintG: 1, tintB: 1
     });
   }
 
   if (!SOFTWARE_GPU) {
     for (let i = 0; i < 3; i++) {
-      const pl = new THREE.PointLight(C(0xffd38c), 0, 8.5, 2);
+      const pl = new THREE.PointLight(FX_MUZZLE, 0, 8.5, 2);
       pl.visible = false;
       scene.add(pl);
       FX.muzzleLights.push({ light: pl, t: 0 });
@@ -506,6 +520,208 @@ function initFX() {
 }
 
 const CONFETTI = [0xffb7c5, 0xa8dcf0, 0xb8f2d8, 0xd4c5f9, 0xffefa8, 0xffd3b6, 0xffffff];
+
+/* =====================================================================
+   SHOT EFFECTS — the third cosmetic
+
+   One purchase themes a player's whole shooting signature: the wake a shot
+   leaves behind it, the colour of the muzzle flash, and the flourish on the
+   impact, as one identity. Unlike a viewmodel, every one of those three is
+   seen by the other eight people in the room, which is the point.
+
+   Nothing below is a second particle system. Every effect emits into the
+   pools above — FX.conf, FX.spark, FX.sugar, FX.rings — which are fixed in
+   size, recycle their oldest slot and allocate nothing per shot. An effect
+   is a table of numbers naming which of them to use and how.
+
+   Four rules run through it, and each is a way this can turn into a
+   gameplay change wearing a cosmetic's clothes.
+
+   THE OWNER STAYS READABLE. A remote player's shot is drawn in their jersey
+   trim -- 70-game.js and 75-network.js both pass that colour in -- and in a
+   nine-player match that colour is how you tell who is shooting at you. So
+   the effect owns the SHAPE, the MOTION and the hue family of its wake, and
+   the owner owns its TINT: every particle is the effect's colour mixed half
+   way to the shooter's (FX_TRIM_MIX). A blue jersey's Starfall is a cool
+   ice-gold and a pink one's is warm coral-gold, they are still told apart at
+   a glance, and both are still obviously Starfall and not Bubble Trail. The
+   colour argument used to be handed to fxTracer and dropped on the floor,
+   because the projectile meshes carry their own shaders; the wake is what
+   finally puts it on screen.
+
+   NO EXTRA INFORMATION. The wake lies along the segment the default
+   projectile already flies, from the same muzzle to the same endpoint, and
+   every particle dies inside the flight time it decorates. It tells a
+   watcher nothing the default did not already tell them -- not where the
+   shooter is, not where the shot landed, not a fraction of a second sooner.
+
+   NO EXTRA SCREEN. Particles are small and few, the additive ones ride the
+   same near-camera fade every additive sprite here rides, and no effect
+   touches the muzzle light's intensity or range -- only its hue. Nothing an
+   effect draws may sit between an opponent and what they are aiming at more
+   than the default does.
+
+   NO EXTRA COST. Counts are per shot, halve under SOFTWARE_GPU, and are
+   bounded whatever the range: a 90m rifle shot lays down the same five
+   particles a 6m one does. Nine players on automatics is roughly 110 shots
+   a second; that is five particles of each into pools of 900 and 520 that
+   were already sized for kill confetti.
+   ===================================================================== */
+
+/* Half. Far enough that the effect keeps a recognisable colour of its own,
+   not so far that two jerseys wearing the same effect converge. */
+const FX_TRIM_MIX = 0.5;
+
+const SHOT_EFFECTS = {
+  /* STARFALL — a comet's tail. Candy stars are flung along the shot, hang
+     for an instant and sag, so the wake keeps a soft downward curve after
+     the shot itself has landed. Butter and cream: the quietest of the three
+     and the one that reads at distance, because a sagging line of gold is a
+     shape no other effect in the game makes. */
+  'fx-starfall': {
+    name: 'Starfall',
+    muzzleTint: C(0xffe9b0),
+    colors: [0xfff1a6, 0xffe08a, 0xfff8e0],
+    wake:   { sys: 'conf', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'conf', count: 8, push: [1.6, 3.6], lift: [1.4, 3.0], life: [0.34, 0.52],
+              ring: 0xfff1a6, ringScale: 0.20 }
+  },
+  /* CONFETTI POP — a party popper on the end of the barrel. A wide, fast,
+     tumbling scatter in the town's whole party palette, thin along the shot
+     and loud at both ends: a fistful out of the muzzle, and a real pop where
+     it lands. The one that falls fastest, and the only rainbow. */
+  'fx-confettipop': {
+    name: 'Confetti Pop',
+    muzzleTint: C(0xffc6e0),
+    colors: CONFETTI,
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  /* BUBBLE TRAIL — the only one that goes UP. Soap lights drift off the shot
+     line and rise instead of falling, and the hit ends in a cluster of
+     bubbles swelling and going soft. Mint and glass. Direction alone tells
+     it from the other two at any distance, in any light, at speed. */
+  'fx-bubbletrail': {
+    name: 'Bubble Trail',
+    muzzleTint: C(0xbdf0e2),
+    colors: [0x8eeeff, 0xa8f1d4, 0xd8f6ff],
+    wake:   { sys: 'spark', count: 5, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
+    muzzle: { count: 4, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
+    burst:  { sys: 'spark', count: 6, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50],
+              bloom: 5, ring: 0x8eeeff, ringScale: 0.16 }
+  }
+};
+
+/* Forgiving in the same way every other cosmetic lookup here is: a newer
+   relay's id, a damaged preference or nothing at all all mean the default
+   wake rather than a failed render. */
+function fxEffectFor(id) {
+  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(SHOT_EFFECTS, id)
+    ? SHOT_EFFECTS[id]
+    : null;
+}
+
+function fxEffectSystem(name) {
+  return name === 'spark' ? FX.spark : FX.conf;
+}
+
+/* One particle's colour: the effect's, mixed half way to whoever fired. */
+function fxEffectTint(out, hex, owner) {
+  return fxMixSurface(out, hex, owner || FX_WHITE, owner ? FX_TRIM_MIX : 0, 1);
+}
+
+function fxEffectCount(n) {
+  return SOFTWARE_GPU ? Math.max(1, n >> 1) : n;
+}
+
+/* The wake, laid along the segment the shot already flies. Spaced evenly
+   over the whole line so it reads as a path rather than a puff at one end,
+   and counted per shot rather than per metre so range costs nothing. */
+function fxEffectWake(effect, x0, y0, z0, x1, y1, z1) {
+  const w = effect.wake;
+  const sys = fxEffectSystem(w.sys);
+  const count = fxEffectCount(w.count);
+  for (let i = 0; i < count; i++) {
+    const u = (i + fxRand(0.15, 0.85)) / count;
+    fxEffectTint(_fxColorA, fxPick(effect.colors), _fxOwner);
+    psEmit(sys,
+      lerp(x0, x1, u) + fxRand(-w.jitter, w.jitter),
+      lerp(y0, y1, u) + fxRand(-w.jitter, w.jitter),
+      lerp(z0, z1, u) + fxRand(-w.jitter, w.jitter),
+      fxRand(-w.sway, w.sway),
+      fxRand(w.rise[0], w.rise[1]),
+      fxRand(-w.sway, w.sway),
+      fxRand(w.life[0], w.life[1]), _fxColorA);
+  }
+}
+
+/* The flash. `ux,uy,uz` is the way the shot went, so the puff leaves the
+   barrel rather than sitting on it. */
+function fxEffectMuzzlePuff(effect, x, y, z, ux, uy, uz) {
+  const m = effect.muzzle;
+  const sys = fxEffectSystem(effect.wake.sys);
+  const count = fxEffectCount(m.count);
+  for (let i = 0; i < count; i++) {
+    const push = fxRand(m.out[0], m.out[1]);
+    fxEffectTint(_fxColorA, fxPick(effect.colors), _fxOwner);
+    psEmit(sys, x + ux * 0.06, y + uy * 0.06, z + uz * 0.06,
+      ux * push + fxRand(-m.sway, m.sway),
+      uy * push + fxRand(m.rise[0], m.rise[1]),
+      uz * push + fxRand(-m.sway, m.sway),
+      fxRand(m.life[0], m.life[1]), _fxColorA);
+  }
+}
+
+/* Bubble Trail's landing: the same swelling, softening grains a marshmallow
+   leaves on a wall, in the effect's colour rather than the surface's. Same
+   pool, same update loop, same budget — only the tint and the count differ. */
+function fxEffectBloom(effect, q, count) {
+  for (let i = 0; i < fxEffectCount(count); i++) {
+    const index = FX.sugarI++ % FX.sugar.length;
+    const d = FX.sugar[index];
+    const a = fxRand(0, TAU), side = fxRand(0.2, 1.0);
+    d.x = q.x + q.nx * 0.04; d.y = q.y + q.ny * 0.04; d.z = q.z + q.nz * 0.04;
+    d.vx = q.nx * fxRand(0.2, 0.8) + Math.cos(a) * side;
+    d.vy = q.ny * fxRand(0.2, 0.8) + fxRand(0.3, 1.0);
+    d.vz = q.nz * fxRand(0.2, 0.8) + Math.sin(a) * side;
+    d.size = fxRand(0.030, 0.058);
+    d.t = 0; d.dur = fxRand(0.40, 0.58);
+    fxEffectTint(_fxColorA, fxPick(effect.colors), _fxColorB);
+    fxSetInstanceColor(FX.sugarMesh, index, _fxColorA);
+    _fxQuat.identity();
+    fxSetInstance(FX.sugarMesh, index, d.x, d.y, d.z, _fxQuat, d.size, d.size, d.size);
+  }
+}
+
+/* The flourish on a hit. It is added to the weapon's own impact and never
+   replaces it: what a shot did — a bubble splash, a mallow stuck to a wall,
+   a lollipop shattering — is the weapon's identity and the feedback everyone
+   reads a hit from, so an effect garnishes it and stays smaller than it. */
+function fxEffectBurst(effect, q) {
+  const b = effect.burst;
+  const sys = fxEffectSystem(b.sys);
+  /* The owner's colour travelled with the impact rather than in a module
+     global: nine pellets are queued at once, and the next shot must not be
+     able to repaint the ones still waiting. */
+  _fxColorB.r = q.tintR; _fxColorB.g = q.tintG; _fxColorB.b = q.tintB;
+  if (b.ring) {
+    fxEffectTint(_fxColorA, b.ring, _fxColorB);
+    fxRing(q.x, q.y, q.z, q.nx, q.ny, q.nz, _fxColorA, b.ringScale);
+  }
+  if (b.bloom) fxEffectBloom(effect, q, b.bloom);
+  const count = fxEffectCount(b.count);
+  for (let i = 0; i < count; i++) {
+    const a = fxRand(0, TAU), side = fxRand(b.push[0], b.push[1]);
+    fxEffectTint(_fxColorA, fxPick(effect.colors), _fxColorB);
+    psEmit(sys, q.x + q.nx * 0.04, q.y + q.ny * 0.04, q.z + q.nz * 0.04,
+      q.nx * side + Math.cos(a) * side * 0.6,
+      q.ny * side + fxRand(b.lift[0], b.lift[1]),
+      q.nz * side + Math.sin(a) * side * 0.6,
+      fxRand(b.life[0], b.life[1]), _fxColorA);
+  }
+}
 
 function fxWeaponAt(x, y, z) {
   let weapon = G.player && WBY[G.player.weapon] ? G.player.weapon : 'smg';
@@ -569,7 +785,7 @@ function fxLaunchDart(x0, y0, z0, x1, y1, z1, dur) {
   _fxQuat.copy(d.base).multiply(_fxSpinQuat);
   fxSetInstance(FX.dartMesh, index, x0, y0, z0, _fxQuat, 0.68, 0.68, 0.68);
 }
-function fxTracer(x0, y0, z0, x1, y1, z1, color) {
+function fxTracer(x0, y0, z0, x1, y1, z1, color, effectId) {
   const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
   const len = Math.hypot(dx, dy, dz);
   const weapon = fxWeaponAt(x0, y0, z0);
@@ -579,7 +795,19 @@ function fxTracer(x0, y0, z0, x1, y1, z1, color) {
     : (projectile === 'dart' ? clamp(len / 720, 0.045, 0.20) : clamp(len / 320, 0.055, 0.30));
   FX.activeWeapon = weapon;
   FX.impactDelay = dur;
+  /* Whoever fired, in whatever colour the caller draws them: the weapon's own
+     tracer tint for the player, the jersey trim for everybody else. */
+  _fxOwner.r = color ? color.r : 1;
+  _fxOwner.g = color ? color.g : 1;
+  _fxOwner.b = color ? color.b : 1;
+  const effect = fxEffectFor(effectId);
+  FX.activeEffect = effect;
   if (len < 0.05) return;
+  if (effect) {
+    fxEffectWake(effect, x0, y0, z0, x1, y1, z1);
+    const inv = 1 / len;
+    fxEffectMuzzlePuff(effect, x0, y0, z0, dx * inv, dy * inv, dz * inv);
+  }
 
   if (projectile === 'mallow') {
     const inv = 1 / len;
@@ -612,10 +840,16 @@ function fxRing(x, y, z, nx, ny, nz, color, scale) {
   fxSetInstanceColor(FX.ringMesh, index, color || FX_WHITE);
   fxSetInstance(FX.ringMesh, index, r.x, r.y, r.z, r.quat, r.s0, r.s0, r.s0);
 }
-function fxMuzzle(x, y, z) {
+/* An effect may move the flash's hue and nothing else. Intensity and range
+   stay where they are for every player wearing anything, because a brighter
+   or longer-reaching flash is a player who is easier to find in a dark
+   corner — a bought disadvantage is still a bought change to the match. */
+function fxMuzzle(x, y, z, effectId) {
   if (!FX.muzzleLights.length) return;
+  const effect = fxEffectFor(effectId);
   const ml = FX.muzzleLights[FX.muzzleI++ % FX.muzzleLights.length];
   ml.light.position.set(x, y, z);
+  ml.light.color.copy(effect ? effect.muzzleTint : FX_MUZZLE);
   ml.light.intensity = 4.2;
   ml.light.visible = true;
   ml.t = MUZZLE_LIFE;
@@ -747,11 +981,14 @@ function fxDoImpact(q) {
   if (w.projectile === 'mallow') fxMallowImpact(q);
   else if (w.projectile === 'dart') fxDartImpact(q);
   else fxBubbleImpact(q);
+  if (q.effect) fxEffectBurst(q.effect, q);
 }
 function fxImpact(x, y, z, nx, ny, nz, kind, surfColor) {
   if (!FX.impacts.length) return;
   const q = FX.impacts[FX.impactI++ % FX.impacts.length];
   q.weapon = FX.activeWeapon;
+  q.effect = FX.activeEffect;
+  q.tintR = _fxOwner.r; q.tintG = _fxOwner.g; q.tintB = _fxOwner.b;
   q.x = x; q.y = y; q.z = z;
   q.nx = nx; q.ny = ny; q.nz = nz;
   q.kind = kind;
@@ -961,6 +1198,130 @@ function updateFX(dt) {
   fxFlushInstance(FX.sugarMesh);
   fxFlushInstance(FX.shardMesh);
   fxFlushInstance(FX.ringMesh);
+}
+
+/* =====================================================================
+   THE EFFECT IN THE DISPLAY CASE
+
+   A character and a gun can be handed to the store as a model, because
+   that is what they are. An effect is motion, and the pools it draws from
+   live in the world scene and are driven by somebody pulling a trigger —
+   neither of which the store has. So it previews as its own small loop:
+   one shot crossing the case, laying its wake, and popping at the far
+   end, over and over, in the same colours, the same directions and the
+   same lifetimes the real thing uses.
+
+   It is deliberately a handful of plain meshes rather than a second copy
+   of the emitters above. Nothing here runs during a match; it exists only
+   while the panel is open, and 82-store.js stops it the moment it closes.
+
+   `null` is the default look and previews as a bare shot with no wake,
+   which is what makes the case's default-versus-selection comparison mean
+   something for this cosmetic too.
+   ===================================================================== */
+const FX_PREVIEW = {
+  span: 0.95,        // how far the shot crosses, in metres
+  arc: 0.10,         // the sag on its path, so it is not a ruled line
+  wake: 14,          // motes laid along it
+  pop: 8,            // and thrown out of the far end
+  fade: 0.55,        // how long a mote lives, in loop-seconds
+  cycle: 1.7,        // and how long the whole loop takes
+  size: 0.030
+};
+
+function fxPreviewPath(out, u) {
+  out.set(
+    (u - 0.5) * FX_PREVIEW.span,
+    0.34 - Math.sin(u * Math.PI) * FX_PREVIEW.arc,
+    0
+  );
+  return out;
+}
+
+/* Every way this can fail — a THREE too small to build meshes with, an id
+   from a newer relay, a throw out of a constructor — comes back as null,
+   which the case already knows how to say out loud. */
+function buildEffectPreview(effectId) {
+  if (typeof THREE !== 'object' || !THREE ||
+      typeof THREE.Group !== 'function' || typeof THREE.Mesh !== 'function' ||
+      typeof THREE.SphereGeometry !== 'function' ||
+      typeof THREE.MeshBasicMaterial !== 'function') return null;
+  const effect = fxEffectFor(effectId);
+  if (effectId && !effect) return null;
+
+  let root;
+  try {
+    root = new THREE.Group();
+    const geo = new THREE.SphereGeometry(1, 8, 6);
+    const colors = effect ? effect.colors : [0xfff4df];
+    /* Down for the two that fall, up for the one that rises: the preview
+       has to be able to show that, because it is the single thing that
+       tells Bubble Trail from the other two across a map. */
+    const drift = effect && effect.wake.rise[1] > 0 && effect.wake.sys === 'spark'
+      ? 0.30 : -0.42;
+    const motes = [];
+    const total = effect ? FX_PREVIEW.wake + FX_PREVIEW.pop : FX_PREVIEW.pop;
+    for (let i = 0; i < total; i++) {
+      const wake = effect && i < FX_PREVIEW.wake;
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: C(colors[i % colors.length]),
+        transparent: true, depthWrite: false, toneMapped: false
+      }));
+      mesh.scale.setScalar(FX_PREVIEW.size);
+      root.add(mesh);
+      motes.push({
+        mesh: mesh,
+        /* Wake motes are born as the shot passes them; pop motes are all
+           born when it lands, and leave along their own spoke. */
+        born: wake ? (i + 0.5) / FX_PREVIEW.wake : 1,
+        u: wake ? (i + 0.5) / FX_PREVIEW.wake : 1,
+        ox: wake ? (fxRng() - 0.5) * 0.09 : Math.cos(i * 2.399963) * 0.30,
+        oy: wake ? (fxRng() - 0.5) * 0.06 : Math.sin(i * 2.399963) * 0.30 + 0.10,
+        oz: wake ? (fxRng() - 0.5) * 0.09 : 0,
+        drift: wake ? drift : drift * 0.5
+      });
+    }
+
+    const head = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: C(0xfff8f0), transparent: true, depthWrite: false, toneMapped: false
+    }));
+    head.scale.setScalar(FX_PREVIEW.size * 1.9);
+    root.add(head);
+
+    let t = 0;
+    /* 82-store.js drives this once a frame while the panel is up, and a node
+       that has one is a node it leaves alone rather than turning on a
+       turntable: a wake seen edge-on is nothing at all. */
+    root.userData.pnTick = function (dt) {
+      t = (t + dt / FX_PREVIEW.cycle) % 1;
+      /* The shot crosses in the first 62% of the loop; the rest is the pop
+         at the end of it fading out. */
+      const flight = 0.62 * FX_PREVIEW.cycle;
+      const now = t * FX_PREVIEW.cycle;
+      fxPreviewPath(head.position, Math.min(1, now / flight));
+      head.visible = now < flight;
+      for (let i = 0; i < motes.length; i++) {
+        const m = motes[i];
+        const age = now - m.born * flight;
+        if (age < 0 || age > FX_PREVIEW.fade) { m.mesh.visible = false; continue; }
+        const k = age / FX_PREVIEW.fade;
+        m.mesh.visible = true;
+        fxPreviewPath(m.mesh.position, m.u);
+        m.mesh.position.x += m.ox * k;
+        m.mesh.position.y += m.oy * k + m.drift * age * age;
+        m.mesh.position.z += m.oz * k;
+        m.mesh.material.opacity = 1 - k;
+        m.mesh.scale.setScalar(FX_PREVIEW.size * (1 - k * 0.4));
+      }
+    };
+    /* Wound forward to a frame worth looking at, because the card pictures
+       are a single still off this same node and the first frame of the loop
+       is an empty case. */
+    root.userData.pnTick(FX_PREVIEW.cycle * 0.35);
+  } catch (e) {
+    return null;
+  }
+  return root;
 }
 
 /* =====================================================================

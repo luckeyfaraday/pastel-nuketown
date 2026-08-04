@@ -131,7 +131,7 @@ test('account routing leaves relay HTTP, upgrades, and persisted match counts in
 
   const publicCatalog = await requestRelay(relay, '/shop/catalog');
   assert.equal(publicCatalog.status, 200);
-  assert.equal(publicCatalog.json().items.length, 6);
+  assert.equal(publicCatalog.json().items.length, 9);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(routeResults.at(-1).handled, true);
 

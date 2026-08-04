@@ -240,6 +240,9 @@ function netSetActorCosmetics(actor, value) {
       before.weapons[actor.weapon] !== after.weapons[actor.weapon]) {
     vmSetWeapon(actor.weapon, true, after.weapons[actor.weapon]);
   }
+  /* A changed effect needs nothing here. It owns no mesh: it is read off
+     the actor at the instant a shot is drawn, so the next trigger pull is
+     already wearing it. */
 }
 
 /* Bots are the shortfall and nothing else, which is why the room cap and the
@@ -2725,11 +2728,15 @@ function netApplyEvent(e) {
        hook in fireWeapon. */
     if (from && from === KILLCAM.shown) vmFire(w);
     if (Array.isArray(e.lines)) {
+      /* The shooter's own effect, from the cosmetics the relay approved for
+         them — never from anything inside the event, which the host wrote. */
+      const effectId = actorShotEffect(from);
       for (let i = 0; i < e.lines.length; i++) {
         const l = e.lines[i];
         if (!Array.isArray(l) || l.length !== 6 || !l.every(Number.isFinite)) continue;
         if (i === 0 || e.lines.length <= 3 || i % 3 === 0)
-          fxTracer(l[0], l[1], l[2], l[3], l[4], l[5], C(from ? from.colors.trim : w.tracer));
+          fxTracer(l[0], l[1], l[2], l[3], l[4], l[5],
+            C(from ? from.colors.trim : w.tracer), effectId);
       }
     }
     if (from) SFX.shoot(w.id, from.pos.x, from.pos.y + 1.3, from.pos.z);

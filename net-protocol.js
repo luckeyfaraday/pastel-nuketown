@@ -17,7 +17,9 @@
   /* 9: player-selected cosmetics cross the room handshake and snapshots. The
      jersey is still seat identity, but a version 8 host cannot carry the
      separate appearance metadata through a snapshot or a migration, so the
-     two versions must never share a room.
+     two versions must never share a room. Shot effects joined that payload
+     later and did NOT need a version of their own — see sanitizeCosmetics
+     for why an omitted key is the same thing as no selection.
 
      8: match mode, kill-confirmed donuts and confirm scores are authoritative
      state. A version 7 guest cannot represent that state and could become a
@@ -175,12 +177,32 @@
         slot
       );
     }
-    return { character: character, weapons: weapons };
+    var clean = { character: character, weapons: weapons };
+    /* A shot effect is slotless for the same reason a character is: one per
+       player, so there is nothing to name a sub-slot of.
+
+       It is written onto the result only when there IS one, which is what
+       keeps effects a version 9 message rather than a version 10. The shape
+       a default-dressed player produces is byte-for-byte what it was before
+       effects existed, so a peer built without them reads every roster,
+       snapshot and migration exactly as it always did and simply draws the
+       default wake for anyone wearing one. Nothing about position, weapon,
+       damage or jersey differs between the two builds, which is the test for
+       whether a change has to break the room; this one does not, and the
+       relay's existing reload message is untouched. */
+    var effect = acceptedCosmetic(
+      accepts,
+      cleanCosmeticId(source && source.effect),
+      'effect',
+      null
+    );
+    if (effect) clean.effect = effect;
+    return clean;
   }
 
   function hasCosmetics(value) {
     var clean = sanitizeCosmetics(value);
-    if (clean.character) return true;
+    if (clean.character || clean.effect) return true;
     for (var i = 0; i < ALLOWED_WEAPONS.length; i++) {
       if (clean.weapons[ALLOWED_WEAPONS[i]]) return true;
     }

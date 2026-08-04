@@ -18,7 +18,7 @@
    rather than an item.
    ===================================================================== */
 
-/* The six cosmetics are a fixed contract with the relay, so the ids are safe
+/* The nine cosmetics are a fixed contract with the relay, so the ids are safe
    to hold here. Names and prices still come from /shop/catalog — this table
    is what lets the panel say something sensible when the relay cannot be
    reached, and it is where a weapon skin learns which gun it belongs on,
@@ -32,7 +32,12 @@ const STORE_ITEMS = [
   { id: 'rifle-berryswirl',      type: 'weapon',    name: 'Berry Swirl',    tint: ['#f7ecff', '#d4c5f9'] },
   { id: 'char-midnight',         type: 'character', name: 'Midnight',       tint: ['#8f9bd6', '#4a3f5c'] },
   { id: 'char-sherbetfox',       type: 'character', name: 'Sherbet Fox',    tint: ['#ffe6c9', '#ff9aa2'] },
-  { id: 'char-cloudknight',      type: 'character', name: 'Cloud Knight',   tint: ['#eaf7ff', '#a8dcf0'] }
+  { id: 'char-cloudknight',      type: 'character', name: 'Cloud Knight',   tint: ['#eaf7ff', '#a8dcf0'] },
+  /* Shot effects. One per player rather than one per gun, so — like a
+     character and unlike a weapon skin — they have no slot in the id. */
+  { id: 'fx-starfall',           type: 'effect',    name: 'Starfall',       tint: ['#fff8e0', '#ffe08a'] },
+  { id: 'fx-confettipop',        type: 'effect',    name: 'Confetti Pop',   tint: ['#ffeef6', '#b8f2d8'] },
+  { id: 'fx-bubbletrail',        type: 'effect',    name: 'Bubble Trail',   tint: ['#e6fbff', '#8eeeff'] }
 ];
 const STORE_BY_ID = new Map(STORE_ITEMS.map(item => [item.id, item]));
 const STORE_SLOTS = ['smg', 'shotgun', 'rifle'];
@@ -54,15 +59,21 @@ const STORE_SIGNIN_TTL = 600000;
 /* =====================================================================
    THE SELECTION — the one thing outside this file reads
 
-   EQUIPPED = { character: id|null, weapons: { smg: id|null, shotgun: id|null,
-                                               rifle: id|null } }
+   EQUIPPED = { character: id|null, effect: id|null,
+                weapons: { smg: id|null, shotgun: id|null, rifle: id|null } }
 
    null means the default look. An id only ever appears here after the
    server has said this account owns it, so whatever puts cosmetics on the
    wire can send these straight out without re-checking. Read it; the store
    owns writing it.
    ===================================================================== */
-const EQUIPPED = { character: null, weapons: { smg: null, shotgun: null, rifle: null } };
+const EQUIPPED = {
+  character: null,
+  /* The shot effect: one selection for every gun, which is why it sits
+     beside `character` rather than inside `weapons`. */
+  effect: null,
+  weapons: { smg: null, shotgun: null, rifle: null }
+};
 /* Top-level `const` in a classic script lands in the global lexical scope,
    where later scripts can read it by name but `window.EQUIPPED` cannot see
    it. Both spellings work from here on. */
@@ -652,20 +663,21 @@ function storeSignOut() {
    WHAT IS EQUIPPED
    ===================================================================== */
 
-/* Which slot an id can go in. The six are known here, and anything the relay
+/* Which slot an id can go in. The nine are known here, and anything the relay
    adds later still works as long as a weapon id starts with the gun it is
    for — which is the shape the whole catalog is already in. */
 function storeSlotOf(id, type) {
   const known = STORE_BY_ID.get(id);
   const kind = known ? known.type : type;
   if (kind === 'character') return { kind: 'character' };
+  if (kind === 'effect') return { kind: 'effect' };
   if (kind !== 'weapon' || typeof id !== 'string') return null;
   const slot = id.split('-')[0];
   return STORE_SLOTS.indexOf(slot) >= 0 ? { kind: 'weapon', slot: slot } : null;
 }
 
 function storeReadEquipPrefs() {
-  const empty = { character: null, weapons: {} };
+  const empty = { character: null, effect: null, weapons: {} };
   const raw = storeRead(STORE_EQUIP_KEY);
   if (!raw) return empty;
   let saved = null;
@@ -677,6 +689,7 @@ function storeReadEquipPrefs() {
       if (typeof saved.weapons[slot] === 'string') weapons[slot] = saved.weapons[slot];
   return {
     character: typeof saved.character === 'string' ? saved.character : null,
+    effect: typeof saved.effect === 'string' ? saved.effect : null,
     weapons: weapons
   };
 }
@@ -693,6 +706,8 @@ function storeApplyEquipped() {
   const allowed = id => typeof id === 'string' && ACCOUNT.owned.has(id) && !!storeSlotOf(id);
   EQUIPPED.character = allowed(prefs.character) && storeSlotOf(prefs.character).kind === 'character'
     ? prefs.character : null;
+  EQUIPPED.effect = allowed(prefs.effect) && storeSlotOf(prefs.effect).kind === 'effect'
+    ? prefs.effect : null;
   for (const slot of STORE_SLOTS) {
     const id = prefs.weapons[slot];
     const where = allowed(id) ? storeSlotOf(id) : null;
@@ -703,6 +718,7 @@ function storeApplyEquipped() {
 function storeSaveEquipped() {
   storeWrite(STORE_EQUIP_KEY, JSON.stringify({
     character: EQUIPPED.character,
+    effect: EQUIPPED.effect,
     weapons: {
       smg: EQUIPPED.weapons.smg,
       shotgun: EQUIPPED.weapons.shotgun,
@@ -712,7 +728,7 @@ function storeSaveEquipped() {
 }
 
 function storeIsEquipped(id) {
-  return EQUIPPED.character === id ||
+  return EQUIPPED.character === id || EQUIPPED.effect === id ||
     STORE_SLOTS.some(slot => EQUIPPED.weapons[slot] === id);
 }
 
@@ -724,6 +740,7 @@ function storeEquip(id, type) {
   const where = storeSlotOf(id, type);
   if (!where || !ACCOUNT.owned.has(id)) return;      // never wear what the server has not confirmed
   if (where.kind === 'character') EQUIPPED.character = EQUIPPED.character === id ? null : id;
+  else if (where.kind === 'effect') EQUIPPED.effect = EQUIPPED.effect === id ? null : id;
   else EQUIPPED.weapons[where.slot] = EQUIPPED.weapons[where.slot] === id ? null : id;
   storeSaveEquipped();
   storeRenderGrid();
@@ -751,7 +768,8 @@ function storeCleanCatalog(body) {
       id: entry.id,
       name: typeof entry.name === 'string' && entry.name.trim()
         ? entry.name.trim().slice(0, 40) : (known ? known.name : entry.id),
-      type: entry.type === 'weapon' || entry.type === 'character'
+      type: entry.type === 'weapon' || entry.type === 'character' ||
+        entry.type === 'effect'
         ? entry.type : (known ? known.type : ''),
       price: entry.price,
       owned: entry.owned === true
@@ -1210,6 +1228,11 @@ function stagePreviewNode(kind, slot, skinId) {
     } else if (kind === 'weapon' && typeof buildGunMesh === 'function') {
       const weapon = typeof WBY === 'object' && WBY ? WBY[slot] : null;
       if (weapon) node = buildGunMesh(weapon, skinId || undefined) || null;
+    } else if (kind === 'effect' && typeof buildEffectPreview === 'function') {
+      /* An effect has no model, so 60-fx.js hands the case a small loop of
+         its own instead — see buildEffectPreview. `null` is the plain shot,
+         which is what the default half of the comparison is. */
+      node = buildEffectPreview(skinId || null) || null;
     }
   } catch (e) { node = null; }
 
@@ -1229,7 +1252,11 @@ function stagePreviewNode(kind, slot, skinId) {
    looking at you, a gun in profile with the muzzle to the left. Both models
    are built facing -Z, which is away from a camera on +Z. */
 function stageRestYaw(kind) {
-  return kind === 'weapon' ? -Math.PI / 2 : Math.PI;
+  if (kind === 'weapon') return -Math.PI / 2;
+  /* An effect crosses the case left to right and is built facing the lens
+     already; turning it would only show the wake edge-on. */
+  if (kind === 'effect') return 0;
+  return Math.PI;
 }
 
 /* What to draw for an id. storeSlotOf is deliberately strict, because the
@@ -1245,6 +1272,7 @@ function stageKindOf(id, type) {
   if (where) return where;
   if (typeof id !== 'string' || !id) return null;
   if (id.indexOf('char-') === 0) return { kind: 'character' };
+  if (id.indexOf('fx-') === 0) return { kind: 'effect' };
   const slot = id.split('-')[0];
   return STORE_SLOTS.indexOf(slot) >= 0 ? { kind: 'weapon', slot: slot } : null;
 }
@@ -1261,6 +1289,11 @@ function stageMount(index, node, yaw0) {
     slot.node = node;
   }
   slot.yaw0 = yaw0 || 0;
+  /* Stand it where it is meant to rest. A stand that was turning a
+     character a moment ago is still at that angle, and a thing that runs
+     its own loop instead of spinning would inherit it and never work it
+     off — a wake at 180 degrees is a wake pointing away. */
+  slot.spinner.rotation.y = slot.yaw0;
   slot.pivot.visible = !!slot.node;
 }
 
@@ -1594,8 +1627,17 @@ function stageTick() {
   STAGE.spin = (STAGE.spin + dt * STAGE_SPIN) % STAGE_TAU;
 
   if (stageResize()) stageLayout();
-  for (const slot of STAGE.slots)
-    if (slot.node) slot.spinner.rotation.y = slot.yaw0 + STAGE.spin;
+  for (const slot of STAGE.slots) {
+    if (!slot.node) continue;
+    /* A model turns on its stand; a thing that is already motion runs its
+       own loop instead and is left facing the lens, because a wake seen
+       edge-on is nothing to look at. Its loop is the store's alone — it
+       is asked for a frame only while the panel is up, and the whole of
+       this function stops when the panel closes. */
+    const tick = slot.node.userData && slot.node.userData.pnTick;
+    if (typeof tick === 'function') { try { tick(dt); } catch (e) {} }
+    else slot.spinner.rotation.y = slot.yaw0 + STAGE.spin;
+  }
 
   try {
     STAGE.renderer.render(STAGE.scene, STAGE.camera);
@@ -1743,7 +1785,7 @@ function storeRenderAccount() {
   if (whoLine) {
     whoLine.textContent = inside
       ? 'Signed in as ' + ACCOUNT.user.displayName
-      : 'Skins for your guns and your fighter.';
+      : 'Skins for your guns and your fighter, and effects for your shots.';
   }
 }
 
@@ -1762,6 +1804,7 @@ function storeKindLabel(id, type) {
   const where = storeSlotOf(id, type);
   if (!where) return 'SKIN';
   if (where.kind === 'character') return 'CHARACTER SKIN';
+  if (where.kind === 'effect') return 'SHOT EFFECT';
   const gun = typeof WBY === 'object' && WBY && WBY[where.slot] ? WBY[where.slot].name : where.slot;
   return gun + ' SKIN';
 }

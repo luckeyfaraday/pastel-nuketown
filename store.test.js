@@ -520,7 +520,7 @@ test('editing localStorage alone cannot present an unowned item as equipped', ()
   ctx.initStore();
 
   assert.deepEqual(ctx.__json('EQUIPPED'), {
-    character: null, weapons: { smg: null, shotgun: null, rifle: null }
+    character: null, effect: null, weapons: { smg: null, shotgun: null, rifle: null }
   });
   /* And pressing EQUIP without an entitlement changes nothing either. */
   ctx.storeEquip('char-cloudknight', 'character');
@@ -543,10 +543,74 @@ test('a character id cannot be equipped into a weapon slot', () => {
   assert.equal(ctx.__get('EQUIPPED').weapons.rifle, 'rifle-berryswirl');
 });
 
+test('a shot effect equips into its own slot and takes nothing else off', () => {
+  const ctx = makeStore();
+  ctx.__get("ACCOUNT.owned = new Set(['char-midnight', 'rifle-berryswirl', 'fx-starfall', 'fx-bubbletrail'])");
+
+  ctx.storeEquip('char-midnight', 'character');
+  ctx.storeEquip('rifle-berryswirl', 'weapon');
+  ctx.storeEquip('fx-starfall', 'effect');
+  assert.deepEqual(ctx.__json('EQUIPPED'), {
+    character: 'char-midnight',
+    effect: 'fx-starfall',
+    weapons: { smg: null, shotgun: null, rifle: 'rifle-berryswirl' }
+  });
+
+  /* One effect at a time: the second replaces the first rather than
+     stacking two wakes on one player. */
+  ctx.storeEquip('fx-bubbletrail', 'effect');
+  assert.equal(ctx.__get('EQUIPPED').effect, 'fx-bubbletrail');
+  assert.equal(ctx.__get('EQUIPPED').character, 'char-midnight');
+
+  /* Pressing it again is how you get back to the default wake. */
+  ctx.storeEquip('fx-bubbletrail', 'effect');
+  assert.equal(ctx.__get('EQUIPPED').effect, null);
+  assert.equal(ctx.__get('EQUIPPED').weapons.rifle, 'rifle-berryswirl');
+
+  /* And it survives a reload, because it is a preference. */
+  const again = makeStore({ localStorage: ctx.localStorage });
+  again.localStorage = ctx.localStorage;
+  again.__get("ACCOUNT.owned = new Set(['fx-starfall'])");
+  again.storeEquip('fx-starfall', 'effect');
+  const saved = JSON.parse(again.localStorage.getItem('pastel-nuketown-equipped'));
+  assert.equal(saved.effect, 'fx-starfall');
+});
+
+test('an effect cannot be worn as a fighter or a gun, or a gun skin as an effect', () => {
+  const ctx = makeStore();
+  ctx.__get("ACCOUNT.owned = new Set(['fx-starfall', 'rifle-berryswirl'])");
+  ctx.localStorage.setItem('pastel-nuketown-equipped', JSON.stringify({
+    character: 'fx-starfall',
+    effect: 'rifle-berryswirl',
+    weapons: { smg: 'fx-starfall', shotgun: null, rifle: null }
+  }));
+
+  ctx.storeApplyEquipped();
+
+  assert.deepEqual(ctx.__json('EQUIPPED'), {
+    character: null, effect: null,
+    weapons: { smg: null, shotgun: null, rifle: null }
+  });
+});
+
+test('an effect nobody bought cannot be equipped by editing storage', () => {
+  const ctx = makeStore();
+  ctx.localStorage.setItem('pastel-nuketown-equipped', JSON.stringify({
+    character: null, effect: 'fx-confettipop', weapons: {}
+  }));
+
+  ctx.initStore();
+
+  assert.equal(ctx.__get('EQUIPPED').effect, null);
+  ctx.storeEquip('fx-confettipop', 'effect');
+  assert.equal(ctx.__get('EQUIPPED').effect, null);
+});
+
 test('EQUIPPED keeps the shape the network layer reads', () => {
   const ctx = makeStore();
   ctx.initStore();
-  assert.deepEqual(Object.keys(ctx.__json('EQUIPPED')).sort(), ['character', 'weapons']);
+  assert.deepEqual(Object.keys(ctx.__json('EQUIPPED')).sort(),
+    ['character', 'effect', 'weapons']);
   assert.deepEqual(Object.keys(ctx.__json('EQUIPPED').weapons).sort(), ['rifle', 'shotgun', 'smg']);
 });
 
@@ -903,7 +967,7 @@ test('boot with storage switched off and no relay still leaves a usable signed-o
   assert.equal(ctx.__get('ACCOUNT.token'), null);
   assert.equal(ctx.storeSignedIn(), false);
   assert.deepEqual(ctx.__json('EQUIPPED'), {
-    character: null, weapons: { smg: null, shotgun: null, rifle: null }
+    character: null, effect: null, weapons: { smg: null, shotgun: null, rifle: null }
   });
 });
 
@@ -937,11 +1001,13 @@ function fakeThree(log) {
   class Vector3 {
     constructor(x, y, z) { this.x = x || 0; this.y = y || 0; this.z = z || 0; }
     set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+    setScalar(v) { return this.set(v, v, v); }
   }
   class Obj {
     constructor() {
       this.children = []; this.parent = null; this.visible = true;
       this.position = new Vector3(); this.rotation = new Vector3();
+      this.scale = new Vector3(1, 1, 1);
       this.userData = {};
     }
     add(...kids) { for (const k of kids) { k.parent = this; this.children.push(k); } return this; }
@@ -954,6 +1020,26 @@ function fakeThree(log) {
   }
   class Group extends Obj {}
   class Scene extends Obj {}
+  /* A shot effect has no model to hand over, so 60-fx.js builds the case a
+     small animated loop out of plain meshes. That is the whole of the
+     extra THREE it needs, and it is here rather than in the store because
+     the store still only mounts, measures and frames whatever it is given. */
+  class SphereGeometry {
+    constructor(r) {
+      const s = r || 1;
+      this.__box = { min: [-s, -s, -s], max: [s, s, s] };
+    }
+  }
+  class MeshBasicMaterial {
+    constructor(opts) { Object.assign(this, opts || {}); }
+  }
+  class Mesh extends Obj {
+    constructor(geometry, material) {
+      super();
+      this.geometry = geometry; this.material = material;
+      this.__box = geometry && geometry.__box;
+    }
+  }
   class Color { constructor(hex) { this.hex = hex; } }
   class Light extends Obj {
     constructor(kind, a, b, i) { super(); this.kind = kind; this.a = a; this.b = b; this.intensity = i; log.lights.push(this); }
@@ -962,6 +1048,9 @@ function fakeThree(log) {
     Vector3: Vector3,
     Group: Group,
     Scene: Scene,
+    Mesh: Mesh,
+    SphereGeometry: SphereGeometry,
+    MeshBasicMaterial: MeshBasicMaterial,
     Color: Color,
     sRGBEncoding: 3001,
     HemisphereLight: class extends Light {
@@ -1108,6 +1197,9 @@ function makeCase(options) {
   /* A skin is allowed to be a different shape from the thing it replaces —
      a crest, a taller cap — and the framing has to survive it. */
   const SKIN_BOX = opts.skinBox || CHAR_BOX;
+  /* A shot crossing the case: wide, shallow, and nothing like either of
+     the other two, which is exactly why the framing is measured. */
+  const FX_BOX = { min: [-0.48, 0, -0.10], max: [0.48, 0.42, 0.10] };
 
   const globals = {
     document: dom.doc,
@@ -1129,6 +1221,17 @@ function makeCase(options) {
       if (opts.builderThrows) throw new Error('no geometry today');
       log.built.push({ kind: 'weapon', weapon: weapon && weapon.id, skinId: skinId });
       return model(GUN_BOX);
+    },
+    /* A shot effect has no model, so 60-fx.js hands the case a node that
+       animates itself instead. The case's side of that bargain is all this
+       fake needs to have: a box to be framed by, and a pnTick to be driven
+       by rather than spun. */
+    buildEffectPreview(effectId) {
+      if (opts.builderThrows) throw new Error('no geometry today');
+      log.built.push({ kind: 'effect', skinId: effectId });
+      const node = model(FX_BOX);
+      node.userData.pnTick = () => { node.ticks = (node.ticks || 0) + 1; };
+      return node;
     },
     requestAnimationFrame(fn) { frames.push(fn); return frames.length; },
     cancelAnimationFrame(id) { log.cancelled = (log.cancelled || 0) + 1; frames[id - 1] = null; }
@@ -1155,7 +1258,8 @@ function makeCase(options) {
 }
 
 const CASE_IDS = ['smg-cottoncloud', 'shotgun-toastedmallow', 'rifle-berryswirl',
-                  'char-midnight', 'char-sherbetfox', 'char-cloudknight'];
+                  'char-midnight', 'char-sherbetfox', 'char-cloudknight',
+                  'fx-starfall', 'fx-confettipop', 'fx-bubbletrail'];
 
 test('the case previews every catalog id, on one shared renderer', async () => {
   const ctx = makeCase();
@@ -1187,11 +1291,47 @@ test('the case previews every catalog id, on one shared renderer', async () => {
     assert.ok(built.some(b => b.skinId === id), 'never built ' + id);
   assert.ok(built.some(b => b.kind === 'character' && b.skinId === undefined));
   assert.ok(built.some(b => b.kind === 'weapon' && b.weapon === 'smg' && b.skinId === undefined));
+  /* The default half of an effect's comparison is the plain shot, which is
+     a null id rather than an absent one — there is no "no effect" model to
+     leave out. */
+  assert.ok(built.some(b => b.kind === 'effect' && b.skinId === null));
 
   /* And nothing was built twice: a player walking the row is not paying
      for geometry they already have. */
   const keys = built.map(b => b.kind + '/' + (b.weapon || '') + '/' + b.skinId);
   assert.equal(new Set(keys).size, keys.length, keys.join(' '));
+});
+
+test('an effect runs its own loop in the case instead of turning on the stand', async () => {
+  const ctx = makeCase();
+  ctx.storeShow(true);
+  await settle();
+
+  ctx.stageSelect('char-midnight');
+  ctx.__pump(3);
+  const model = ctx.__get('STAGE').slots.find(s => s.node);
+  assert.ok(model.spinner.rotation.y !== model.yaw0, 'a character stopped turning');
+
+  ctx.stageSelect('fx-starfall');
+  ctx.__pump(3);
+  const stage = ctx.__get('STAGE');
+  const shown = stage.slots.filter(s => s.node);
+  assert.equal(shown.length, 2, 'the effect lost its default to compare against');
+  for (const slot of shown) {
+    assert.ok(slot.node.ticks > 0, 'the effect was never given a frame');
+    /* A wake seen edge-on is nothing, so this one is left facing the
+       lens rather than put on the turntable. */
+    assert.equal(slot.spinner.rotation.y, 0);
+  }
+  assert.equal(ctx.__dom.stageEmpty.hidden, true,
+    'an effect fell back to the apology instead of previewing');
+  assert.equal(ctx.__dom.stageKind.textContent, 'SHOT EFFECT');
+
+  /* And it stops with the panel, like everything else in the case. */
+  const before = shown[0].node.ticks;
+  ctx.storeShow(false);
+  ctx.__pump(3);
+  assert.equal(shown[0].node.ticks, before);
 });
 
 test('the case is lit with the game\'s own numbers, not brighter ones', () => {
@@ -1297,7 +1437,7 @@ test('an id this client has never heard of degrades to a sentence, not a throw',
 
   /* And the store still does its actual job. */
   assert.deepEqual(ctx.__json('EQUIPPED'), {
-    character: null, weapons: { smg: null, shotgun: null, rifle: null }
+    character: null, effect: null, weapons: { smg: null, shotgun: null, rifle: null }
   });
 });
 
@@ -1352,10 +1492,10 @@ test('a browser that cannot give the store a context still gets the store', asyn
       assert.ok(cards.length > 0, label);
       for (const pick of cards) assert.notEqual(pick.tagName, 'button', label);
     }
-    assert.equal(ctx.__dom.storeGrid.querySelectorAll('.sitem').length, 6, label);
+    assert.equal(ctx.__dom.storeGrid.querySelectorAll('.sitem').length, 9, label);
     assert.equal(ctx.storeSignedIn(), false, label);
     assert.deepEqual(ctx.__json('EQUIPPED'), {
-      character: null, weapons: { smg: null, shotgun: null, rifle: null }
+      character: null, effect: null, weapons: { smg: null, shotgun: null, rifle: null }
     }, label);
   }
 });
@@ -1559,7 +1699,7 @@ test('a card whose picture cannot be taken keeps the gradient it always had', ()
 
   assert.equal(ctx.__dom.storeGrid.querySelectorAll('.sshot').length, 0);
   const swatches = ctx.__dom.storeGrid.querySelectorAll('.swatch');
-  assert.equal(swatches.length, 6);
+  assert.equal(swatches.length, 9);
   for (const swatch of swatches)
     assert.ok(/linear-gradient/.test(swatch.style.background));
 
@@ -1567,6 +1707,6 @@ test('a card whose picture cannot be taken keeps the gradient it always had', ()
      case, or to stop being a shop. */
   assert.equal(ctx.__dom.storeStage.hidden, false);
   assert.deepEqual(ctx.__json('EQUIPPED'), {
-    character: null, weapons: { smg: null, shotgun: null, rifle: null }
+    character: null, effect: null, weapons: { smg: null, shotgun: null, rifle: null }
   });
 });

@@ -42,6 +42,7 @@ test('protocol v9 treats cosmetic fields as soft, slot-aware metadata', () => {
 
   const accepts = (id, kind, slot) =>
     (id === 'char-midnight' && kind === 'character' && slot === null) ||
+    (id === 'fx-starfall' && kind === 'effect' && slot === null) ||
     (id === 'smg-cottoncloud' && kind === 'weapon' && slot === 'smg');
   assert.deepEqual(Protocol.sanitizeCosmetics({
     character: 'char-midnight',
@@ -54,6 +55,31 @@ test('protocol v9 treats cosmetic fields as soft, slot-aware metadata', () => {
     character: 'char-midnight',
     weapons: { smg: 'smg-cottoncloud', shotgun: null, rifle: null }
   });
+
+  /* A shot effect rides the same payload. It is written only when there is
+     one, so the shape a default-dressed player produces is exactly what it
+     was before effects existed — which is the whole reason this is still
+     version 9 and not version 10. */
+  assert.deepEqual(Protocol.sanitizeCosmetics({
+    character: 'char-midnight', effect: 'fx-starfall'
+  }, accepts), {
+    character: 'char-midnight',
+    effect: 'fx-starfall',
+    weapons: { smg: null, shotgun: null, rifle: null }
+  });
+  assert.ok(!('effect' in Protocol.sanitizeCosmetics({ effect: 'fx-unknown' }, accepts)),
+    'an effect the catalog does not know is not a selection');
+  assert.ok(!('effect' in Protocol.sanitizeCosmetics({ effect: 'FX Starfall' }, accepts)),
+    'and neither is something that is not even shaped like an id');
+  assert.equal(Protocol.hasCosmetics(
+    Protocol.sanitizeCosmetics({ effect: 'fx-starfall' }, accepts)), true,
+    'an effect on its own is a selection worth carrying');
+  /* An effect is slotless, so it cannot be claimed into a weapon slot and a
+     weapon skin cannot be claimed as one. */
+  assert.ok(!('effect' in Protocol.sanitizeCosmetics(
+    { effect: 'smg-cottoncloud' }, accepts)));
+  assert.equal(Protocol.sanitizeCosmetics(
+    { weapons: { smg: 'fx-starfall' } }, accepts).weapons.smg, null);
 
   for (const malformed of [null, [], 'char-midnight', { character: {} }, {
     character: '<script>', weapons: { smg: 12, shotgun: [], rifle: 'x'.repeat(121) }
@@ -92,6 +118,11 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
     cosmeticId: 'char-midnight',
     paymentIntentId: 'pi_cosmetic_test'
   });
+  accounts.db.grantEntitlement({
+    userId: user.id,
+    cosmeticId: 'fx-confettipop',
+    paymentIntentId: 'pi_cosmetic_effect'
+  });
   const session = accounts.auth.issueSession(user.id);
 
   const ids = ['peer-host', 'peer-guest'];
@@ -117,6 +148,8 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
       authToken: session.token,
       cosmetics: {
         character: 'char-midnight',
+        /* Bought. The starfall claimed on the snapshot below is not. */
+        effect: 'fx-confettipop',
         weapons: {
           smg: 'smg-cottoncloud',
           shotgun: 'shotgun-toastedmallow',
@@ -133,13 +166,17 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
       authToken: 'not-a-live-session-token',
       cosmetics: {
         character: 'char-cloudknight',
+        effect: 'fx-bubbletrail',
         weapons: { rifle: 'rifle-berryswirl' }
       }
     });
 
     const roster = guest.latest('members').members;
+    /* The character was bought and the effect was not, so one survives and
+       the other is stripped — from the same claim, in the same message. */
     assert.deepEqual(roster.find((member) => member.id === 'peer-host').cosmetics, {
       character: 'char-midnight',
+      effect: 'fx-confettipop',
       weapons: { smg: null, shotgun: null, rifle: null }
     });
     assert.equal(roster.find((member) => member.id === 'peer-guest').cosmetics, undefined,
@@ -157,6 +194,7 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
           netId: 'peer-host', human: true,
           cosmetics: {
             character: 'char-cloudknight',
+            effect: 'fx-starfall',
             weapons: { smg: 'smg-cottoncloud' }
           }
         },
@@ -164,6 +202,7 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
           netId: 'peer-guest', human: true,
           cosmetics: {
             character: 'char-midnight',
+            effect: 'fx-confettipop',
             weapons: { rifle: 'rifle-berryswirl' }
           }
         }
@@ -173,8 +212,10 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
     const snapshot = guest.latest('snapshot');
     assert.deepEqual(snapshot.actors.find((actor) => actor.netId === 'peer-host').cosmetics, {
       character: 'char-midnight',
+      effect: 'fx-confettipop',
       weapons: { smg: null, shotgun: null, rifle: null }
-    }, 'the owned selection survives join -> relay -> snapshot');
+    }, 'the owned selection survives join -> relay -> snapshot, and the'
+     + ' unowned effect the host wrote onto itself does not');
     assert.equal(
       snapshot.actors.find((actor) => actor.netId === 'peer-guest').cosmetics,
       undefined,
@@ -198,6 +239,12 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
         .cosmetics.character,
       'char-midnight',
       'the cached migration snapshot keeps the relay-approved appearance'
+    );
+    assert.equal(
+      migration.snapshot.actors.find((actor) => actor.netId === 'peer-host')
+        .cosmetics.effect,
+      'fx-confettipop',
+      'including the effect, which crosses a host change like everything else'
     );
   } finally {
     await relay.close();
