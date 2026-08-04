@@ -165,6 +165,12 @@ function makeStore(options) {
     };
   }
 
+  /* Everything the page has that this harness does not: THREE, the two
+     model builders, the frame clock. Only the display-case tests ask for
+     any of it, and the point of the rest of the file is that the store
+     works without it. */
+  if (opts.globals) Object.assign(ctx, opts.globals);
+
   vm.createContext(ctx);
   vm.runInContext(SOURCE, ctx, { filename: 'src/82-store.js' });
 
@@ -899,4 +905,434 @@ test('boot with storage switched off and no relay still leaves a usable signed-o
   assert.deepEqual(ctx.__json('EQUIPPED'), {
     character: null, weapons: { smg: null, shotgun: null, rifle: null }
   });
+});
+
+/* =====================================================================
+   THE DISPLAY CASE
+
+   The store used to sell pictures by describing them, and the reason it
+   stopped is not testable here — nobody can assert that a skin looks
+   worth four dollars. What is testable is the machinery around that,
+   and all of it has a specific way of failing:
+
+     - a preview per card would mean six WebGL contexts, and a browser
+       that runs out takes the game's away first;
+     - lighting the case by eye clips a MeshToonMaterial's top band, which
+       turns every pastel in the shop the same white — this shop has
+       already shipped that once;
+     - an id from a relay newer than the client has no model to build, and
+       must arrive as a sentence rather than a thrown exception on the
+       title screen;
+     - and a canvas left turning behind a closed panel is a frame budget
+       spent beside a live match.
+
+   None of the four needs a GPU to check. The fakes below are the smallest
+   surface of THREE the store actually touches, which is also a useful
+   thing to know: if the store starts needing more of three.js than this,
+   that is a deliberate decision and this file is where it is noticed.
+   ===================================================================== */
+
+/* ---- the smallest THREE the case leans on ---- */
+function fakeThree(log) {
+  class Vector3 {
+    constructor(x, y, z) { this.x = x || 0; this.y = y || 0; this.z = z || 0; }
+    set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+  }
+  class Obj {
+    constructor() {
+      this.children = []; this.parent = null; this.visible = true;
+      this.position = new Vector3(); this.rotation = new Vector3();
+      this.userData = {};
+    }
+    add(...kids) { for (const k of kids) { k.parent = this; this.children.push(k); } return this; }
+    remove(k) {
+      const at = this.children.indexOf(k);
+      if (at >= 0) { this.children.splice(at, 1); k.parent = null; }
+      return this;
+    }
+    traverse(fn) { fn(this); for (const k of this.children) k.traverse(fn); }
+  }
+  class Group extends Obj {}
+  class Scene extends Obj {}
+  class Color { constructor(hex) { this.hex = hex; } }
+  class Light extends Obj {
+    constructor(kind, a, b, i) { super(); this.kind = kind; this.a = a; this.b = b; this.intensity = i; log.lights.push(this); }
+  }
+  return {
+    Vector3: Vector3,
+    Group: Group,
+    Scene: Scene,
+    Color: Color,
+    sRGBEncoding: 3001,
+    HemisphereLight: class extends Light {
+      constructor(sky, ground, i) { super('hemi', sky, ground, i); }
+    },
+    DirectionalLight: class extends Light {
+      constructor(colour, i) { super('dir', colour, undefined, i); }
+    },
+    PerspectiveCamera: class {
+      constructor(fov, aspect, near, far) {
+        this.fov = fov; this.aspect = aspect; this.near = near; this.far = far;
+        this.position = new Vector3(); this.looked = null;
+      }
+      lookAt(x, y, z) { this.looked = [x, y, z]; }
+      updateProjectionMatrix() { this.projections = (this.projections || 0) + 1; }
+    },
+    /* Reads the size a fake model declares for itself, and unions its
+       children, which is enough for the framing arithmetic to be exercised
+       for real. */
+    Box3: class {
+      setFromObject(node) {
+        let lo = null, hi = null;
+        node.traverse(o => {
+          if (!o.__box) return;
+          const b = o.__box, p = o.position;
+          const min = [b.min[0] + p.x, b.min[1] + p.y, b.min[2] + p.z];
+          const max = [b.max[0] + p.x, b.max[1] + p.y, b.max[2] + p.z];
+          lo = lo ? lo.map((v, i) => Math.min(v, min[i])) : min;
+          hi = hi ? hi.map((v, i) => Math.max(v, max[i])) : max;
+        });
+        this.lo = lo; this.hi = hi;
+        return this;
+      }
+      isEmpty() { return !this.lo; }
+      getCenter(v) { return this.lo ? v.set((this.lo[0] + this.hi[0]) / 2, (this.lo[1] + this.hi[1]) / 2, (this.lo[2] + this.hi[2]) / 2) : v; }
+      getSize(v) { return this.lo ? v.set(this.hi[0] - this.lo[0], this.hi[1] - this.lo[1], this.hi[2] - this.lo[2]) : v; }
+    },
+    WebGLRenderer: class {
+      constructor(opts) {
+        this.opts = opts; this.shadowMap = { enabled: true }; this.frames = 0;
+        this.sized = null; this.pixelRatio = 1;
+        log.renderers.push(this);
+      }
+      setClearColor(colour, alpha) { this.clear = [colour, alpha]; }
+      setPixelRatio(r) { this.pixelRatio = r; }
+      setSize(w, h, css) { this.sized = [w, h, css]; }
+      render() { this.frames++; log.frames++; }
+    }
+  };
+}
+
+/* ---- the smallest DOM the panel leans on ---- */
+function fakeDoc() {
+  const all = [];
+  const make = (tag, id) => {
+    const el = {
+      tagName: tag, id: id || '', className: '', textContent: '', hidden: false,
+      disabled: false, style: {}, dataset: {}, attrs: {}, children: [], listeners: {},
+      clientWidth: 340, clientHeight: 200, focused: 0, classes: new Set(),
+      setAttribute(k, v) { el.attrs[k] = String(v); },
+      getAttribute(k) { return k in el.attrs ? el.attrs[k] : null; },
+      addEventListener(type, fn) { (el.listeners[type] = el.listeners[type] || []).push(fn); },
+      appendChild(kid) { el.children.push(kid); kid.parent = el; return kid; },
+      focus() { el.focused++; },
+      press(type) { for (const fn of el.listeners[type] || []) fn({ target: el }); },
+      querySelector() { return null; },
+      querySelectorAll(sel) {
+        const want = sel.replace('.', ''), found = [];
+        const walk = node => {
+          for (const kid of node.children) {
+            if (String(kid.className).split(/\s+/).indexOf(want) >= 0) found.push(kid);
+            walk(kid);
+          }
+        };
+        walk(el);
+        return found;
+      }
+    };
+    el.classList = {
+      contains: c => el.classes.has(c),
+      add: c => el.classes.add(c),
+      remove: c => el.classes.delete(c),
+      toggle: (c, on) => { if (on === undefined ? !el.classes.has(c) : on) el.classes.add(c); else el.classes.delete(c); }
+    };
+    Object.defineProperty(el, 'innerHTML', {
+      get() { return ''; },
+      set(v) { if (!v) el.children.length = 0; }
+    });
+    all.push(el);
+    return el;
+  };
+
+  const byId = {};
+  for (const id of ['store', 'storeGrid', 'storeStage', 'storeCanvas', 'stageName',
+                    'stageKind', 'stageEmpty', 'stageTagA', 'stageTagB', 'stageCompare',
+                    'storeNote', 'storeWho', 'storeClose'])
+    byId[id] = make('div', id);
+  byId.store.classes.add('off');          // the panel ships closed
+
+  return {
+    byId: byId,
+    doc: {
+      getElementById(id) { return byId[id] || null; },
+      createElement(tag) { return make(tag, ''); },
+      addEventListener() {},
+      activeElement: null,
+      visibilityState: 'visible'
+    }
+  };
+}
+
+/* The six ids the client knows, plus the four models behind them. Each
+   fake carries the bounding box of the real thing so the framing does
+   arithmetic on plausible numbers: a character is about 1.8m tall and a
+   viewmodel gun about 0.45m long. */
+function makeCase(options) {
+  const opts = options || {};
+  const log = { renderers: [], lights: [], frames: 0, built: [] };
+  const three = fakeThree(log);
+  const dom = fakeDoc();
+  const frames = [];
+
+  const model = (box, kids) => {
+    const g = new three.Group();
+    g.__box = box;
+    for (const k of kids || []) g.add(k);
+    return g;
+  };
+  const CHAR_BOX = { min: [-0.42, 0, -0.36], max: [0.42, 1.83, 0.36] };
+  const GUN_BOX = { min: [-0.05, -0.09, -0.30], max: [0.05, 0.07, 0.19] };
+
+  const globals = {
+    document: dom.doc,
+    THREE: three,
+    devicePixelRatio: 2,
+    SOFTWARE_GPU: false,
+    PLAYER_COLOR: { body: 0xfff8f0, trim: 0xffc9d6, name: 'You' },
+    WBY: {
+      smg: { id: 'smg', name: 'BUBBLEGUN' },
+      shotgun: { id: 'shotgun', name: 'MARSHMALLOW' },
+      rifle: { id: 'rifle', name: 'LOLLIPOP' }
+    },
+    buildCharacter(colors, skinId) {
+      if (opts.builderThrows) throw new Error('no geometry today');
+      log.built.push({ kind: 'character', colors: colors, skinId: skinId });
+      return { root: model(CHAR_BOX) };
+    },
+    buildGunMesh(weapon, skinId) {
+      if (opts.builderThrows) throw new Error('no geometry today');
+      log.built.push({ kind: 'weapon', weapon: weapon && weapon.id, skinId: skinId });
+      return model(GUN_BOX);
+    },
+    requestAnimationFrame(fn) { frames.push(fn); return frames.length; },
+    cancelAnimationFrame(id) { log.cancelled = (log.cancelled || 0) + 1; frames[id - 1] = null; }
+  };
+  if (opts.noThree) delete globals.THREE;
+  if (opts.contextFails) globals.THREE = Object.assign({}, three, {
+    WebGLRenderer: function () { throw new Error('no webgl here'); }
+  });
+
+  const ctx = makeStore({ globals: globals, reply: opts.reply });
+  ctx.initStore();
+  ctx.__log = log;
+  ctx.__dom = dom.byId;
+  /* One generation of frames at a time: a tick that asks for the next one
+     must not be run inside the same pump, or this loops forever. */
+  ctx.__pump = (times) => {
+    for (let i = 0; i < (times || 1); i++) {
+      const due = frames.splice(0, frames.length);
+      for (const fn of due) if (fn) fn();
+    }
+  };
+  ctx.__pending = () => frames.filter(Boolean).length;
+  return ctx;
+}
+
+const CASE_IDS = ['smg-cottoncloud', 'shotgun-toastedmallow', 'rifle-berryswirl',
+                  'char-midnight', 'char-sherbetfox', 'char-cloudknight'];
+
+test('the case previews every catalog id, on one shared renderer', async () => {
+  const ctx = makeCase();
+  ctx.storeShow(true);
+  await settle();
+
+  assert.equal(ctx.__dom.storeStage.hidden, false);
+
+  for (const id of CASE_IDS) {
+    ctx.STAGE_TEST_ID = id;
+    /* Exactly what pressing the card does. */
+    assert.doesNotThrow(() => ctx.stageSelect(id), id);
+    const stage = ctx.__get('STAGE');
+    assert.equal(stage.itemId, id);
+    assert.ok(stage.slots.some(s => s.node), id + ' put nothing in the case');
+    assert.equal(ctx.__dom.stageEmpty.hidden, true, id + ' fell back to the empty message');
+    assert.ok(ctx.__dom.stageName.textContent, id + ' has no name under it');
+  }
+
+  /* The whole reason the case is one canvas: a context per card is six
+     contexts on a phone that is already running the game in a seventh. */
+  assert.equal(ctx.__log.renderers.length, 1);
+  assert.equal(ctx.__log.renderers[0].opts.alpha, true);
+
+  /* Both builders were driven with the real ids, and each was also asked
+     for the plain version — that pair is the comparison. */
+  const built = ctx.__log.built;
+  for (const id of CASE_IDS)
+    assert.ok(built.some(b => b.skinId === id), 'never built ' + id);
+  assert.ok(built.some(b => b.kind === 'character' && b.skinId === undefined));
+  assert.ok(built.some(b => b.kind === 'weapon' && b.weapon === 'smg' && b.skinId === undefined));
+
+  /* And nothing was built twice: a player walking the row is not paying
+     for geometry they already have. */
+  const keys = built.map(b => b.kind + '/' + (b.weapon || '') + '/' + b.skinId);
+  assert.equal(new Set(keys).size, keys.length, keys.join(' '));
+});
+
+test('the case is lit with the game\'s own numbers, not brighter ones', () => {
+  const ctx = makeCase();
+  ctx.storeShow(true);
+
+  const lights = ctx.__log.lights;
+  const rig = (kind, i) => lights.filter(l => l.kind === kind).map(l => l.intensity);
+
+  /* initLights (src/10-core.js) and initViewmodel (src/40-weapons.js), to
+     the digit. These are not decoration: MeshToonMaterial bands over a
+     four-step gradient map and r128 does no tone mapping, so a total much
+     past 1.35 clips the top band and every pastel in the shop comes out
+     the same white. */
+  const hemis = lights.filter(l => l.kind === 'hemi');
+  const dirs = lights.filter(l => l.kind === 'dir');
+  assert.deepEqual(hemis.map(l => l.intensity), [0.68, 0.50]);
+  assert.deepEqual(dirs.map(l => l.intensity), [0.52, 0.15, 0.72, 0.22]);
+  assert.deepEqual(hemis.map(l => [l.a.hex, l.b.hex]),
+    [[0xdcefff, 0xffe0bd], [0xffffff, 0xd9c9e8]]);
+  assert.deepEqual(dirs.map(l => l.a.hex), [0xfff4d9, 0xcfd9ff, 0xfff4d9, 0xc8d8ff]);
+  assert.ok(rig('hemi')[0] + rig('dir')[0] + rig('dir')[1] <= 1.36);
+
+  /* A character is lit the way the street lights one; a gun the way your
+     own hands do. */
+  const stage = () => ctx.__get('STAGE');
+  ctx.stageSelect('char-midnight');
+  assert.equal(stage().rigs.world.visible, true);
+  assert.equal(stage().rigs.view.visible, false);
+  ctx.stageSelect('rifle-berryswirl');
+  assert.equal(stage().rigs.world.visible, false);
+  assert.equal(stage().rigs.view.visible, true);
+});
+
+test('the default stands beside the skin until the toggle takes it away', () => {
+  const ctx = makeCase();
+  ctx.storeShow(true);
+  ctx.stageSelect('char-sherbetfox');
+
+  const stage = () => ctx.__get('STAGE');
+  /* The value of a skin is the difference from what you already have, and
+     that is not visible with only the skin on the shelf. */
+  assert.ok(stage().slots[0].node, 'the default is not beside the skin');
+  assert.ok(stage().slots[1].node);
+  assert.notEqual(stage().slots[0].node, stage().slots[1].node);
+  /* Standing apart, not inside each other. */
+  assert.ok(stage().slots[0].pivot.position.x < 0);
+  assert.ok(stage().slots[1].pivot.position.x > 0);
+  assert.equal(ctx.__dom.stageTagA.hidden, false);
+  assert.equal(ctx.__dom.stageTagB.textContent, 'SHERBET FOX');
+  assert.equal(ctx.__dom.stageCompare.getAttribute('aria-pressed'), 'true');
+
+  ctx.stageToggleCompare();
+  assert.equal(stage().slots[0].node, null);
+  assert.ok(stage().slots[1].node);
+  assert.equal(stage().slots[1].pivot.position.x, 0);
+  assert.equal(ctx.__dom.stageTagA.hidden, true);
+  assert.equal(ctx.__dom.stageCompare.getAttribute('aria-pressed'), 'false');
+
+  /* The camera was moved to fit what is actually there rather than left at
+     a distance that happened to suit a character. */
+  const far = stage().camera.position.z;
+  ctx.stageToggleCompare();
+  ctx.stageSelect('smg-cottoncloud');
+  assert.ok(stage().camera.position.z < far,
+    'a 0.5m gun is framed from no further back than a 1.8m character');
+  assert.ok(stage().camera.position.z > 0);
+});
+
+test('an id this client has never heard of degrades to a sentence, not a throw', () => {
+  /* A relay that ships a seventh cosmetic before the page that can draw
+     it. The panel must keep working; it is not allowed to take the title
+     screen down over a picture. */
+  const ctx = makeCase({
+    reply: url => /\/shop\/catalog/.test(url)
+      ? { status: 200, body: [{ id: 'hat-mystery', name: 'Mystery Hat', type: 'hat', price: 499 }] }
+      : { status: 404, body: null }
+  });
+  ctx.storeShow(true);
+
+  assert.doesNotThrow(() => ctx.stageSelect('hat-mystery'));
+  const stage = ctx.__get('STAGE');
+  assert.equal(stage.slots[0].node, null);
+  assert.equal(stage.slots[1].node, null);
+  assert.equal(ctx.__dom.stageEmpty.hidden, false);
+  assert.ok(ctx.__dom.stageEmpty.textContent.length > 0);
+  /* Nothing to turn means nothing to draw. */
+  ctx.__pump(3);
+  assert.equal(ctx.__log.frames, 0);
+
+  /* A weapon-shaped id whose paint this client does not have is a softer
+     miss: the gun is still the gun, so it shows the gun. */
+  assert.doesNotThrow(() => ctx.stageSelect('rifle-notyet'));
+  assert.ok(ctx.__get('STAGE').slots[1].node, 'an unknown rifle skin lost the rifle too');
+  assert.equal(ctx.__dom.stageEmpty.hidden, true);
+
+  /* And the store still does its actual job. */
+  assert.deepEqual(ctx.__json('EQUIPPED'), {
+    character: null, weapons: { smg: null, shotgun: null, rifle: null }
+  });
+});
+
+test('closing the panel stops the case rendering', () => {
+  const ctx = makeCase();
+  ctx.storeShow(true);
+  ctx.stageSelect('char-midnight');
+
+  ctx.__pump(3);
+  const drawn = ctx.__log.frames;
+  assert.ok(drawn >= 3, 'the case never started: ' + drawn);
+  assert.ok(ctx.__pending() > 0, 'no frame was queued for the case');
+
+  /* CLOSE, Escape and the wash all arrive here. This runs beside a live
+     match on a phone; a canvas turning behind a closed panel is frames
+     taken off the game. */
+  ctx.storeShow(false);
+  assert.equal(ctx.__get('STAGE').raf, 0);
+  assert.ok(ctx.__log.cancelled >= 1, 'the frame request was never cancelled');
+  assert.equal(ctx.__pending(), 0);
+
+  ctx.__pump(5);
+  assert.equal(ctx.__log.frames, drawn, 'the case kept drawing after the panel closed');
+
+  /* Belt as well as braces: a frame that was already in flight when the
+     panel closed finds the door shut and does not queue another. */
+  assert.doesNotThrow(() => ctx.stageTick());
+  assert.equal(ctx.__log.frames, drawn);
+  assert.equal(ctx.__pending(), 0);
+
+  /* Opening it again picks the case back up rather than needing a reload. */
+  ctx.storeShow(true);
+  ctx.__pump(2);
+  assert.ok(ctx.__log.frames > drawn);
+});
+
+test('a browser that cannot give the store a context still gets the store', async () => {
+  for (const how of [{ noThree: true }, { contextFails: true }, { builderThrows: true }]) {
+    const label = JSON.stringify(how);
+    const ctx = makeCase(how);
+    assert.doesNotThrow(() => ctx.storeShow(true), label);
+    await settle();
+
+    /* The case folds away and the cards go back to being the text-and-price
+       layout they were before any of this existed — no dead preview
+       buttons on them, and nothing thrown at the title screen. */
+    if (!how.builderThrows) {
+      assert.equal(ctx.__dom.storeStage.hidden, true, label);
+      assert.equal(ctx.__get('STAGE.can'), false, label);
+      assert.equal(ctx.__log.frames, 0, label);
+      const cards = ctx.__dom.storeGrid.querySelectorAll('.spick');
+      assert.ok(cards.length > 0, label);
+      for (const pick of cards) assert.notEqual(pick.tagName, 'button', label);
+    }
+    assert.equal(ctx.__dom.storeGrid.querySelectorAll('.sitem').length, 6, label);
+    assert.equal(ctx.storeSignedIn(), false, label);
+    assert.deepEqual(ctx.__json('EQUIPPED'), {
+      character: null, weapons: { smg: null, shotgun: null, rifle: null }
+    }, label);
+  }
 });

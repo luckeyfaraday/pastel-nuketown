@@ -907,6 +907,548 @@ function storeBuy(id) {
 }
 
 /* =====================================================================
+   THE DISPLAY CASE
+
+   A skin is a picture, and a shop that describes pictures in words is not
+   a shop. So the panel builds the real thing: buildCharacter and
+   buildGunMesh, the same two functions the match calls, so what turns in
+   the case is the model that will be on the street — not an illustration
+   of it that can drift.
+
+   Three rules run through everything below, and each of them is here
+   because of a specific way this can go wrong.
+
+   ONE CONTEXT. There is exactly one WebGLRenderer for the whole store,
+   and it is not made until the panel is opened for the first time. A
+   browser gives a page a small number of live WebGL contexts and then
+   starts taking the oldest ones away; the game is already holding one,
+   and six more — a canvas per card — is how a store costs a player the
+   match they were about to play.
+
+   THE GAME'S OWN LIGHT. The numbers below are copied from initLights and
+   initViewmodel and are not to be tuned by eye. The materials are
+   MeshToonMaterial over a four-step gradient map, and there is no tone
+   mapping in r128: past roughly 1.35 of total intensity the top band
+   clips, and a wall of pastels all clip to the same white. A preview lit
+   "so you can see it better" is how this store once ended up advertising
+   six colourless skins. Characters get the world rig because that is
+   where a character is seen; guns get the viewmodel rig, because a gun is
+   seen in your own hands.
+
+   NOTHING HERE MAY BREAK THE PANEL. Every entry point checks its
+   elements, its builders and its THREE, every build is wrapped, and a
+   context that cannot be made or is later lost hides the case and leaves
+   the cards below exactly as they were before any of this existed.
+   ===================================================================== */
+
+const STAGE = {
+  /* null until the first open decides; then true, or false forever. */
+  can: null,
+  renderer: null, scene: null, camera: null, canvas: null,
+  rigs: { world: null, view: null },
+  /* Two, and only ever two: the default on the left, the selection on the
+     right. Each is a pivot (where it stands) holding a spinner (its own
+     turn), so comparing two things turns them both on the spot rather than
+     swinging one around the other. */
+  slots: [],
+  /* Built models, keyed by what they are. A player clicking along the row
+     should not pay to rebuild a character they looked at ten seconds ago,
+     and a build that failed is remembered as a failure so it is not retried
+     sixty times a second. */
+  cache: new Map(),
+  raf: 0, last: 0, spin: 0,
+  itemId: null,
+  compare: true,
+  w: 0, h: 0
+};
+
+/* Slow enough to read as a display case rather than a spinning trophy:
+   about eleven seconds a turn. */
+const STAGE_SPIN = 0.55;
+const STAGE_TAU = Math.PI * 2;
+/* Four characters and four guns is the whole reachable set today; the cap
+   is here so a relay that starts selling forty cannot make the panel hold
+   forty models' worth of buffers. */
+const STAGE_CACHE_MAX = 16;
+/* A narrow lens. A display case wants the near-orthographic read of a shop
+   window; at the game's 74 degrees two models a metre apart are seen from
+   two noticeably different sides, which is the one thing a comparison
+   cannot afford. */
+const STAGE_FOV = 27;
+
+/* 10-core.js owns the one conversion from authored hex to linear, and the
+   store must use it or its lights will not match the game's. The fallback
+   is for a page where 10-core.js is absent — which is every one of the
+   tests, and no browser. */
+function stageColor(hex) {
+  if (typeof C === 'function') { try { return C(hex); } catch (e) {} }
+  return new THREE.Color(hex);
+}
+
+function stageEl(id) {
+  return typeof document === 'object' && document && document.getElementById
+    ? document.getElementById(id) : null;
+}
+
+/* Lit exactly as initLights (10-core.js) lights the street: hemisphere
+   heavy, one warm sun, one cool bounce, ~1.35 in total. */
+function stageWorldRig() {
+  const g = new THREE.Group();
+  const hemi = new THREE.HemisphereLight(stageColor(0xdcefff), stageColor(0xffe0bd), 0.68);
+  hemi.position.set(0, 40, 0);
+  const sun = new THREE.DirectionalLight(stageColor(0xfff4d9), 0.52);
+  sun.position.set(-34, 46, 26);
+  const fill = new THREE.DirectionalLight(stageColor(0xcfd9ff), 0.15);
+  fill.position.set(30, 18, -26);
+  g.add(hemi, sun, fill);
+  return g;
+}
+
+/* And exactly as initViewmodel (40-weapons.js) lights your own hands. */
+function stageViewRig() {
+  const g = new THREE.Group();
+  const hemi = new THREE.HemisphereLight(stageColor(0xffffff), stageColor(0xd9c9e8), 0.50);
+  const key = new THREE.DirectionalLight(stageColor(0xfff4d9), 0.72);
+  key.position.set(-0.6, 1.1, 0.9);
+  const fill = new THREE.DirectionalLight(stageColor(0xc8d8ff), 0.22);
+  fill.position.set(0.9, 0.2, -0.6);
+  g.add(hemi, key, fill);
+  return g;
+}
+
+/* Everything the case needs from outside this file. Asked once, because
+   the answer cannot change inside a page load and because the expensive
+   half of it is making a context. */
+function stageInit() {
+  if (STAGE.can !== null) return STAGE.can;
+  STAGE.can = false;
+
+  const canvas = stageEl('storeCanvas');
+  if (!canvas) return false;
+  if (typeof THREE !== 'object' || !THREE || typeof THREE.WebGLRenderer !== 'function') return false;
+  if (typeof buildCharacter !== 'function' && typeof buildGunMesh !== 'function') return false;
+
+  try {
+    /* alpha, and a clear colour of nothing: the wash behind the models and
+       the shadow under them are CSS, which costs the renderer no fill and
+       keeps the case looking like a case even on the frame the context
+       goes away. */
+    const renderer = new THREE.WebGLRenderer({
+      canvas: canvas,
+      antialias: typeof SOFTWARE_GPU === 'boolean' ? !SOFTWARE_GPU : true,
+      alpha: true
+    });
+    renderer.setClearColor(stageColor(0x000000), 0);
+    if (THREE.sRGBEncoding !== undefined) renderer.outputEncoding = THREE.sRGBEncoding;
+    /* No shadow map. It would be a second geometry pass for one object on a
+       floor that is a CSS ellipse, and the store is a guest on a page that
+       is already rendering a game. */
+    if (renderer.shadowMap) renderer.shadowMap.enabled = false;
+    const dpr = typeof devicePixelRatio === 'number' && devicePixelRatio > 0 ? devicePixelRatio : 1;
+    if (typeof renderer.setPixelRatio === 'function')
+      renderer.setPixelRatio(Math.min(dpr, typeof SOFTWARE_GPU === 'boolean' && SOFTWARE_GPU ? 1 : 1.75));
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(STAGE_FOV, 1, 0.05, 80);
+
+    STAGE.rigs.world = stageWorldRig();
+    STAGE.rigs.view = stageViewRig();
+    scene.add(STAGE.rigs.world, STAGE.rigs.view);
+
+    STAGE.slots = [];
+    for (let i = 0; i < 2; i++) {
+      const pivot = new THREE.Group();
+      const spinner = new THREE.Group();
+      pivot.add(spinner);
+      pivot.visible = false;
+      scene.add(pivot);
+      STAGE.slots.push({ pivot: pivot, spinner: spinner, node: null, yaw0: 0 });
+    }
+
+    STAGE.renderer = renderer;
+    STAGE.scene = scene;
+    STAGE.camera = camera;
+    STAGE.canvas = canvas;
+
+    /* A lost context is not an error the player should be shown — it is a
+       phone reclaiming memory, usually because the game wanted some. Fold
+       the case away and leave the shop working. */
+    if (typeof canvas.addEventListener === 'function')
+      canvas.addEventListener('webglcontextlost', e => {
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        stageGiveUp();
+      }, false);
+  } catch (e) {
+    STAGE.renderer = null;
+    return false;
+  }
+
+  STAGE.can = true;
+  return true;
+}
+
+/* The one way out. Whatever went wrong, the panel keeps working without
+   a picture in it, and nothing tries again this page load. */
+function stageGiveUp() {
+  stageStop();
+  STAGE.can = false;
+  STAGE.renderer = null;
+  STAGE.cache.clear();
+  const wrap = stageEl('storeStage');
+  if (wrap) wrap.hidden = true;
+  /* The cards were drawn with a preview button on them; they are not any
+     more. */
+  storeRenderGrid();
+}
+
+/* The jersey the preview wears. A character skin is costume pieces over a
+   team colour, so showing it on the player's own cream jersey is showing
+   it on the body they will be looking at. */
+function stagePreviewJersey() {
+  const c = typeof PLAYER_COLOR === 'object' && PLAYER_COLOR ? PLAYER_COLOR : null;
+  return {
+    body: c && c.body !== undefined ? c.body : 0xfff8f0,
+    trim: c && c.trim !== undefined ? c.trim : 0xffc9d6,
+    name: 'You'
+  };
+}
+
+/* Centre the model on the origin and record the two half-extents the
+   framing needs. Both are exact under the only transform the case applies,
+   which is a turn about Y: the vertical half never changes, and the
+   horizontal half is the radius of the circle the footprint sweeps. Doing
+   this once, at build time, is also what stops a model drifting — measuring
+   a node that has already been offset would offset it again. */
+function stageMeasure(node) {
+  node.userData = node.userData || {};
+  node.userData.pnFlat = 0.5;
+  node.userData.pnHalfY = 0.5;
+  if (typeof THREE.Box3 !== 'function' || typeof THREE.Vector3 !== 'function') return;
+  try {
+    const box = new THREE.Box3().setFromObject(node);
+    if (typeof box.isEmpty === 'function' && box.isEmpty()) return;
+    const centre = new THREE.Vector3(), size = new THREE.Vector3();
+    box.getCenter(centre);
+    box.getSize(size);
+    if (!Number.isFinite(size.x) || !Number.isFinite(size.y) || !Number.isFinite(size.z)) return;
+    node.position.set(-centre.x, -centre.y, -centre.z);
+    node.userData.pnFlat = Math.max(1e-3, 0.5 * Math.hypot(size.x, size.z));
+    node.userData.pnHalfY = Math.max(1e-3, 0.5 * size.y);
+  } catch (e) {}
+}
+
+function stageCacheKey(kind, slot, skinId) {
+  return kind + '|' + (slot || '') + '|' + (skinId || '');
+}
+
+/* Build one model, or answer null. `skinId` of null is the default look,
+   which is the whole point of the comparison. Every way this can fail —
+   a builder that is not there, a weapon slot the game does not have, an id
+   from a relay newer than this client, a throw from inside a builder — is
+   the same null, and the null is cached so a broken id costs one attempt
+   rather than one per frame. */
+function stagePreviewNode(kind, slot, skinId) {
+  const key = stageCacheKey(kind, slot, skinId);
+  if (STAGE.cache.has(key)) return STAGE.cache.get(key);
+  if (STAGE.cache.size >= STAGE_CACHE_MAX) STAGE.cache.clear();
+
+  let node = null;
+  try {
+    if (kind === 'character' && typeof buildCharacter === 'function') {
+      const built = buildCharacter(stagePreviewJersey(), skinId || undefined);
+      node = built && built.root ? built.root : null;
+    } else if (kind === 'weapon' && typeof buildGunMesh === 'function') {
+      const weapon = typeof WBY === 'object' && WBY ? WBY[slot] : null;
+      if (weapon) node = buildGunMesh(weapon, skinId || undefined) || null;
+    }
+  } catch (e) { node = null; }
+
+  if (node) {
+    /* buildCharacter marks every mesh as casting and receiving; there is no
+       shadow map here to pay for it. */
+    if (typeof node.traverse === 'function')
+      try { node.traverse(o => { o.castShadow = false; o.receiveShadow = false; }); } catch (e) {}
+    stageMeasure(node);
+  }
+  STAGE.cache.set(key, node);
+  return node;
+}
+
+/* Which way a model faces on the frame it appears. It turns from here
+   either way, but the first look should be the flattering one: a character
+   looking at you, a gun in profile with the muzzle to the left. Both models
+   are built facing -Z, which is away from a camera on +Z. */
+function stageRestYaw(kind) {
+  return kind === 'weapon' ? -Math.PI / 2 : Math.PI;
+}
+
+/* What to draw for an id. storeSlotOf is deliberately strict, because the
+   question it answers is what may be *worn* and a generous answer there
+   puts an id the server never confirmed into EQUIPPED. The case is only
+   deciding what to point a camera at, so it is allowed to guess: a newer
+   relay's `rifle-whatever` is a rifle whatever else it turns out to be,
+   and a plain rifle in the case beats an apology. An id that is not even
+   shaped like one of ours still comes back null and still gets the
+   apology. */
+function stageKindOf(id, type) {
+  const where = storeSlotOf(id, type);
+  if (where) return where;
+  if (typeof id !== 'string' || !id) return null;
+  if (id.indexOf('char-') === 0) return { kind: 'character' };
+  const slot = id.split('-')[0];
+  return STORE_SLOTS.indexOf(slot) >= 0 ? { kind: 'weapon', slot: slot } : null;
+}
+
+function stageMount(index, node, yaw0) {
+  const slot = STAGE.slots[index];
+  if (!slot) return;
+  if (slot.node && slot.node !== node) {
+    try { slot.spinner.remove(slot.node); } catch (e) {}
+    slot.node = null;
+  }
+  if (node && slot.node !== node) {
+    try { slot.spinner.add(node); } catch (e) { return; }
+    slot.node = node;
+  }
+  slot.yaw0 = yaw0 || 0;
+  slot.pivot.visible = !!slot.node;
+}
+
+/* Stand the models where they go and put the camera where all of them fit.
+   The distance comes out of the measured half-extents and the lens, never
+   out of a number that looked right against one model: a character is 1.8m
+   and a viewmodel gun is a third of that, and a guessed distance flatters
+   exactly one of them. */
+function stageLayout() {
+  const cam = STAGE.camera;
+  if (!cam) return;
+  const shown = STAGE.slots.filter(s => s.node);
+  if (!shown.length) return;
+
+  let flat = 0, halfY = 0;
+  for (const s of shown) {
+    flat = Math.max(flat, s.node.userData.pnFlat || 0.5);
+    halfY = Math.max(halfY, s.node.userData.pnHalfY || 0.5);
+  }
+
+  const gap = flat * 0.40;
+  let halfX = flat;
+  if (shown.length > 1) {
+    const offset = flat + gap * 0.5;
+    shown[0].pivot.position.x = -offset;
+    shown[1].pivot.position.x = offset;
+    halfX = offset + flat;
+  } else {
+    shown[0].pivot.position.x = 0;
+  }
+
+  const fov = (cam.fov || STAGE_FOV) * Math.PI / 180;
+  const aspect = cam.aspect && Number.isFinite(cam.aspect) && cam.aspect > 0 ? cam.aspect : 1;
+  const half = Math.tan(fov / 2);
+  /* Fit whichever axis runs out first, then stand back by the model's own
+     depth — the near face of a turning model is `flat` closer than its
+     centre — and leave a twentieth for air, because a display case that
+     touches its own glass looks like a mistake. The vertical gets an eighth
+     because the captions are drawn over the bottom of the case, and a pair
+     of boots behind the word DEFAULT is not a preview of the boots. */
+  const dist = Math.max(halfY * 1.12 / half, halfX / (half * aspect)) * 1.05 + flat;
+
+  /* A shade above the horizon: enough to see the top of a cap and the top
+     of a barrel, not enough to look down on anything. Aimed slightly under
+     the models' waist, which lifts them clear of the captions. */
+  const tilt = 0.20;
+  cam.position.set(0, Math.sin(tilt) * dist, Math.cos(tilt) * dist);
+  if (typeof cam.lookAt === 'function') cam.lookAt(0, -halfY * 0.09, 0);
+
+  /* Toe the pair in towards the lens. Two models a metre apart under a
+     perspective camera are seen from two different sides — the left one
+     from its right, the right one from its left — and a comparison where
+     the two halves are at different angles is not a comparison. Turning
+     each stand by the angle it sits off the axis puts the same face of
+     both in front of the player, which is what a shop window with two
+     turntables in it actually does. */
+  for (const slot of shown)
+    slot.pivot.rotation.y = Math.atan2(-slot.pivot.position.x, dist);
+}
+
+/* The drawing buffer follows the element, the same way the game's does and
+   for the same reason: the stylesheet owns the size, and on a phone the
+   element is the only thing that knows the truth during a rotation. */
+function stageResize() {
+  const canvas = STAGE.canvas, renderer = STAGE.renderer, cam = STAGE.camera;
+  if (!canvas || !renderer || !cam) return false;
+  const w = Math.max(1, Math.round(canvas.clientWidth || 0));
+  const h = Math.max(1, Math.round(canvas.clientHeight || 0));
+  if (w === STAGE.w && h === STAGE.h) return false;
+  STAGE.w = w; STAGE.h = h;
+  try { renderer.setSize(w, h, false); } catch (e) {}
+  cam.aspect = w / h;
+  if (typeof cam.updateProjectionMatrix === 'function') cam.updateProjectionMatrix();
+  return true;
+}
+
+function stageHasContent() {
+  return STAGE.slots.some(s => !!s.node);
+}
+
+function stageStart() {
+  if (STAGE.raf || !STAGE.can || !STAGE.renderer) return;
+  if (typeof requestAnimationFrame !== 'function') return;
+  if (!storeIsOpen() || !stageHasContent()) return;
+  STAGE.last = 0;
+  STAGE.raf = requestAnimationFrame(stageTick);
+}
+
+/* Closing the panel stops the case dead. This runs beside a live game on a
+   phone, and a hidden canvas turning a character forever is a frame budget
+   spent on something nobody is looking at. */
+function stageStop() {
+  if (STAGE.raf && typeof cancelAnimationFrame === 'function') {
+    try { cancelAnimationFrame(STAGE.raf); } catch (e) {}
+  }
+  STAGE.raf = 0;
+  STAGE.last = 0;
+}
+
+function stageTick() {
+  STAGE.raf = 0;
+  if (!STAGE.renderer || !STAGE.can) return;
+  /* Belt as well as braces on the stop above: whatever route the panel was
+     closed by, the loop ends on the next frame it is asked for. */
+  if (!storeIsOpen() || !stageHasContent()) { STAGE.last = 0; return; }
+
+  const now = Date.now();
+  /* A tab that was in the background comes back with a huge gap on the
+     clock, and a frame that advanced the turn by four seconds reads as a
+     jump. Clamp it, and start from a standstill. */
+  const dt = STAGE.last ? Math.min(0.05, Math.max(0, (now - STAGE.last) / 1000)) : 0;
+  STAGE.last = now;
+  STAGE.spin = (STAGE.spin + dt * STAGE_SPIN) % STAGE_TAU;
+
+  if (stageResize()) stageLayout();
+  for (const slot of STAGE.slots)
+    if (slot.node) slot.spinner.rotation.y = slot.yaw0 + STAGE.spin;
+
+  try {
+    STAGE.renderer.render(STAGE.scene, STAGE.camera);
+  } catch (e) {
+    stageGiveUp();
+    return;
+  }
+
+  if (typeof requestAnimationFrame === 'function') STAGE.raf = requestAnimationFrame(stageTick);
+}
+
+/* The item the case is showing, and everything written under it. Safe to
+   call at any time: with no elements, no THREE or no builders it hides the
+   case and returns, which is the whole of the fallback. */
+function stageApply() {
+  const wrap = stageEl('storeStage');
+  if (!wrap) return;
+  if (!stageInit()) { wrap.hidden = true; stageStop(); return; }
+  wrap.hidden = false;
+
+  const id = STAGE.itemId;
+  const known = STORE_BY_ID.get(id);
+  const listed = (ACCOUNT.items || []).find(entry => entry.id === id);
+  const where = id ? stageKindOf(id, listed ? listed.type : (known ? known.type : '')) : null;
+  const kind = where ? where.kind : null;
+
+  /* An id whose kind cannot be worked out — a relay selling something this
+     client has never heard of — reaches here as a null kind and comes out
+     the other side as a sentence, not a throw. */
+  const skin = kind ? stagePreviewNode(kind, where.slot, id) : null;
+  const base = kind ? stagePreviewNode(kind, where.slot, null) : null;
+  /* Comparing needs two different models. A skin whose renderer has not
+     landed falls back to showing the default alone, which is still an
+     honest answer to "what am I looking at". */
+  const pair = !!skin && !!base && skin !== base;
+  const rest = stageRestYaw(kind);
+
+  stageMount(0, pair && STAGE.compare ? base : null, rest);
+  stageMount(1, skin || base || null, rest);
+
+  /* Guns are seen in your own hands and characters across the street, so
+     each gets the rig it is really lit by. */
+  if (STAGE.rigs.world) STAGE.rigs.world.visible = kind !== 'weapon';
+  if (STAGE.rigs.view) STAGE.rigs.view.visible = kind === 'weapon';
+
+  const name = listed && listed.name ? listed.name : (known ? known.name : (id || ''));
+  const nameEl = stageEl('stageName');
+  const kindEl = stageEl('stageKind');
+  if (nameEl) nameEl.textContent = name;
+  if (kindEl) kindEl.textContent = id ? storeKindLabel(id, listed ? listed.type : '') : '';
+
+  const showing = stageHasContent();
+  const empty = stageEl('stageEmpty');
+  if (empty) {
+    empty.hidden = showing;
+    empty.textContent = showing ? '' : 'No preview for this one yet — it is still a surprise.';
+  }
+  const tagA = stageEl('stageTagA');
+  const tagB = stageEl('stageTagB');
+  if (tagA) tagA.hidden = !(showing && pair && STAGE.compare);
+  if (tagB) {
+    tagB.hidden = !showing;
+    /* With nothing to compare against, the caption would be naming the only
+       thing on screen twice — the row underneath already says what it is. */
+    tagB.textContent = pair && STAGE.compare ? (name || 'THIS SKIN').toUpperCase()
+      : (skin ? '' : 'DEFAULT');
+    if (!tagB.textContent) tagB.hidden = true;
+  }
+  const toggle = stageEl('stageCompare');
+  if (toggle) {
+    toggle.hidden = !pair;
+    toggle.textContent = STAGE.compare ? 'HIDE DEFAULT' : 'COMPARE';
+    toggle.setAttribute('aria-pressed', String(STAGE.compare));
+    toggle.setAttribute('aria-label',
+      STAGE.compare ? 'Show this skin on its own' : 'Show the default beside this skin');
+  }
+
+  stageResize();
+  stageLayout();
+  if (showing) stageStart(); else stageStop();
+}
+
+/* Pressing a card. Deliberately not a re-render of the grid: the button
+   that was pressed would be replaced under the player's finger and a
+   keyboard would lose its place, so only the two classes that changed are
+   touched. */
+function stageSelect(id) {
+  if (!id || id === STAGE.itemId) return;
+  STAGE.itemId = id;
+  stageApply();
+  stageMarkSelected();
+  if (typeof SFX === 'object' && SFX) SFX.ui();
+}
+
+function stageMarkSelected() {
+  const grid = document.getElementById('storeGrid');
+  if (!grid || typeof grid.querySelectorAll !== 'function') return;
+  for (const card of grid.querySelectorAll('.sitem'))
+    card.classList.toggle('sel', card.dataset && card.dataset.id === STAGE.itemId);
+  for (const pick of grid.querySelectorAll('.spick'))
+    pick.setAttribute('aria-pressed',
+      String(!!(pick.dataset && pick.dataset.id === STAGE.itemId)));
+}
+
+function stageToggleCompare() {
+  STAGE.compare = !STAGE.compare;
+  stageApply();
+  if (typeof SFX === 'object' && SFX) SFX.ui();
+}
+
+/* Opening the panel. The selection survives a close, so coming back lands
+   on the item that was being looked at; an id that is no longer for sale
+   falls back to the first card. */
+function stageOpen() {
+  const items = storeDisplayItems();
+  if (!STAGE.itemId || !items.some(entry => entry.id === STAGE.itemId))
+    STAGE.itemId = items.length ? items[0].id : null;
+  stageApply();
+}
+
+/* =====================================================================
    DRAWING IT
    ===================================================================== */
 function storeLockerNote(text) {
@@ -960,30 +1502,61 @@ function storeRenderGrid() {
   const grid = document.getElementById('storeGrid');
   if (!grid) return;
   const inside = storeSignedIn();
+  /* The case is only offered once a context has actually been made. Before
+     the first open, and on any browser that could not give the store one,
+     the cards are the plain blocks they have always been rather than
+     buttons that load a picture nobody can see. */
+  const staged = STAGE.can === true;
+  const items = storeDisplayItems();
+  /* The catalog can change under a selection — a relay coming back with a
+     different six. Re-point at the first card rather than leave the case
+     showing something no longer on the shelf. */
+  if (staged && !items.some(entry => entry.id === STAGE.itemId)) {
+    STAGE.itemId = items.length ? items[0].id : null;
+    stageApply();
+  }
   grid.innerHTML = '';
 
-  for (const item of storeDisplayItems()) {
+  for (const item of items) {
     const known = STORE_BY_ID.get(item.id);
     const owned = ACCOUNT.owned.has(item.id);
     const equipped = owned && storeIsEquipped(item.id);
+    const selected = staged && item.id === STAGE.itemId;
     const card = document.createElement('div');
-    card.className = 'sitem' + (owned ? ' owned' : '') + (equipped ? ' on' : '');
+    card.className = 'sitem' + (owned ? ' owned' : '') + (equipped ? ' on' : '') +
+      (selected ? ' sel' : '');
+    card.dataset.id = item.id;
+
+    /* The picture and the two lines of text are one control when there is a
+       case to load, and plain text when there is not. Keeping BUY out of it
+       is what lets this be a real <button> rather than a div wearing a role:
+       nothing interactive is ever nested inside anything else. */
+    const pick = staged ? document.createElement('button') : document.createElement('div');
+    pick.className = 'spick';
+    if (staged) {
+      pick.type = 'button';
+      pick.dataset.id = item.id;
+      pick.setAttribute('aria-pressed', String(selected));
+      pick.setAttribute('aria-label', 'Preview ' + item.name);
+      pick.addEventListener('click', () => stageSelect(item.id));
+    }
+    card.appendChild(pick);
 
     const swatch = document.createElement('div');
     swatch.className = 'swatch';
     const tint = known ? known.tint : ['#fff8f0', '#d4c5f9'];
     swatch.style.background = 'linear-gradient(150deg,' + tint[0] + ',' + tint[1] + ')';
-    card.appendChild(swatch);
+    pick.appendChild(swatch);
 
     const name = document.createElement('div');
     name.className = 'sname';
     name.textContent = item.name;
-    card.appendChild(name);
+    pick.appendChild(name);
 
     const kind = document.createElement('div');
     kind.className = 'skind';
     kind.textContent = storeKindLabel(item.id, item.type);
-    card.appendChild(kind);
+    pick.appendChild(kind);
 
     const foot = document.createElement('div');
     foot.className = 'sfoot';
@@ -1084,6 +1657,10 @@ function storeShow(open) {
   storeSetTitleInert(!!open);
 
   if (!open) {
+    /* The case goes still the moment the panel does. Every way out of the
+       store — CLOSE, Escape, the wash — arrives here, so this is the one
+       place that has to remember. */
+    stageStop();
     /* Back where they came from. A dialog that drops focus on the body
        leaves a keyboard player at the top of the document, several Tabs
        from the button they just pressed. */
@@ -1103,6 +1680,10 @@ function storeShow(open) {
   }
   if (typeof SFX === 'object' && SFX) SFX.ui();
   storeRenderAccount();
+  /* Before the grid, because whether the cards are pressable pictures or
+     plain blocks is decided by whether a context could be made — and that
+     is decided here, on the first open and never again. */
+  stageOpen();
   storeRenderGrid();
   if (!storeSignedIn() && !ACCOUNT.token)
     storeNote('Sign in to buy and equip skins. Everything else is free and always will be.');
@@ -1144,6 +1725,8 @@ function initStore() {
   const panel = document.getElementById('store');
   if (signIn) signIn.addEventListener('click', () => storeBeginSignIn());
   if (signOut) signOut.addEventListener('click', () => storeSignOut());
+  const compare = document.getElementById('stageCompare');
+  if (compare) compare.addEventListener('click', () => stageToggleCompare());
   if (open) open.addEventListener('click', () => storeShow(true));
   if (close) close.addEventListener('click', () => { storeShow(false); if (typeof SFX === 'object' && SFX) SFX.ui(); });
   /* The wash around the card is a way out on a phone, where CLOSE sits at the
@@ -1179,7 +1762,13 @@ function initStore() {
      re-check off, so the tab coming back into view is the signal. Rate
      limited because tab switching is not a rare event. */
   const wake = () => {
-    if (document.visibilityState !== 'visible' || !ACCOUNT.token) return;
+    /* A backgrounded tab gets no frames anyway on most browsers, but "most"
+       is not "all" and a phone that keeps handing them out is a phone
+       turning a character nobody can see. Stopping and restarting by hand
+       costs nothing and is true everywhere. */
+    if (document.visibilityState !== 'visible') { stageStop(); return; }
+    if (storeIsOpen()) stageStart();
+    if (!ACCOUNT.token) return;
     if (!storeIsOpen() && !ACCOUNT.user) return;
     if (Date.now() - ACCOUNT.lastRefresh < 5000) return;
     ACCOUNT.lastRefresh = Date.now();

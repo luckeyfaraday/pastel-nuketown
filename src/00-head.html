@@ -430,9 +430,58 @@ body.touch .sens{display:none}
   color:#4f7389;text-align:center}
 #storeNote[data-kind="error"]{color:#b8406a}
 #storeNote:empty{display:none}
+
+/* ---------------------------------------------------------------------
+   THE DISPLAY CASE
+   A shop window, not a 3D viewport: the same 2.5px ink outline and 3px drop
+   as every other box on this card, a warm-to-lilac wash behind the geometry
+   so pastel toon bands have something to sit against, and a soft ellipse on
+   the floor so the model stands rather than floats. The canvas is drawn with
+   alpha on purpose -- the backdrop and the shadow are CSS, which costs the
+   renderer nothing and keeps the case looking the same on a browser whose
+   context has just gone away.
+   --------------------------------------------------------------------- */
+.store-stage{flex:none;display:flex;flex-direction:column;gap:8px}
+.store-stage[hidden]{display:none}
+.stage-case{position:relative;height:clamp(148px,30vh,228px);overflow:hidden;
+  border:2.5px solid var(--ink);border-radius:18px;
+  box-shadow:0 3px 0 var(--ink),inset 0 -16px 30px rgba(74,63,92,.11);
+  background:radial-gradient(122% 98% at 50% 10%,#fffdfa 0%,#fdf2fb 44%,#e3daf6 100%)}
+/* The contact shadow sits under the canvas; the canvas is positioned only so
+   that it wins the stacking order over it. */
+.stage-case::before{content:'';position:absolute;z-index:0;left:50%;bottom:12%;
+  transform:translateX(-50%);width:60%;height:16px;border-radius:50%;
+  background:rgba(74,63,92,.17);filter:blur(6px)}
+#storeCanvas{position:relative;z-index:1;display:block;width:100%;height:100%}
+/* Which half is which, under the models rather than beside them, so the two
+   captions line up with the two things they name at any width. */
+.stage-tags{position:absolute;z-index:2;left:0;right:0;bottom:0;display:flex;gap:8px;
+  padding:0 9px 9px;pointer-events:none}
+.stage-tag{flex:1 1 0;min-width:0;text-align:center;padding:4px 7px 5px;border-radius:999px;
+  background:rgba(255,255,255,.80);font-family:var(--disp);font-size:9px;font-weight:700;
+  letter-spacing:.13em;color:var(--ink-soft);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stage-tag[hidden]{display:none}
+.stage-empty{position:absolute;z-index:2;inset:0;display:flex;align-items:center;
+  justify-content:center;padding:0 22px;text-align:center;
+  font-family:var(--disp);font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--ink-soft)}
+.stage-empty[hidden]{display:none}
+.stage-bar{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.stage-title{min-width:0}
+#stageName{font-family:var(--disp);font-size:16px;font-weight:800;letter-spacing:.02em;
+  line-height:1.1;min-width:0;overflow-wrap:anywhere}
+#stageKind{margin-top:2px;font-family:var(--disp);font-size:9px;font-weight:700;
+  letter-spacing:.13em;color:var(--ink-soft);min-width:0;overflow-wrap:anywhere}
+#stageCompare{flex:none;min-height:44px;padding:8px 13px 9px;font-size:11px}
+#stageCompare[aria-pressed="true"]{background:linear-gradient(180deg,#f8f0ff,#e0d3fa)}
+
 /* Scrolls inside the card rather than growing it, so CLOSE stays where it
-   was put on a short screen. */
-#storeGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:10px;
+   was put on a short screen. `min-height:0` is what lets it: a flex child
+   will not shrink below its content otherwise, and with the case above it
+   that is the difference between a scrolling grid and a card taller than
+   the window. */
+#storeGrid{flex:1 1 auto;min-height:0;
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:10px;
   overflow-y:auto;padding:3px}
 .sitem{display:flex;flex-direction:column;gap:6px;padding:9px 10px 10px;
   border:2.5px solid var(--ink);border-radius:15px;background:rgba(255,255,255,.66);
@@ -441,6 +490,17 @@ body.touch .sens{display:none}
 /* Equipped is a state of the card, not of the button alone -- at a glance
    across six of them the ring is what you actually read. */
 .sitem.on{box-shadow:0 3px 0 var(--ink),0 0 0 3px #d4638f}
+/* Which one the case is showing. Violet rather than the equipped pink,
+   because a card can be both and the two answers are different questions:
+   what you are wearing, and what you are looking at. */
+.sitem.sel{background:rgba(255,255,255,.94);box-shadow:0 3px 0 var(--ink),0 0 0 3px #8f7ad4}
+.sitem.on.sel{box-shadow:0 3px 0 var(--ink),0 0 0 3px #d4638f,0 0 0 6px #8f7ad4}
+/* The picture and the name are the control that loads the case; BUY and
+   EQUIP stay their own buttons in the foot, so nothing is nested inside
+   anything. Everything from the swatch to the kind line is one 44px-plus
+   target, which on a phone is the whole top of the card. */
+.spick{display:flex;flex-direction:column;gap:6px;padding:0;margin:0;border:0;
+  background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;min-width:0}
 .swatch{height:56px;border:2.5px solid var(--ink);border-radius:11px;
   box-shadow:inset 0 -6px 12px rgba(74,63,92,.14)}
 /* Same reasoning as the header: the name and the price are the relay's text
@@ -454,7 +514,9 @@ body.touch .sens{display:none}
   min-width:0;overflow-wrap:anywhere}
 .sitem .mini-btn{min-height:44px;padding:8px 13px 9px;font-size:11px}
 .sitem .mini-btn[aria-pressed="true"]{background:linear-gradient(180deg,#fff2c9,#ffe08a)}
-.sitem .mini-btn:focus-visible,.locker .mini-btn:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+.sitem .mini-btn:focus-visible,.locker .mini-btn:focus-visible,
+.spick:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+.spick:focus-visible{border-radius:12px}
 /* The dialog takes focus when it opens; it should say so quietly rather than
    draw a ring around the whole card. */
 .store-card:focus{outline:none}
@@ -470,6 +532,11 @@ body.touch .sens{display:none}
   .sname{font-size:13px}
   .sfoot{flex-wrap:wrap;gap:5px}
   .sitem .mini-btn{flex:1 1 100%;padding:8px 6px 9px}
+  /* The case keeps its size here on purpose: it is the reason the panel
+     exists, and a phone in portrait has the height to spare that a phone
+     on its side does not. */
+  .stage-case{height:clamp(140px,26vh,200px);border-radius:15px}
+  #stageName{font-size:14px}
 }
 /* A phone held sideways, which is how this game is played: the title card is
    already over budget at this height, so the locker gets shorter rather than
@@ -486,6 +553,16 @@ body.touch .sens{display:none}
   .sitem{gap:4px;padding:6px 8px 7px}
   .sname{font-size:13px}
   .skind{font-size:8px}
+  /* A phone on its side has under 400px of height for the whole card, and
+     everything on it is competing. The case gives ground -- but only down
+     to a floor, because a 1.8m character in a 90px window is a thumbnail
+     with a GPU behind it, and the grid below scrolls where the case
+     cannot. */
+  .stage-case{height:clamp(104px,32vh,148px);border-radius:14px}
+  .store-stage{gap:6px}
+  #stageName{font-size:14px}
+  #stageKind{font-size:8px}
+  .stage-tags{padding:0 7px 6px;gap:6px}
 }
 
 /* .screen's wash is tuned for the title and match-over cards, where there is
