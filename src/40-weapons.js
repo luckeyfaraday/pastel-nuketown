@@ -52,150 +52,419 @@ const WBY = {}; WEAPONS.forEach(w => WBY[w.id] = w);
    reach a gameplay value even by accident.
 
    Colours are 24-bit 0xRRGGBB — six digits, never eight. The palette is the
-   town's own — deepened, not replaced: candy rose, caramel enamel, berry
-   lacquer, brass and gold leaf, pistachio. Every skin keeps a wide value
-   range (a bright metal against a dark grip), stays clear of the mitten
-   tones (0xffe0c8 / 0xfff8f0) so the gun separates from the hands holding
-   it, and stays clear of near-black, which belongs to a harsher game than
-   this one. skins.test.js enforces all of it.
+   town's own — deepened, not replaced: blush paper and gold leaf, cobalt
+   glaze, berry glass, aqua ribbon, caramel rattan. Every skin keeps a wide
+   value range (a bright metal against a dark grip), stays clear of the
+   mitten tones (0xffe0c8 / 0xfff8f0) so the gun separates from the hands
+   holding it, and stays clear of near-black, which belongs to a harsher
+   game than this one. skins.test.js enforces all of it.
 
    Each skin is a different KIND of object rather than a repainted gun, and
    the class silhouette is what survives the change: magazine-forward and
    stubby for the SMG, wide-fronted and heavy for the shotgun, long and lean
-   under a raised sight line for the rifle. */
+   under a raised sight line for the rifle.
+
+   What makes them a different kind of object rather than the same outline
+   with more blocks bolted on is that none of them is built from axis-aligned
+   boxes. prism() turns a solid about a pivot and tapers one end away, so a
+   fold, a curved spout, a barley twist and a drawn glass point are all
+   drawable; and quad() takes a colour per corner, so a face can ramp instead
+   of sitting flat. A folded sheet of paper, a glazed pot and a rod of blown
+   glass are all read from the way light runs across a curve or a crease —
+   which is a gradient — so that is where the material lives. */
+
+/* A part's own colour, lit at one end of an axis and shaded at the other:
+   the ramp that makes a face read as a surface rather than a painted plane.
+   Two multipliers rather than two hexes, so a highlight always belongs to
+   the part it highlights and a palette edit carries through every face. */
+function skinRamp(hex, hi, lo, axis) {
+  return { axis: axis || 'y', from: Cx(hex, hi), to: Cx(hex, lo) };
+}
+
 const WEAPON_SKINS = {
-  /* COTTON CLOUD — a fairground candy-floss spinner. The gun is a little
-     brass-and-enamel machine off a seaside pier: a striped awning over the
-     housing, a spinning floss bowl slung forward-low where the magazine
-     was, a hand crank on the right, and a paper cone at the front with the
-     spun sugar still gathering on it. No stock, just a paddle handle — so
-     it stays short, round and fast in the hands. */
+  /* FOLDED PAPER CRANE — origami, held. Every surface is a folded sheet:
+     the receiver is two gables meeting at a printed gold crease, the wings
+     are creased panels standing up off the back, the neck runs down to a
+     head with a beak drawn to a single point, and the tail fans up and back
+     where a stock would be. Blush washi outside, indigo on the reverse of
+     every fold, gold leaf along the cut edges.
+
+     Nothing here is a box. Paper has no flat colour — it has a bright edge
+     at the fold and a dark one in the valley, which is why every panel
+     carries a ramp rather than a tint; that ramp is the entire difference
+     between folded paper and a pink brick.
+
+     Compact and magazine-forward survives intact: the crane's folded keel
+     hangs forward and low, raked ahead of the trigger hand, exactly where a
+     magazine reads from across a street. */
   'smg-cottoncloud': {
-    weapon: 'smg', name: 'Cotton Cloud',
-    col: { body: 0xff8fb4, accent: 0x9fe8c8, metal: 0xf5c86e, grip: 0x7a6390 },
-    flash: 0xffd0e8, tracer: 0xff8fb4,
-    muzzle: [0, 0.018, -0.655],
-    hands: [[0, -0.115, 0.085], [0, -0.085, -0.300]],
+    weapon: 'smg', name: 'Folded Paper Crane',
+    col: { body: 0xef8fae, accent: 0x8c7ad6, metal: 0xf2c96e, grip: 0x6b5a86 },
+    flash: 0xffc078, tracer: 0xf49ac2,
+    muzzle: [0, 0.020, -0.638],
+    hands: [[0, -0.120, 0.098], [0, -0.108, -0.178]],
     build(B, P) {
       const { body, acc, met, grip, c } = P;
-      const floss = C(0xffc4e2);   // spun sugar, the same pink as the town's blossom
-      B.box([-0.058, -0.030, -0.24], [0.058, 0.070, 0.16], body, { top: Cx(c.body, 1.06) });
-      // striped awning — the fairground tell, and the gun's top line
-      B.box([-0.072, 0.070, -0.22], [0.072, 0.104, 0.06], acc);
-      B.box([-0.078, 0.104, -0.20], [0.078, 0.120, 0.04], Cx(c.accent, 1.08));
-      B.box([-0.030, 0.066, -0.23], [0.030, 0.124, 0.07], body);            // awning stripe
-      B.box([-0.026, 0.120, -0.16], [0.026, 0.156, -0.13], met);            // brass ring sight
-      // floss bowl: slung forward and low, so the gun still reads mag-forward
-      B.box([-0.084, -0.180, -0.230], [0.084, -0.020, -0.030], met, { top: Cx(c.metal, 1.08) });
-      B.box([-0.092, -0.140, -0.245], [0.092, -0.080, -0.015], acc);        // bowl rim band
-      B.box([-0.072, -0.216, -0.210], [0.072, -0.180, -0.050], Cx(c.metal, 0.86)); // bowl taper
-      B.box([0.092, -0.135, -0.150], [0.116, -0.090, -0.110], Cx(c.metal, 1.12)); // crank boss
-      B.box([0.104, -0.190, -0.145], [0.124, -0.120, -0.115], met);         // crank arm
-      // paper cone: four widening steps, the floss gathering past the lip
-      B.box([-0.034, -0.010, -0.36], [0.034, 0.046, -0.24], met);           // spout neck
-      B.box([-0.046, -0.022, -0.44], [0.046, 0.058, -0.36], body);
-      B.box([-0.060, -0.036, -0.51], [0.060, 0.072, -0.44], acc);
-      B.box([-0.074, -0.050, -0.56], [0.074, 0.086, -0.51], Cx(c.body, 1.10)); // cone lip
-      B.box([-0.052, -0.028, -0.60], [0.052, 0.064, -0.555], floss);
-      B.box([-0.034, 0.002, -0.63], [0.034, 0.048, -0.60], Cx(0xffc4e2, 1.06));
-      B.box([-0.062, 0.000, -0.14], [0.062, 0.040, -0.06], acc);            // ticket plate
-      B.box([-0.044, -0.215, 0.030], [0.044, -0.010, 0.140], grip);         // paddle handle
-      B.box([-0.052, -0.245, 0.020], [0.052, -0.205, 0.150], Cx(c.grip, 1.32));
-      B.box([-0.050, -0.010, 0.160], [0.050, 0.062, 0.200], met);           // brass cap, no stock
+
+      // ---- receiver: two gables meeting at the fold, i.e. one folded sheet
+      B.prism([-0.070, -0.036, -0.300], [0.070, 0.062, 0.150], body, {
+        taperAxis: 'y', taper: [0.30, 0.92], taperEnd: 'max',
+        gradient: skinRamp(c.body, 1.20, 0.70)
+      });
+      B.prism([-0.070, -0.108, -0.284], [0.070, -0.036, 0.132], body, {
+        taperAxis: 'y', taper: [0.34, 0.90], taperEnd: 'min',
+        gradient: skinRamp(c.body, 0.94, 0.60)
+      });
+      // the gold-leaf cut edge along the seam where the two folds meet
+      B.prism([-0.074, -0.043, -0.286], [0.074, -0.029, 0.134], met, {
+        gradient: skinRamp(c.metal, 1.16, 0.84)
+      });
+      // indigo shows on the reverse of the fold, at the open rear of the sheet
+      B.prism([-0.062, -0.070, 0.140], [0.062, 0.048, 0.176], acc, {
+        taperAxis: 'z', taper: [0.86, 0.80], taperEnd: 'max',
+        gradient: skinRamp(c.accent, 1.14, 0.62)
+      });
+
+      /* ---- wings: creased panels stood up off the back, swept and tapered.
+         The sheet is dyed on one side only, so the ramp runs between two
+         different colours rather than two shades of one — indigo down in the
+         valley of the fold, blush out at the lit tip. */
+      for (const s of [1, -1]) {
+        const x0 = s > 0 ? 0.014 : -0.126, x1 = s > 0 ? 0.126 : -0.014;
+        B.prism([x0, 0.042, -0.130], [x1, 0.058, 0.230], acc, {
+          rot: [0, -0.30 * s, 1.02 * s], pivot: [0.014 * s, 0.050, 0.020],
+          taperAxis: 'x', taper: [0.44, 0.32], taperEnd: s > 0 ? 'max' : 'min',
+          gradient: { axis: 'y', from: Cx(c.accent, 0.78), to: Cx(c.body, 1.16) }
+        });
+      }
+
+      // ---- neck, head, beak: the beak tapers to a single point, and that
+      // point is the muzzle. A cone is not something box() could ever draw.
+      B.prism([-0.028, -0.006, -0.442], [0.028, 0.054, -0.236], body, {
+        rot: [0.18, 0, 0], pivot: [0, 0.024, -0.236],
+        taperAxis: 'z', taper: [0.64, 0.70], taperEnd: 'min',
+        gradient: skinRamp(c.body, 1.14, 0.72)
+      });
+      B.prism([-0.030, -0.014, -0.516], [0.030, 0.048, -0.418], body, {
+        gradient: skinRamp(c.body, 1.10, 0.66)
+      });
+      B.prism([-0.026, 0.044, -0.500], [0.026, 0.086, -0.440], acc, {
+        taperAxis: 'y', taper: [0.30, 0.44], taperEnd: 'max',
+        gradient: skinRamp(c.accent, 1.24, 0.66)
+      });                                                                    // folded crest
+      B.prism([-0.023, -0.004, -0.638], [0.023, 0.040, -0.502], met, {
+        taperAxis: 'z', taper: 0, taperEnd: 'min',
+        gradient: { axis: 'z', from: Cx(c.metal, 1.28), to: Cx(c.metal, 0.74) }
+      });                                                                    // beak
+
+      // ---- the folded keel, raked forward and low: the magazine read
+      const keel = { rot: [0.20, 0, 0], pivot: [0, -0.040, -0.130] };
+      B.prism([-0.048, -0.246, -0.240], [0.048, -0.040, -0.020], acc,
+        Object.assign({
+          taperAxis: 'y', taper: [0.62, 0.78], taperEnd: 'min',
+          gradient: skinRamp(c.accent, 1.08, 0.54)
+        }, keel));
+      B.prism([-0.054, -0.272, -0.222], [0.054, -0.240, -0.038], met,
+        Object.assign({ gradient: skinRamp(c.metal, 1.12, 0.78) }, keel));
+      B.prism([-0.050, -0.150, -0.256], [0.050, -0.062, -0.208], body,
+        Object.assign({ gradient: skinRamp(c.body, 1.12, 0.66) }, keel));     // folded toe
+
+      // ---- tail: a fan that widens and thins as it lifts, standing in for
+      // the stock without ever stopping being a tail
+      B.prism([-0.050, -0.004, 0.130], [0.050, 0.068, 0.310], body, {
+        rot: [-0.34, 0, 0], pivot: [0, 0.032, 0.130],
+        taperAxis: 'z', taper: [1.12, 0.46], taperEnd: 'max',
+        gradient: { axis: 'z', from: Cx(c.body, 1.16), to: Cx(c.accent, 0.90) }
+      });
+      B.prism([-0.050, 0.020, 0.296], [0.050, 0.050, 0.312], met, {
+        rot: [-0.34, 0, 0], pivot: [0, 0.032, 0.130],
+        taperAxis: 'z', taper: [1.10, 0.50], taperEnd: 'max',
+        gradient: skinRamp(c.metal, 1.16, 0.76)
+      });                                                                    // gilt tail edge
+
+      // ---- handle: another fold, in the indigo of the paper's reverse
+      B.prism([-0.042, -0.218, 0.052], [0.042, -0.010, 0.172], grip, {
+        rot: [0.14, 0, 0], pivot: [0, -0.010, 0.112],
+        taperAxis: 'y', taper: [0.74, 0.92], taperEnd: 'min',
+        gradient: skinRamp(c.grip, 1.36, 0.74)
+      });
+      B.prism([-0.046, -0.088, 0.048], [0.046, -0.052, 0.176], met, {
+        rot: [0.14, 0, 0], pivot: [0, -0.010, 0.112],
+        gradient: skinRamp(c.metal, 1.10, 0.80)
+      });                                                                    // gold band
     }
   },
-  /* TOASTED MALLOW — a little mint-enamel camp stove in brass. Pot-bellied
-     and riveted, with a hinged fire door on the side, a chimney stub standing
-     in for the bead sight, a walnut bellows slung underneath as the fore-end,
-     and a wide flared mouth with a mallow toasting in it. Fat, front-heavy
-     and short: everything a scattergun silhouette is made of. The cool
-     enamel is what keeps the warm mallow at the mouth reading as the focus,
-     and what separates it from the butter-and-coral gun underneath. */
+  /* COBALT WILLOW TEAPOT — glazed porcelain and gilt, off a different shelf
+     entirely. The receiver is a thrown pot: a belly that swells out of a
+     narrow foot and draws back in at the shoulder, a domed lid with a
+     faceted gold finial, and a gilt band round the equator. The mouth is a
+     poured spout that lifts and flares to a gold-rimmed lip, and the stock
+     is the pot's handle — a real open loop you can see the street through.
+
+     Glaze is the whole material argument. A curved glazed surface is dark
+     where it turns away and bright along the shoulder, so every part of the
+     pot ramps from one to the other; the taper supplies the curve and the
+     ramp supplies the glaze, and neither alone would read as porcelain.
+
+     Wide and heavy-fronted is untouched: the pot is the fattest receiver of
+     the three, and the spout lip is the widest thing on any of them at
+     0.28 across. That flare IS the scattergun read — nothing may narrow it. */
   'shotgun-toastedmallow': {
-    weapon: 'shotgun', name: 'Toasted Mallow',
-    col: { body: 0x6fd6ae, accent: 0xf2a04e, metal: 0xf7d98a, grip: 0x8a6a52 },
-    flash: 0xffc07a, tracer: 0xffa85e,
-    muzzle: [0, 0.006, -0.640],
-    hands: [[0, -0.100, 0.130], [0, -0.185, -0.200]],
+    weapon: 'shotgun', name: 'Cobalt Willow Teapot',
+    col: { body: 0x7885dd, accent: 0xa8baf0, metal: 0xf5cf7a, grip: 0x8a6444 },
+    flash: 0xffd489, tracer: 0x97a9f0,
+    muzzle: [0, 0.058, -0.612],
+    hands: [[0, -0.115, 0.128], [0, -0.150, -0.190]],
     build(B, P) {
       const { body, acc, met, grip, c } = P;
-      const mallow = C(0xf7c98a);   // a mallow held over the fire a moment too long
-      B.box([-0.086, -0.086, -0.30], [0.086, 0.078, 0.16], body, { top: Cx(c.body, 1.08) });
-      B.box([-0.094, -0.096, -0.22], [0.094, 0.086, -0.17], met);           // rivet hoop
-      B.box([-0.094, -0.096, -0.02], [0.094, 0.086, 0.03], met);            // rivet hoop
-      B.box([-0.100, -0.050, -0.15], [-0.086, 0.046, -0.05], acc);          // fire door
-      B.box([-0.108, -0.020, -0.12], [-0.100, 0.012, -0.08], Cx(c.metal, 1.14)); // door knob
-      B.box([0.086, -0.050, -0.15], [0.100, 0.046, -0.05], acc);            // maker's plate
-      B.box([-0.026, 0.078, -0.20], [0.026, 0.150, -0.14], met);            // chimney stub
-      B.box([-0.036, 0.150, -0.21], [0.036, 0.172, -0.13], Cx(c.metal, 1.10)); // stack cap
-      // the mouth: four steps out to 0.26 wide. This flare IS the scattergun
-      // read, so nothing may be added that narrows or fills it.
-      B.box([-0.080, -0.060, -0.40], [0.080, 0.062, -0.30], met, { top: Cx(c.metal, 1.06) });
-      B.box([-0.098, -0.078, -0.47], [0.098, 0.080, -0.40], Cx(c.metal, 1.02));
-      B.box([-0.118, -0.096, -0.53], [0.118, 0.098, -0.47], acc);
-      B.box([-0.130, -0.108, -0.565], [0.130, 0.110, -0.53], Cx(c.accent, 1.10)); // lip
-      B.box([-0.086, -0.070, -0.60], [0.086, 0.074, -0.545], mallow);       // mallow
-      B.box([-0.060, -0.046, -0.63], [0.060, 0.050, -0.60], Cx(0xf7c98a, 0.86)); // toasted tip
-      // bellows fore-end: three folds so the leather concertina reads
-      B.box([-0.070, -0.150, -0.30], [0.070, -0.080, -0.10], Cx(c.grip, 1.34));
-      B.box([-0.078, -0.146, -0.28], [0.078, -0.116, -0.25], grip);
-      B.box([-0.078, -0.146, -0.21], [0.078, -0.116, -0.18], grip);
-      B.box([-0.078, -0.146, -0.14], [0.078, -0.116, -0.11], grip);
-      B.box([-0.048, -0.190, 0.080], [0.048, -0.010, 0.190], grip);         // wooden grip
-      /* The stock is the nearest and largest thing on screen in first
-         person, so it wears the enamel, not the wood. Walnut that big at
-         that distance is a brown slab across the bottom of the view. */
-      B.box([-0.058, 0.000, 0.160], [0.058, 0.086, 0.380], body, { top: Cx(c.body, 1.10) });
-      B.box([-0.034, 0.086, 0.200], [0.034, 0.104, 0.350], Cx(c.grip, 1.42)); // walnut cheek strip
-      B.box([-0.064, -0.010, 0.365], [0.064, 0.096, 0.410], met);           // brass butt plate
+
+      // ---- the thrown pot: out of the foot, round the belly, in at the
+      // shoulder. Two tapers back to back is a profile, not a box.
+      B.prism([-0.104, -0.132, -0.300], [0.104, -0.010, 0.130], body, {
+        taperAxis: 'y', taper: [0.58, 0.72], taperEnd: 'min',
+        gradient: skinRamp(c.body, 1.02, 0.56)
+      });
+      B.prism([-0.104, -0.010, -0.300], [0.104, 0.098, 0.130], body, {
+        taperAxis: 'y', taper: [0.70, 0.84], taperEnd: 'max',
+        gradient: skinRamp(c.body, 1.26, 0.86)
+      });
+      B.prism([-0.109, -0.021, -0.306], [0.109, 0.001, 0.136], met, {
+        gradient: skinRamp(c.metal, 1.18, 0.80)
+      });                                                                    // gilt equator
+      // painted panels, the willow the thing is named for
+      for (const s of [1, -1]) {
+        const x0 = s > 0 ? 0.100 : -0.113, x1 = s > 0 ? 0.113 : -0.100;
+        B.prism([x0, -0.076, -0.170], [x1, 0.042, 0.020], acc, {
+          taperAxis: 'x', taper: [0.86, 0.82], taperEnd: s > 0 ? 'max' : 'min',
+          gradient: skinRamp(c.accent, 1.16, 0.72)
+        });
+      }
+      B.prism([-0.068, -0.156, -0.248], [0.068, -0.126, 0.074], grip, {
+        taperAxis: 'y', taper: [0.94, 0.94], taperEnd: 'min',
+        gradient: skinRamp(c.grip, 1.30, 0.84)
+      });                                                                    // foot ring
+
+      // ---- lid and finial. The finial is a cube turned an eighth turn, so
+      // it stands as a gold diamond and not another little box.
+      B.prism([-0.078, 0.098, -0.238], [0.078, 0.110, 0.078], met, {
+        gradient: skinRamp(c.metal, 1.20, 0.88)
+      });
+      B.prism([-0.072, 0.110, -0.228], [0.072, 0.158, 0.068], body, {
+        taperAxis: 'y', taper: [0.28, 0.32], taperEnd: 'max',
+        gradient: skinRamp(c.body, 1.32, 0.94)
+      });
+      B.prism([-0.026, 0.152, -0.106], [0.026, 0.200, -0.054], met, {
+        rot: [0, 0.785, 0],
+        gradient: skinRamp(c.metal, 1.26, 0.82)
+      });
+
+      // ---- the spout: it lifts as it pours and flares to a gilt lip
+      const lift = { rot: [0.16, 0, 0], pivot: [0, 0.009, -0.275] };
+      B.prism([-0.072, -0.040, -0.436], [0.072, 0.058, -0.275], body,
+        Object.assign({
+          taperAxis: 'z', taper: [1.30, 1.22], taperEnd: 'min',
+          gradient: skinRamp(c.body, 1.12, 0.70)
+        }, lift));
+      const pour = { rot: [0.30, 0, 0], pivot: [0, 0.009, -0.425] };
+      B.prism([-0.100, -0.060, -0.576], [0.100, 0.078, -0.425], body,
+        Object.assign({
+          taperAxis: 'z', taper: [1.36, 1.20], taperEnd: 'min',
+          gradient: skinRamp(c.body, 1.24, 0.76)
+        }, pour));
+      B.prism([-0.140, -0.072, -0.606], [0.140, 0.092, -0.560], met,
+        Object.assign({
+          taperAxis: 'z', taper: [1.02, 1.02], taperEnd: 'min',
+          gradient: skinRamp(c.metal, 1.24, 0.78)
+        }, pour));                                                           // lip, 0.28 across
+      B.prism([-0.108, -0.052, -0.596], [0.108, 0.070, -0.566], acc,
+        Object.assign({ gradient: skinRamp(c.accent, 1.10, 0.58) }, pour));  // glazed throat
+      B.prism([-0.015, 0.076, -0.548], [0.015, 0.112, -0.508], met,
+        Object.assign({
+          taperAxis: 'y', taper: [0.34, 0.60], taperEnd: 'max',
+          gradient: skinRamp(c.metal, 1.28, 0.86)
+        }, pour));                                                           // gilt bead sight
+
+      // ---- the handle, which is the stock. The stock is the nearest and
+      // largest thing on screen in first person, so it wears the glaze, and
+      // the caramel rattan stays a wrap rather than a slab.
+      const up = { rot: [-0.36, 0, 0], pivot: [0, 0.087, 0.080] };
+      B.prism([-0.050, 0.062, 0.080], [0.050, 0.112, 0.292], body,
+        Object.assign({ gradient: skinRamp(c.body, 1.22, 0.84) }, up));
+      for (const z of [0.150, 0.232]) {
+        B.prism([-0.053, 0.058, z], [0.053, 0.116, z + 0.030], grip,
+          Object.assign({ gradient: skinRamp(c.grip, 1.34, 0.86) }, up));    // rattan wrap
+      }
+      B.prism([-0.048, -0.030, 0.296], [0.048, 0.176, 0.362], body, {
+        rot: [0.20, 0, 0], pivot: [0, 0.073, 0.330],
+        taperAxis: 'z', taper: [0.92, 1.00], taperEnd: 'max',
+        gradient: skinRamp(c.body, 1.14, 0.68)
+      });                                                                    // the bend
+      B.prism([-0.046, -0.062, 0.150], [0.046, -0.012, 0.330], body, {
+        rot: [0.26, 0, 0], pivot: [0, -0.037, 0.330],
+        gradient: skinRamp(c.body, 0.98, 0.62)
+      });                                                                    // lower arm
+      B.prism([-0.052, -0.074, 0.336], [0.052, 0.004, 0.372], met, {
+        rot: [0.26, 0, 0], pivot: [0, -0.037, 0.330],
+        gradient: skinRamp(c.metal, 1.16, 0.78)
+      });                                                                    // gilt ferrule
+
+      // ---- trigger grip and the warming stand the front hand rides on
+      B.prism([-0.046, -0.202, 0.068], [0.046, -0.020, 0.192], grip, {
+        rot: [0.16, 0, 0], pivot: [0, -0.020, 0.130],
+        taperAxis: 'y', taper: [0.80, 0.90], taperEnd: 'min',
+        gradient: skinRamp(c.grip, 1.36, 0.78)
+      });
+      B.prism([-0.050, -0.084, 0.062], [0.050, -0.046, 0.196], met, {
+        rot: [0.16, 0, 0], pivot: [0, -0.020, 0.130],
+        gradient: skinRamp(c.metal, 1.12, 0.82)
+      });
+      B.prism([-0.062, -0.190, -0.292], [0.062, -0.104, -0.088], grip, {
+        taperAxis: 'y', taper: [0.78, 0.88], taperEnd: 'min',
+        gradient: skinRamp(c.grip, 1.28, 0.74)
+      });
+      B.prism([-0.070, -0.152, -0.302], [0.070, -0.126, -0.078], met, {
+        gradient: skinRamp(c.metal, 1.14, 0.84)
+      });
     }
   },
-  /* BERRY SWIRL — a berry-lacquer brass spyglass. The scope is an actual
-     draw-tube telescope, three segments widening toward a gold objective
-     bell, standing on two turned pillars; the barrel is a slim lacquered
-     tube ringed in gold leaf and finished with a petal aperture, and the
-     stock is a thin curved shoulder rest. Long, lean, and unmistakably an
-     instrument for hitting one thing a long way off. */
+  /* TWISTED GLASS CANE — a Victorian glass friendship cane, drawn out on a
+     rod and twisted while it was still soft. The whole gun is one shaft: six
+     segments, each rolled a third of a turn past the one behind it, so the
+     inked corners wind down the length as a barley twist and an aqua ribbon
+     spirals through the berry glass with them. It ends in a collar turned on
+     the diagonal and a tip drawn to a point; a gathered gob of glass hangs
+     under the middle with the drip still on it, and the stock is the cane's
+     crook — back, up, over and down again.
+
+     A twist is the one thing an axis-aligned box could not fake at any block
+     count, and it is what makes this glass rather than a purple tube. The
+     glass tones stay deep on purpose: a pale rod is the failure the pale
+     surfaces of this town punish, and berry is what survives being seen
+     against a cream porch.
+
+     Long and lean under a raised sight line, exactly as before: the sight is
+     a glass rail on two pillars, with a diamond blade up front and a notch at
+     the back, and you look along it. */
   'rifle-berryswirl': {
-    weapon: 'rifle', name: 'Berry Swirl',
-    col: { body: 0xd88ab8, accent: 0xf2c96e, metal: 0xdcc8ec, grip: 0x6e5480 },
-    flash: 0xf0c0ff, tracer: 0xd486d8,
-    muzzle: [0, 0.022, -0.930],
-    hands: [[0, -0.100, 0.165], [0, -0.045, -0.300]],
+    weapon: 'rifle', name: 'Twisted Glass Cane',
+    col: { body: 0xb865a6, accent: 0x74c9d2, metal: 0xd9c4f2, grip: 0x6d5288 },
+    flash: 0xf5a8e4, tracer: 0xd47ad4,
+    muzzle: [0, 0.010, -0.965],
+    hands: [[0, -0.105, 0.150], [0, -0.030, -0.300]],
     build(B, P) {
       const { body, acc, met, grip, c } = P;
-      B.box([-0.044, -0.026, -0.34], [0.044, 0.058, 0.22], body, { top: Cx(c.body, 1.06) });
-      B.box([-0.048, -0.030, -0.26], [0.048, 0.062, -0.23], acc);           // gold-leaf inlay
-      B.box([-0.048, -0.030, 0.10], [0.048, 0.062, 0.13], acc);             // gold-leaf inlay
-      // slim lacquered barrel, ringed twice, ending in a four-petal aperture
-      B.box([-0.024, 0.000, -0.66], [0.024, 0.044, -0.34], met);
-      B.box([-0.020, 0.004, -0.86], [0.020, 0.040, -0.66], Cx(c.metal, 1.06));
-      B.box([-0.030, -0.004, -0.55], [0.030, 0.048, -0.52], acc);
-      B.box([-0.028, -0.002, -0.72], [0.028, 0.046, -0.69], acc);
-      B.box([-0.038, 0.014, -0.905], [0.038, 0.030, -0.86], acc);
-      B.box([-0.010, -0.014, -0.905], [0.010, 0.058, -0.86], Cx(c.accent, 1.12));
-      // draw-tube telescope on turned pillars — the raised sight line, and
-      // the taper front-to-back is what makes it a spyglass and not a scope
-      B.box([-0.018, 0.058, -0.22], [0.018, 0.108, -0.17], met);            // front pillar
-      B.box([-0.018, 0.058, 0.02], [0.018, 0.108, 0.07], met);              // rear pillar
-      // the draws alternate deep berry and porcelain — that banding is the
-      // swirl the skin is named for, and it stops the long top line from
-      // becoming one flat berry slab at viewmodel distance
-      B.box([-0.026, 0.108, 0.03], [0.026, 0.152, 0.13], Cx(c.body, 0.82)); // eyepiece draw
-      B.box([-0.034, 0.104, -0.10], [0.034, 0.160, 0.03], Cx(c.metal, 1.02)); // middle draw
-      B.box([-0.044, 0.098, -0.26], [0.044, 0.168, -0.10], Cx(c.body, 0.82)); // objective draw
-      B.box([-0.050, 0.094, -0.30], [0.050, 0.172, -0.26], acc);            // objective bell
-      B.box([-0.046, 0.100, -0.315], [0.046, 0.166, -0.30], C(0xd8f2ff));   // front lens
-      B.box([-0.030, 0.112, 0.13], [0.030, 0.148, 0.145], C(0xd8f2ff));     // eyepiece lens
-      B.box([-0.032, -0.170, -0.055], [0.032, -0.020, 0.060], Cx(c.body, 0.92)); // magazine
-      B.box([-0.036, -0.190, -0.045], [0.036, -0.160, 0.050], acc);         // gold floor plate
-      B.box([-0.042, -0.195, 0.115], [0.042, -0.005, 0.215], grip);
-      B.box([-0.046, -0.070, 0.120], [0.046, -0.030, 0.215], acc);          // gold grip band
-      B.box([-0.038, 0.020, 0.22], [0.038, 0.070, 0.46], body);             // shoulder rest
-      B.box([-0.030, -0.070, 0.30], [0.030, -0.020, 0.46], Cx(c.metal, 1.02)); // porcelain lower rail
-      B.box([-0.040, 0.070, 0.26], [0.040, 0.094, 0.42], Cx(c.body, 1.10)); // cheek
-      B.box([-0.042, -0.080, 0.44], [0.042, 0.086, 0.48], Cx(c.body, 1.08)); // shoulder pad
-      B.box([-0.046, -0.010, 0.435], [0.046, 0.026, 0.485], acc);           // gold cap band
+      const AX = 0.010;                                    // the shaft's axis
+
+      /* ---- the twist. Each segment carries the phase of the one behind it
+         plus about a third of a turn, and the ribbon rides the same rotation,
+         so it winds instead of running straight. The ribbon is drawn without
+         ink: six segments of inked outline is the twist, and inking the
+         ribbon as well turns a spiral into a scribble at viewmodel scale. */
+      const SEG = 6, LEN = 0.170;
+      for (let i = 0; i < SEG; i++) {
+        const z0 = -0.900 + i * LEN, z1 = z0 + LEN;
+        const spin = { rot: [0, 0, i * 0.55], pivot: [0, AX, 0] };
+        const w = 0.038 + i * 0.0022;                      // thickens toward the hand
+        B.prism([-w, AX - w, z0], [w, AX + w, z1], body,
+          Object.assign({ gradient: skinRamp(c.body, 1.26, 0.58) }, spin));
+        for (const s of [1, -1]) {
+          const x0 = s > 0 ? w - 0.008 : -(w + 0.013), x1 = s > 0 ? w + 0.013 : -(w - 0.008);
+          B.prism([x0, AX - 0.013, z0 + 0.006], [x1, AX + 0.013, z1 - 0.006], acc,
+            Object.assign({ noEdge: true, gradient: skinRamp(c.accent, 1.24, 0.66) }, spin));
+        }
+      }
+
+      // ---- the drawn tip: a collar on the diagonal, then glass pulled to a
+      // point. taper 0 is a cone, and a cone is where the flash leaves.
+      B.prism([-0.046, AX - 0.046, -0.906], [0.046, AX + 0.046, -0.856], acc, {
+        rot: [0, 0, 0.785], pivot: [0, AX, -0.881],
+        gradient: skinRamp(c.accent, 1.28, 0.62)
+      });
+      B.prism([-0.030, AX - 0.028, -0.965], [0.030, AX + 0.028, -0.896], met, {
+        taperAxis: 'z', taper: 0.30, taperEnd: 'min',
+        gradient: { axis: 'z', from: Cx(c.metal, 1.28), to: Cx(c.body, 0.90) }
+      });
+
+      // ---- the sight line: rail on two pillars, diamond blade, rear notch
+      for (const z of [-0.318, 0.032]) {
+        B.prism([-0.015, AX + 0.028, z], [0.015, 0.092, z + 0.048], met, {
+          taperAxis: 'y', taper: [0.66, 0.66], taperEnd: 'max',
+          gradient: skinRamp(c.metal, 1.18, 0.70)
+        });
+      }
+      B.prism([-0.021, 0.092, -0.328], [0.021, 0.118, 0.098], met, {
+        gradient: skinRamp(c.metal, 1.22, 0.78)
+      });
+      B.prism([-0.032, 0.110, -0.360], [0.032, 0.174, -0.330], acc, {
+        rot: [0, 0, 0.785], pivot: [0, 0.142, -0.345],
+        gradient: skinRamp(c.accent, 1.30, 0.62)
+      });                                                                    // blade
+      for (const s of [1, -1]) {
+        const x0 = s > 0 ? 0.013 : -0.040, x1 = s > 0 ? 0.040 : -0.013;
+        B.prism([x0, 0.118, 0.062], [x1, 0.166, 0.096], acc, {
+          taperAxis: 'y', taper: [0.70, 0.84], taperEnd: 'max',
+          gradient: skinRamp(c.accent, 1.22, 0.66)
+        });
+      }                                                                      // notch
+      B.prism([-0.034, 0.112, -0.166], [0.034, 0.176, -0.102], body, {
+        rot: [0, 0, 0.785], pivot: [0, 0.144, -0.134],
+        gradient: { axis: 'y', from: Cx(c.body, 0.72), to: Cx(c.metal, 1.22) }
+      });                                                                    // glass bead
+
+      // ---- the gathered gob, with the drip still hanging off it
+      B.prism([-0.044, -0.196, -0.086], [0.044, -0.006, 0.086], grip, {
+        taperAxis: 'y', taper: [0.42, 0.50], taperEnd: 'min',
+        gradient: skinRamp(c.grip, 1.44, 0.76)
+      });
+      B.prism([-0.020, -0.248, -0.038], [0.020, -0.190, 0.038], body, {
+        taperAxis: 'y', taper: 0, taperEnd: 'min',
+        gradient: skinRamp(c.body, 1.14, 0.56)
+      });
+
+      // ---- fore collar, turned on the diagonal, where the front hand sits
+      B.prism([-0.056, AX - 0.052, -0.372], [0.056, AX + 0.052, -0.246], met, {
+        rot: [0, 0, 0.785], pivot: [0, AX, -0.309],
+        gradient: skinRamp(c.metal, 1.24, 0.60)
+      });
+      B.prism([-0.046, AX - 0.042, -0.384], [0.046, AX + 0.042, -0.366], acc, {
+        rot: [0, 0, 0.785], pivot: [0, AX, -0.309],
+        gradient: skinRamp(c.accent, 1.20, 0.70)
+      });
+
+      // ---- grip
+      B.prism([-0.044, -0.206, 0.098], [0.044, -0.010, 0.214], grip, {
+        rot: [0.12, 0, 0], pivot: [0, -0.010, 0.156],
+        taperAxis: 'y', taper: [0.76, 0.88], taperEnd: 'min',
+        gradient: skinRamp(c.grip, 1.42, 0.74)
+      });
+      B.prism([-0.048, -0.092, 0.094], [0.048, -0.048, 0.218], acc, {
+        rot: [0.12, 0, 0], pivot: [0, -0.010, 0.156],
+        gradient: skinRamp(c.accent, 1.16, 0.72)
+      });
+
+      // ---- the crook: back, up, over and down again, the way a cane ends
+      B.prism([-0.042, -0.024, 0.110], [0.042, 0.062, 0.368], body, {
+        rot: [-0.13, 0, 0], pivot: [0, 0.019, 0.110],
+        taperAxis: 'z', taper: [0.90, 0.86], taperEnd: 'max',
+        gradient: skinRamp(c.body, 1.22, 0.66)
+      });
+      B.prism([-0.038, 0.030, 0.348], [0.038, 0.152, 0.424], body, {
+        rot: [0.36, 0, 0], pivot: [0, 0.058, 0.352],
+        taperAxis: 'y', taper: [0.90, 0.94], taperEnd: 'max',
+        gradient: skinRamp(c.body, 1.30, 0.78)
+      });
+      B.prism([-0.036, -0.070, 0.404], [0.036, 0.066, 0.468], grip, {
+        rot: [0.22, 0, 0], pivot: [0, 0.000, 0.418],
+        taperAxis: 'y', taper: [0.70, 0.80], taperEnd: 'min',
+        gradient: skinRamp(c.grip, 1.36, 0.74)
+      });
+      /* The shoulder end is the nearest and largest face on screen, so it
+         wears the deep plum: the pale glass that suits a rail this close to
+         the lens is the tone that disappears into the mitten holding it. */
+      B.prism([-0.046, -0.078, 0.452], [0.046, 0.096, 0.492], grip, {
+        taperAxis: 'z', taper: [0.86, 0.86], taperEnd: 'max',
+        gradient: { axis: 'y', from: Cx(c.grip, 0.86), to: Cx(c.body, 1.10) }
+      });                                                                    // shoulder end
     }
   }
 };

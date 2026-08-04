@@ -7,21 +7,21 @@
 export const COSMETICS = Object.freeze([
   Object.freeze({
     id: 'smg-cottoncloud',
-    displayName: 'Cotton Cloud',
+    displayName: 'Folded Paper Crane',
     type: 'weapon',
     slot: 'smg',
     priceEnvVar: 'STRIPE_PRICE_SMG_COTTONCLOUD'
   }),
   Object.freeze({
     id: 'shotgun-toastedmallow',
-    displayName: 'Toasted Mallow',
+    displayName: 'Cobalt Willow Teapot',
     type: 'weapon',
     slot: 'shotgun',
     priceEnvVar: 'STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW'
   }),
   Object.freeze({
     id: 'rifle-berryswirl',
-    displayName: 'Berry Swirl',
+    displayName: 'Twisted Glass Cane',
     type: 'weapon',
     slot: 'rifle',
     priceEnvVar: 'STRIPE_PRICE_RIFLE_BERRYSWIRL'
