@@ -3310,11 +3310,21 @@ GeoBuilder.prototype.quad = function (a, b, c, d, color, noEdge) {
   let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
   const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
   const P = this.pos, N = this.nrm, K = this.col;
-  const tri = (p, q, r) => {
+  /* `color` is normally ONE colour for the whole face, which is why every
+     face in the game is flat. It may instead be an ARRAY of colours, one per
+     corner in a,b,c,d order, and then the face carries a gradient. Nothing
+     in the game passes an array, so the single-colour path below is exactly
+     the code it always was. A short array reuses its last entry, which is
+     what makes tri()'s degenerate fourth corner fall out correctly. */
+  const cs = Array.isArray(color) ? color : null;
+  const cAt = i => cs[i] || cs[cs.length - 1];
+  const tri = (p, q, r, i, j, k) => {
     P.push(p[0], p[1], p[2], q[0], q[1], q[2], r[0], r[1], r[2]);
-    for (let i = 0; i < 3; i++) { N.push(nx, ny, nz); K.push(color.r, color.g, color.b); }
+    for (let n = 0; n < 3; n++) N.push(nx, ny, nz);
+    if (cs) for (const t of [i, j, k]) { const c2 = cAt(t); K.push(c2.r, c2.g, c2.b); }
+    else for (let n = 0; n < 3; n++) K.push(color.r, color.g, color.b);
   };
-  tri(a, b, c); tri(a, c, d);
+  tri(a, b, c, 0, 1, 2); tri(a, c, d, 0, 2, 3);
   if (!noEdge) { this.edge(a, b); this.edge(b, c); this.edge(c, d); this.edge(d, a); }
 };
 GeoBuilder.prototype.edge = function (a, b, col) {
@@ -3340,6 +3350,125 @@ GeoBuilder.prototype.box = function (min, max, color, opt) {
   if (!skip.nz) this.quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], sideC, ne);
   if (!skip.px) this.quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], sideC, ne);
   if (!skip.nx) this.quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], sideC, ne);
+};
+
+/* =====================================================================
+   SOLIDS THAT ARE NOT AXIS-ALIGNED
+   quad() always took arbitrary vertices, so a rotated or tapered solid was
+   always drawable — it just cost eight hand-written corners and six quad()
+   calls per object, which is why nothing in the game is one. Everything
+   below is sugar over quad(): same buffers, same ink lines, same two draw
+   calls. The only new *capability* in this file is the per-corner colour
+   path inside quad() above.
+
+   Corner numbering is a bitfield: 1 = +x, 2 = +y, 4 = +z. So corner 0 is
+   (x0,y0,z0) and corner 7 is (x1,y1,z1).
+   ===================================================================== */
+const SOLID_FACES = [
+  { key: 'py', tint: 'top',    v: [6, 7, 3, 2] },
+  { key: 'ny', tint: 'bottom', v: [0, 1, 5, 4] },
+  { key: 'pz', tint: 'side',   v: [4, 5, 7, 6] },
+  { key: 'nz', tint: 'side',   v: [1, 0, 2, 3] },
+  { key: 'px', tint: 'side',   v: [5, 1, 3, 7] },
+  { key: 'nx', tint: 'side',   v: [0, 4, 6, 2] }
+];
+const AXIS_I = { x: 0, y: 1, z: 2 };
+
+function boxCorners(min, max) {
+  const v = [];
+  for (let i = 0; i < 8; i++) {
+    v.push([(i & 1) ? max[0] : min[0], (i & 2) ? max[1] : min[1], (i & 4) ? max[2] : min[2]]);
+  }
+  return v;
+}
+
+/* Interpolate `from`->`to` across the corners by position along one axis.
+   Plain {r,g,b} records: quad() only ever reads those three fields, and a
+   gradient stop is not something anyone wants in the THREE.Color cache. */
+function gradientCorners(v, g) {
+  const k = AXIS_I[g.axis || 'y'];
+  let lo = g.min, hi = g.max;
+  if (lo === undefined || hi === undefined) {
+    lo = Infinity; hi = -Infinity;
+    for (const p of v) { if (p[k] < lo) lo = p[k]; if (p[k] > hi) hi = p[k]; }
+  }
+  const span = (hi - lo) || 1;
+  const a = g.from, b = g.to;
+  return v.map(p => {
+    const t = clamp((p[k] - lo) / span, 0, 1);
+    return { r: lerp(a.r, b.r, t), g: lerp(a.g, b.g, t), b: lerp(a.b, b.b, t) };
+  });
+}
+
+/* An eight-corner solid, in the same face order and winding as box(), so it
+   inherits the tint options, the face skipping and the inked outline. The
+   corners may be anywhere: skewed, rotated, collapsed to a ridge or a point.
+   Zero-length edges (the ones a collapsed corner produces) are dropped, or a
+   cone would stack degenerate segments in the line buffer. */
+GeoBuilder.prototype.solid = function (v, color, opt) {
+  opt = opt || {};
+  const tints = { top: opt.top || color, bottom: opt.bottom || color, side: opt.side || color };
+  const skip = opt.skip || {};
+  const ne = opt.noEdge;
+  const grad = opt.gradient ? gradientCorners(v, opt.gradient) : null;
+  const same = (p, q) => Math.abs(p[0] - q[0]) < 1e-9 && Math.abs(p[1] - q[1]) < 1e-9 && Math.abs(p[2] - q[2]) < 1e-9;
+  for (const f of SOLID_FACES) {
+    if (skip[f.key]) continue;
+    const q = f.v.map(i => v[i]);
+    /* A fully collapsed end (taper 0) leaves a face with no area at all;
+       emitting it would push six zero-normal vertices into the mesh. */
+    let distinct = 0;
+    for (let i = 0; i < 4; i++) if (!q.slice(0, i).some(p => same(p, q[i]))) distinct++;
+    if (distinct < 3) continue;
+    const col = grad ? f.v.map(i => grad[i]) : tints[f.tint];
+    this.quad(q[0], q[1], q[2], q[3], col, true);
+    if (ne) continue;
+    for (let i = 0; i < 4; i++) {
+      const p = q[i], r = q[(i + 1) % 4];
+      if (!same(p, r)) this.edge(p, r);
+    }
+  }
+};
+
+/* A box that is allowed to be something other than a box.
+     opt.rot      [rx, ry, rz] radians, applied X then Y then Z
+     opt.pivot    [x, y, z] the rotation turns about; default the centre
+     opt.taper    scale of one end's cross-section: a number, or [su, sv]
+                  for the two axes perpendicular to taperAxis in x,y,z order.
+                  0 collapses that end to a point (a cone/pyramid).
+     opt.taperAxis  'x' | 'y' | 'z', the base-to-tip axis; default 'y'
+     opt.taperEnd   'max' (default) or 'min' — which end shrinks
+     opt.gradient   { axis, from, to, min, max } — a colour ramp across the
+                  finished solid, overriding the flat top/side/bottom tints
+   plus everything box() takes: top / side / bottom / skip / noEdge. */
+GeoBuilder.prototype.prism = function (min, max, color, opt) {
+  opt = opt || {};
+  const v = boxCorners(min, max);
+  if (opt.taper !== undefined) {
+    const k = AXIS_I[opt.taperAxis || 'y'];
+    const perp = [0, 1, 2].filter(i => i !== k);
+    const s = Array.isArray(opt.taper) ? opt.taper : [opt.taper, opt.taper];
+    const tipHigh = opt.taperEnd !== 'min';
+    const mid = perp.map(i => (min[i] + max[i]) / 2);
+    for (const p of v) {
+      if ((p[k] === max[k]) !== tipHigh) continue;
+      perp.forEach((i, n) => { p[i] = mid[n] + (p[i] - mid[n]) * s[n]; });
+    }
+  }
+  if (opt.rot) {
+    const [rx, ry, rz] = opt.rot;
+    const o = opt.pivot || [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+    const cx = Math.cos(rx), sx = Math.sin(rx), cy = Math.cos(ry), sy = Math.sin(ry);
+    const cz = Math.cos(rz), sz = Math.sin(rz);
+    for (const p of v) {
+      let x = p[0] - o[0], y = p[1] - o[1], z = p[2] - o[2];
+      let t = y * cx - z * sx; z = y * sx + z * cx; y = t;   // about X
+      t = x * cy + z * sy; z = -x * sy + z * cy; x = t;       // about Y
+      t = x * cz - y * sz; y = x * sz + y * cz; x = t;        // about Z
+      p[0] = x + o[0]; p[1] = y + o[1]; p[2] = z + o[2];
+    }
+  }
+  this.solid(v, color, opt);
 };
 GeoBuilder.prototype.mesh = function (matOpts) {
   const g = new THREE.BufferGeometry();
