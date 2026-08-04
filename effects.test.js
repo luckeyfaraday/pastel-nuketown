@@ -119,10 +119,12 @@ function loadEffects() {
     this.api = {
       SHOT_EFFECTS, fxEffectFor, fxEffectTint, fxEffectCount,
       FX_TRIM_MIX, FX_PREVIEW, buildEffectPreview,
-      /* The sizes the footprint test measures with. They have to cross the
-         vm boundary or the yardstick computes NaN and the fairness rule
-         goes untested while still reporting a failure. */
-      FX_CONF_SIZE, FX_SPARK_SIZE, FX_SPRITE_MAX_H,
+      /* The sizes the footprint test measures with, and the pool table the
+         contrast floor measures with — a pool carries the blend mode, and
+         the blend mode is the whole of why an effect can be invisible. They
+         have to cross the vm boundary or the yardstick computes NaN and the
+         rule goes untested while still reporting a failure. */
+      FX_POOLS, FX_CONF_SIZE, FX_SPARK_SIZE, FX_SPRITE_MAX_H,
       FX_HIT_RING, FX_RING_GROW, FX_RING_INNER, FX_EFFECT_CLEAR,
       setSoftware(on) { SOFTWARE_GPU = on; }
     };`, sandbox);
@@ -178,7 +180,7 @@ test('no effect record carries anything a weapon record would be read for', () =
   const ALLOWED = new Set([
     'name', 'muzzleTint', 'colors', 'wake', 'muzzle', 'burst',
     'sys', 'count', 'jitter', 'sway', 'rise', 'life', 'out',
-    'push', 'lift', 'bloom'
+    'push', 'lift'
   ]);
 
   const walk = (value, id, trail) => {
@@ -236,8 +238,11 @@ function firedShot(effectId) {
     fireCd: client.get('G.player.fireCd'),
     weapons: client.get('JSON.stringify(WEAPONS)'),
     effect: client.get('FX.activeEffect && FX.activeEffect.name'),
-    particles: client.get('FX.conf.n + FX.spark.n'),
-    confMax: client.get('FX.conf.n <= FX.conf.max && FX.spark.n <= FX.spark.max')
+    /* Every pool, not the two an effect happened to use when this was
+       written: an effect that moved to a pool nobody counts would look
+       exactly like an effect that drew nothing. */
+    particles: client.get('Object.keys(FX_POOLS).reduce((n, k) => n + FX[k].n, 0)'),
+    confMax: client.get('Object.keys(FX_POOLS).every(k => FX[k].n <= FX[k].max)')
   };
 }
 
@@ -348,8 +353,18 @@ test('every effect stays in the house palette — no near-black, no imported neo
       assert.ok(Number.isInteger(hex) && hex >= 0 && hex <= 0xffffff,
         `${id} colour ${hex} is not a 24-bit 0xRRGGBB literal`);
       /* Particles in this town are light. Anything below this is ink, and
-         the darkest ink here is 0x4a3f5c. */
-      assert.ok(luma(hex) >= 0.6, `${id} ${hex.toString(16)} is too dark for a pastel wake`);
+         the darkest ink here is PAL.ink at luma 0.27; the darkest thing
+         that is not ink is the tyre grey at 0.52.
+
+         This bound was 0.6, and 0.6 is what put two invisible effects on
+         screen. Its stated reason was to keep a wake from passing for the
+         town's outlines, and that reason supports a number just above the
+         ink, not one above every mid-tone the town owns: a pastel that has
+         been taken two steps down the value ramp is still a pastel, and it
+         is the only way a single-hue effect gets seen on a cream wall. The
+         floor test below is what now decides whether a colour is worth
+         drawing; this one only keeps it out of the ink. */
+      assert.ok(luma(hex) >= 0.45, `${id} ${hex.toString(16)} is ink, not a wake`);
       /* And nothing arrives from a harsher game: a fully saturated
          primary is the tell every rejected weapon skin had. */
       assert.ok(chroma(hex) <= 0.5, `${id} ${hex.toString(16)} is neon`);
@@ -399,7 +414,7 @@ const disc = (radiusM) => Math.PI * (radiusM * PX_PER_M) ** 2;
 
 test('no effect covers more of the screen than the default hit does', () => {
   const {
-    SHOT_EFFECTS, FX_CONF_SIZE, FX_SPARK_SIZE, FX_SPRITE_MAX_H,
+    SHOT_EFFECTS, FX_POOLS, FX_SPRITE_MAX_H,
     FX_HIT_RING, FX_RING_GROW, FX_RING_INNER, FX_EFFECT_CLEAR
   } = loadEffects();
 
@@ -412,7 +427,14 @@ test('no effect covers more of the screen than the default hit does', () => {
   assert.ok(defaultHit > 5000 && defaultHit < 12000,
     `the yardstick itself moved: the default hit is now ${Math.round(defaultHit)} px^2`);
 
-  const sizeOf = (sys) => (sys === 'spark' ? FX_SPARK_SIZE : FX_CONF_SIZE);
+  /* Off the pool table rather than off a list of pool names kept here: an
+     effect that moved to a pool this line had not heard of used to be
+     measured at the default pool's size, which is a fairness rule quietly
+     measuring the wrong sprite. */
+  const sizeOf = (sys) => {
+    assert.ok(FX_POOLS[sys], `an effect draws into a pool named ${sys}, which does not exist`);
+    return FX_POOLS[sys].size;
+  };
 
   for (const [id, effect] of Object.entries(SHOT_EFFECTS)) {
     /* Worst case: every particle of all three stages alive on the same
@@ -429,8 +451,8 @@ test('no effect covers more of the screen than the default hit does', () => {
       `${Math.round(defaultHit)} — it is bought screen space`);
 
     /* And no single sprite may be a hit-ring on its own, however the
-       counts are shuffled. */
-    const widest = Math.max(spritePx(FX_CONF_SIZE), spritePx(FX_SPARK_SIZE));
+       counts are shuffled. Every pool, including the ones added since. */
+    const widest = Math.max(...Object.values(FX_POOLS).map((p) => spritePx(p.size)));
     assert.ok(widest * 4 <= 2 * FX_HIT_RING * (1 + FX_RING_GROW) * PX_PER_M,
       `${id} sprites are ${widest.toFixed(1)}px wide against a ${Math.round(
         2 * FX_HIT_RING * (1 + FX_RING_GROW) * PX_PER_M)}px default ring`);
@@ -448,12 +470,220 @@ test('no effect covers more of the screen than the default hit does', () => {
   /* The clamp has to actually bind at the closest an effect may draw,
      otherwise it is decoration: an uncapped sprite at FX_EFFECT_CLEAR must
      be wider than the ceiling. */
-  for (const size of [FX_CONF_SIZE, FX_SPARK_SIZE]) {
+  for (const { size } of Object.values(FX_POOLS)) {
     const uncapped = size * (VIEW_H / 2) / FX_EFFECT_CLEAR;
     assert.ok(uncapped > cappedPx,
       `a ${size}m sprite is ${uncapped.toFixed(0)}px at the clear radius and ` +
       `the clamp lets ${cappedPx.toFixed(0)}px through, so it never binds`);
   }
+});
+
+/* ---------------------------------------------------------------------
+   THE FLOOR
+
+   The ceiling above says an effect may cover no more of the screen than
+   the default hit does. It is a ceiling, and the round that introduced it
+   discovered what a ceiling with nothing under it buys: two effects that
+   passed every test by drawing nothing anybody could see. Bubble Trail
+   read as a faint white smudge and Starfall as a single pale star, and a
+   cosmetic nobody can see is not a cosmetic. So the same yardstick binds
+   from below.
+
+   WHY CONTRAST AND NOT CHROMA. The old palette check asked each colour for
+   chroma above 0.15 and Bubble Trail's mint passed it at 0.23 while being
+   invisible, because chroma is a property of a colour on its own and
+   visibility is a property of a colour ON SOMETHING. This town is painted
+   in pastels — the perimeter wall is 0xdcd3e8, the houses are cream and
+   butter and sky — and a pale particle on a pale wall is nothing however
+   saturated the swatch looks in isolation.
+
+   Additive blending makes it worse, and that is the specific mechanism
+   that sank Bubble Trail. Additive adds the particle's light to the wall's;
+   the wall is already near the top of the range; every channel clips to
+   white. So an additive near-white particle leaves the SAME PIXEL the
+   default's own white hit-ring leaves, and it leaves it whatever colour
+   the particle claimed to be. The measurement below reproduces that
+   exactly, and scores the shipped palette at 0.000.
+
+   THE MODEL, and it is the ceiling's model run through the pipeline rather
+   than a new one:
+
+     the wall     PAL.perimeter 0xdcd3e8, the pale lilac the screenshots
+                  were taken against, in linear light
+     the particle the effect's colour mixed FX_TRIM_MIX of the way to the
+                  shooter's — every particle is tinted, so the untinted hex
+                  is not what anybody sees — then composited over the wall
+                  with its pool's blend mode
+     the default  the hit-ring: white, additive, gain 1.20 and opacity 0.48
+                  (fxImpactMaterial in src/60-fx.js), over the same wall
+     the distance CIE-style perceptual difference in OKLab, which is the
+                  cheapest space that treats a change of hue and a change
+                  of lightness on the same scale
+
+   An effect colour "reads" by the smaller of two distances: how far the
+   pixel it draws is from the bare wall (is it there at all?) and how far
+   it is from the pixel the default already draws (is it anything the
+   player did not already have?). Both have to hold, and the smaller one is
+   the honest score.
+
+   THE FLOOR: a third of the default hit-ring's own contrast against the
+   same wall. The ring scores 0.123, so the floor is 0.041. A third rather
+   than all of it because the ring is a metre wide and an effect particle
+   is twelve pixels — asking a sparkle to hit a wall as hard as the ring
+   does would be asking for the bought advantage the ceiling forbids. Two
+   of an effect's colours have to clear it, so no effect passes on one
+   lucky hue in a palette of washes.
+   --------------------------------------------------------------------- */
+
+/* PAL.perimeter, src/10-core.js — and the surface in fx-*-*.png. */
+const WALL = 0xdcd3e8;
+/* fxImpactMaterial(1.20, 0.48) on FX.ringMesh, in FX_WHITE. */
+const RING_GAIN = 1.20;
+const RING_OPACITY = 0.48;
+/* Everyone a particle can be tinted toward: the nine jerseys' trim
+   (src/50-actors.js) and the three tracer colours the local player's own
+   gun fires in (src/40-weapons.js), which is the case the screenshots are.
+   The score is the worst of them, because an effect that only reads for
+   some shooters is an effect that does not read. */
+const OWNERS = JERSEYS.concat([0xffb7c5, 0xffc79a, 0xbcd8ff]);
+
+const toLinear = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+const linear = (hex) => [
+  toLinear(((hex >> 16) & 255) / 255),
+  toLinear(((hex >> 8) & 255) / 255),
+  toLinear((hex & 255) / 255)
+];
+/* Björn Ottosson's OKLab, from linear sRGB. */
+function oklab([r, g, b]) {
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [
+    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+  ];
+}
+const deltaE = (a, b) => {
+  const x = oklab(a), y = oklab(b);
+  return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
+};
+
+const wallLinear = linear(WALL);
+/* What the default hit-ring leaves on that wall. Additive and white, so it
+   clips: this is very nearly paper. */
+const defaultPixel = wallLinear.map((v) => Math.min(1, v + RING_GAIN * RING_OPACITY));
+const DEFAULT_CONTRAST = deltaE(defaultPixel, wallLinear);
+
+/* One effect colour, worn by one shooter, drawn by one pool, on the wall. */
+function drawnPixel(hex, owner, additive, mix) {
+  const c = linear(hex), o = linear(owner);
+  const tinted = c.map((v, i) => v + (o[i] - v) * mix);
+  return additive ? tinted.map((v, i) => Math.min(1, wallLinear[i] + v)) : tinted;
+}
+function readsAs(hex, additive, mix) {
+  let worst = Infinity;
+  for (const owner of OWNERS) {
+    const px = drawnPixel(hex, owner, additive, mix);
+    worst = Math.min(worst, deltaE(px, wallLinear), deltaE(px, defaultPixel));
+  }
+  return worst;
+}
+
+test('every effect is visible on a pastel wall — the floor under the footprint', () => {
+  const { SHOT_EFFECTS, FX_POOLS, FX_TRIM_MIX } = loadEffects();
+
+  /* The yardstick, checked the way the ceiling checks its own. */
+  assert.ok(DEFAULT_CONTRAST > 0.10 && DEFAULT_CONTRAST < 0.15,
+    `the yardstick moved: the default ring now reads ${DEFAULT_CONTRAST.toFixed(3)}`);
+  const FLOOR = DEFAULT_CONTRAST / 3;
+  const CARRIERS = 2;
+
+  for (const [id, effect] of Object.entries(SHOT_EFFECTS)) {
+    /* An effect's three stages may sit in two pools, and a pool carries the
+       blend. Score each colour in the harshest pool the effect uses — the
+       one whose particles are hardest to see. */
+    const pools = [effect.wake.sys, effect.burst.sys]
+      .map((sys) => FX_POOLS[sys]);
+    const additive = pools.some((p) => p.additive);
+
+    const scores = effect.colors
+      .map((hex) => [hex, readsAs(hex, additive, FX_TRIM_MIX)])
+      .sort((a, b) => b[1] - a[1]);
+    const carrying = scores.filter(([, s]) => s >= FLOOR);
+
+    assert.ok(carrying.length >= CARRIERS,
+      `${id} has ${carrying.length} colour(s) that change the pixel they cover ` +
+      `by the floor of ${FLOOR.toFixed(3)}; it needs ${CARRIERS}. Its palette scores ` +
+      scores.map(([hex, s]) => `${hex.toString(16)}=${s.toFixed(3)}`).join(' ') +
+      ' — a bought effect nobody can see is not a bought effect');
+  }
+
+  /* AND THE TEST HAS TEETH. The exact palette that shipped invisible: three
+     near-whites on the additive pool. Every one of them scores zero — not
+     "low", zero — because the pixel it leaves on this wall is bit-for-bit
+     the pixel the default's white ring leaves. If this ever passes, the
+     measurement above has stopped measuring blending. */
+  for (const hex of [0xb8f2d8, 0xa8dcf0, 0xd8f6ff]) {
+    assert.ok(readsAs(hex, true, FX_TRIM_MIX) < 0.001,
+      `${hex.toString(16)} additive on a pastel wall now reads as something, ` +
+      'which means the composite is no longer being modelled');
+    /* Off the additive pool the same colours are merely weak rather than
+       absent — which is the point: the blend was the mechanism, and it is
+       not enough on its own to fix them either. */
+    assert.ok(readsAs(hex, false, FX_TRIM_MIX) < FLOOR,
+      `${hex.toString(16)} normal-blended clears the floor, so the palette ` +
+      'that shipped invisible would ship again');
+  }
+
+  /* And no pool an effect draws into may be additive at all, which is the
+     rule the scores above are the evidence for. The additive pool keeps its
+     job — glints and kill bursts, seen against the sky and against each
+     other — but nothing sold draws flat onto a wall through it. */
+  for (const [id, effect] of Object.entries(SHOT_EFFECTS))
+    for (const sys of [effect.wake.sys, effect.burst.sys])
+      assert.equal(FX_POOLS[sys].additive, false,
+        `${id} draws into the additive pool ${sys}, where a pastel wall eats it`);
+});
+
+test('the three effects are three products, not one sold three times', () => {
+  const { SHOT_EFFECTS, FX_POOLS, FX_TRIM_MIX } = loadEffects();
+
+  /* SILHOUETTE. A pool is a texture and a gravity, so three pools is three
+     shapes going three ways: the fat four-point candy sparkle that falls,
+     the six-ray needle star that falls harder, and the round bubble that
+     rises. Sharing one would make two of these the same effect in two
+     colours, which is the same product sold twice. */
+  const wakePools = EFFECT_IDS.map((id) => SHOT_EFFECTS[id].wake.sys);
+  assert.equal(new Set(wakePools).size, EFFECT_IDS.length,
+    `two effects lay the same wake sprite: ${wakePools.join(', ')}`);
+
+  /* DIRECTION. Exactly one of them goes up, and it is the one whose name
+     says so — the read that survives being seen across the map. */
+  const rising = EFFECT_IDS.filter((id) => FX_POOLS[SHOT_EFFECTS[id].wake.sys].grav < 0);
+  assert.deepEqual(rising, ['fx-bubbletrail'],
+    'exactly one effect is supposed to be buoyant, and it is Bubble Trail');
+
+  /* HUE. Each effect's strongest colour, on the wall, has to be a different
+     colour from the other two's — measured after the tint, because two
+     effects that converge once a jersey is mixed in have converged. */
+  const carrier = (id) => {
+    const effect = SHOT_EFFECTS[id];
+    const additive = FX_POOLS[effect.wake.sys].additive;
+    return effect.colors
+      .slice()
+      .sort((a, b) => readsAs(b, additive, FX_TRIM_MIX) - readsAs(a, additive, FX_TRIM_MIX))[0];
+  };
+  const carriers = EFFECT_IDS.map(carrier);
+  for (let i = 0; i < carriers.length; i++)
+    for (let j = i + 1; j < carriers.length; j++)
+      for (const owner of OWNERS) {
+        const a = drawnPixel(carriers[i], owner, false, FX_TRIM_MIX);
+        const b = drawnPixel(carriers[j], owner, false, FX_TRIM_MIX);
+        assert.ok(deltaE(a, b) > 0.05,
+          `${EFFECT_IDS[i]} and ${EFFECT_IDS[j]} are the same colour on a ` +
+          `${owner.toString(16)} shooter`);
+      }
 });
 
 test('an effect is bounded per shot however far the shot goes', () => {

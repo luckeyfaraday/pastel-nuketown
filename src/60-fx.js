@@ -3,7 +3,7 @@
    ===================================================================== */
 
 const FX = {
-  conf: null, spark: null,
+  conf: null, spark: null, star: null, bead: null,
   bubbleMesh: null, bubbles: [], bubbleI: 0,
   mallowMesh: null, mallows: [], mallowI: 0,
   dartMesh: null, darts: [], dartI: 0,
@@ -251,6 +251,58 @@ function softTex() {
   g.fillStyle = rg; g.fillRect(0, 0, 32, 32);
   return new THREE.CanvasTexture(cv);
 }
+/* A bubble, and it has to be a bubble at twelve pixels. What reads at that
+   size is not shading — it is the hole in the middle. The rim is opaque and
+   the inside is nearly clear, so the wall shows through it the way it shows
+   through soap, and a gap in the upper-left rim is the specular highlight
+   without needing a second colour to draw it with.
+
+   These textures carry alpha only: the shader takes RGB from the particle
+   and multiplies the texture's alpha into it. That is why the highlight is
+   an absence rather than a brighter spot — a "brighter" pixel here would
+   just be more of the particle's own colour, which over a pale wall is
+   darker, not lighter. */
+function bubbleTex() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 32;
+  const g = cv.getContext('2d');
+  g.fillStyle = 'rgba(255,255,255,.20)';
+  g.beginPath(); g.arc(16, 16, 14.5, 0, TAU); g.fill();
+  g.strokeStyle = '#fff'; g.lineWidth = 4.4;
+  g.beginPath(); g.arc(16, 16, 12.3, 0, TAU); g.stroke();
+  /* Most of the rim's alpha rather than all of it: a clean hole reads as a
+     broken ring at twelve pixels, a thin one reads as a highlight. */
+  g.globalCompositeOperation = 'destination-out';
+  g.fillStyle = 'rgba(255,255,255,.78)';
+  g.beginPath(); g.arc(11.2, 10.6, 3.4, 0, TAU); g.fill();
+  return new THREE.CanvasTexture(cv);
+}
+/* A star that twinkles rather than a candy sparkle. Six needle rays off a
+   small core: at the same twelve pixels this is a cross of thin lines where
+   squareTex above is a fat four-pointed diamond, which is the whole reason
+   Starfall and Confetti Pop can both be stars and still never be each
+   other. */
+function starTex() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 32;
+  const g = cv.getContext('2d');
+  g.translate(16, 16);
+  g.fillStyle = '#fff';
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * TAU;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const len = i % 2 ? 10.5 : 15.5;
+    g.beginPath();
+    g.moveTo(ca * len, sa * len);
+    g.lineTo(-sa * 1.7, ca * 1.7);
+    g.lineTo(sa * 1.7, -ca * 1.7);
+    g.closePath(); g.fill();
+  }
+  const rg = g.createRadialGradient(0, 0, 0, 0, 0, 4.2);
+  rg.addColorStop(0, 'rgba(255,255,255,1)');
+  rg.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = rg;
+  g.beginPath(); g.arc(0, 0, 4.2, 0, TAU); g.fill();
+  return new THREE.CanvasTexture(cv);
+}
 
 /* 0 right at the lens, 1 beyond 1.2m. Used by every point sprite.
 
@@ -307,6 +359,56 @@ const FX_HIT_RING = 0.26;
    viewport height and divided by the distance, is its width in pixels. */
 const FX_CONF_SIZE = 0.16;
 const FX_SPARK_SIZE = 0.30;
+const FX_STAR_SIZE = 0.17;
+const FX_BEAD_SIZE = 0.20;
+
+/* =====================================================================
+   THE POOLS
+
+   Four of them, and the reason there are four rather than two is the
+   second failure this file has had: the first cut of the shot effects was
+   too big to be fair, the correction was too faint to be worth money, and
+   what makes an effect both is not its size — it is its silhouette, its
+   blend and which way it falls. Those three live on the pool, not on the
+   particle, because gl_PointSize sprites take their texture and their
+   blend from one material.
+
+   BLENDING IS THE WHOLE OF WHY BUBBLE TRAIL WAS INVISIBLE. Additive
+   blending adds the particle's light to the wall behind it. This town's
+   walls are pastel — perimeter 0xdcd3e8, cream 0xfff8f0 — so they are
+   already close to the top of the range, and adding a mint or a pale sky
+   to them clips every channel to white. The pixel an additive near-white
+   particle leaves on a pale lilac wall is exactly the pixel the default's
+   white hit-ring leaves there, whatever colour the particle claimed to
+   be: the effect could have been magenta and the wall would have gone the
+   same white. That is not a dim effect, it is no effect, and effects.test.js
+   now measures it.
+
+   So the two pools a bought effect draws into are NORMAL-blended, where
+   the particle's colour replaces the wall's instead of being swallowed by
+   it, and a deep saturated aqua stays a deep saturated aqua on cream. The
+   additive spark pool stays exactly as it was for the things it was always
+   for — dart glints, the kill burst, spawn puffs — which are drawn against
+   the sky and against each other rather than flat on a wall.
+
+     conf   fat four-point candy sparkle, falls hard     Confetti Pop, kills
+     spark  soft additive blob                           weapon glints only
+     star   six needle rays, falls hardest               Starfall
+     bead   a bubble: opaque rim, clear middle, RISES    Bubble Trail
+
+   `grav` is metres per second per second taken off vertical speed, so a
+   negative one is buoyancy — bead is the only thing in this game that goes
+   up on its own, which is the read that survives being seen across the
+   map. `knee` is the fraction of a particle's life it spends fading: 0.7
+   is a long dissolve, and bead's 0.22 holds a bubble at full strength and
+   then takes it away, which is a pop.
+   ===================================================================== */
+const FX_POOLS = {
+  conf:  { size: FX_CONF_SIZE,  tex: squareTex, additive: false, grav: 15,   knee: 0.70, max: 900, cheap: 340 },
+  spark: { size: FX_SPARK_SIZE, tex: softTex,   additive: true,  grav: 0.6,  knee: 0.70, max: 520, cheap: 200 },
+  star:  { size: FX_STAR_SIZE,  tex: starTex,   additive: false, grav: 22,   knee: 0.55, max: 420, cheap: 160 },
+  bead:  { size: FX_BEAD_SIZE,  tex: bubbleTex, additive: false, grav: -1.6, knee: 0.22, max: 360, cheap: 140 }
+};
 
 const FX_POINT_VERTEX = `
   attribute vec3 fxColor;
@@ -336,7 +438,9 @@ const FX_POINT_FRAGMENT = `
   }
 `;
 
-function ParticleSys(max, tex, additive, size) {
+function ParticleSys(pool) {
+  const max = SOFTWARE_GPU ? pool.cheap : pool.max;
+  const size = pool.size, additive = pool.additive;
   const pos = new Float32Array(max * 3);
   const col = new Float32Array(max * 3);
   const alpha = new Float32Array(max);
@@ -348,7 +452,7 @@ function ParticleSys(max, tex, additive, size) {
   const m = new THREE.ShaderMaterial({
     vertexShader: FX_POINT_VERTEX, fragmentShader: FX_POINT_FRAGMENT,
     uniforms: {
-      fxMap: { value: tex },
+      fxMap: { value: pool.tex() },
       fxSize: { value: size },
       /* Half the drawing buffer height and the clamp in the same units.
          psUpdate refreshes them, so a resize costs nothing here. */
@@ -366,7 +470,7 @@ function ParticleSys(max, tex, additive, size) {
     vx: new Float32Array(max), vy: new Float32Array(max), vz: new Float32Array(max),
     life: new Float32Array(max), maxLife: new Float32Array(max),
     r: new Float32Array(max), g: new Float32Array(max), b: new Float32Array(max),
-    grav: additive ? 0.6 : 15
+    grav: pool.grav, knee: pool.knee
   };
 }
 function psEmit(P, x, y, z, vx, vy, vz, life, color) {
@@ -406,7 +510,10 @@ function psUpdate(P, dt) {
     pos[i * 3] += P.vx[i] * dt; pos[i * 3 + 1] += P.vy[i] * dt; pos[i * 3 + 2] += P.vz[i] * dt;
     if (pos[i * 3 + 1] < 0.03) { pos[i * 3 + 1] = 0.03; P.vy[i] *= -0.32; P.vx[i] *= 0.6; P.vz[i] *= 0.6; }
     const f = clamp(P.life[i] / P.maxLife[i], 0, 1);
-    let e = f > 0.7 ? 1 : f / 0.7;
+    /* P.knee is where the fade starts, counted back from the end of the
+       particle's life: 0.7 is the long dissolve everything used to get, and
+       a small one holds full strength and then goes, which is a pop. */
+    let e = f > P.knee ? 1 : f / P.knee;
     /* Both fades ride the alpha channel now, which is why both pools can
        have both of them. The old code faded by multiplying the colour
        toward black — a fade under additive blending and a slide into mud
@@ -468,8 +575,7 @@ function fxWarmGeometryCache() {
 }
 
 function initFX() {
-  FX.conf  = ParticleSys(SOFTWARE_GPU ? 340 : 900, squareTex(), false, FX_CONF_SIZE);
-  FX.spark = ParticleSys(SOFTWARE_GPU ? 200 : 520, softTex(),  true,  FX_SPARK_SIZE);
+  for (const name of Object.keys(FX_POOLS)) FX[name] = ParticleSys(FX_POOLS[name]);
 
   const bubbleCount = SOFTWARE_GPU ? 12 : 40;
   const bubbleGeo = new THREE.SphereGeometry(1, SOFTWARE_GPU ? 8 : 14, SOFTWARE_GPU ? 6 : 10);
@@ -633,7 +739,7 @@ const CONFETTI = [0xffb7c5, 0xa8dcf0, 0xb8f2d8, 0xd4c5f9, 0xffefa8, 0xffd3b6, 0x
    seen by the other eight people in the room, which is the point.
 
    Nothing below is a second particle system. Every effect emits into the
-   pools above — FX.conf, FX.spark, FX.sugar, FX.rings — which are fixed in
+   pools above — FX.conf, FX.star, FX.bead — which are fixed in
    size, recycle their oldest slot and allocate nothing per shot. An effect
    is a table of numbers naming which of them to use and how.
 
@@ -666,21 +772,47 @@ const CONFETTI = [0xffb7c5, 0xa8dcf0, 0xb8f2d8, 0xd4c5f9, 0xffefa8, 0xffd3b6, 0x
    Effects are told apart by shape, colour, motion and decay -- never by
    size, because size is the one axis that is also a gameplay change.
 
+   AND NO LESS SCREEN THAN NOTHING AT ALL, WHICH IS ALSO MEASURED. The
+   round that put that ceiling in place shipped two effects that cleared it
+   by drawing nothing anybody could see: Bubble Trail was a faint white
+   smudge and Starfall was one pale star. A ceiling with no floor under it
+   means the safest possible art passes every test, and the safest possible
+   art is not worth money. So the same yardstick now binds from below: an
+   effect's carrying colour must change the pixel it covers by AT LEAST A
+   THIRD of what the default's own white hit-ring changes it by, measured on
+   this town's pale lilac wall, after the shooter's jersey has been mixed
+   into it. Two of an effect's colours have to clear that, so no effect can
+   rest on one lucky hue.
+
+   The axis is contrast against a pale surface, and it has to be, because
+   the thing that has now sunk five cosmetics in this project is a colour
+   washing toward white. Chroma cannot see that failure: 0xb8f2d8 has plenty
+   of chroma and is invisible on cream. Only compositing the particle over
+   the wall it is actually drawn on can, which is what the floor does.
+
    The yardstick, and the arithmetic behind the numbers on each effect
    below. A 1600x900 viewport, the camera's 74-degree vertical field, a
    wall six metres off -- 99.5 pixels to the metre. A point sprite of world
    size s is s * 450 / 6 pixels wide there, so the 0.16m confetti sprite is
-   12px and the 0.30m soft sprite 22.5px. Areas are the whole sprite quad,
-   which is deliberately pessimistic: the star texture inks 23% of its quad
-   and the soft blob about 40%.
+   12px, the 0.17m star 12.8px and the 0.20m bubble 15px. Areas are the
+   whole sprite quad, which is deliberately pessimistic: the candy sparkle
+   inks 23% of its quad, the needle star about 12% and the bubble, which is
+   a rim around a hole, about 35%.
 
      DEFAULT (a BUBBLEGUN pellet on a wall)   7900 px^2
        hit-ring, peak radius 1.01m, annulus   7200
        nine droplets                           690
 
-     fx-starfall    17 sprites x 144          2450 px^2   0.31x default
+     fx-starfall    17 sprites x 163          2770 px^2   0.35x default
      fx-confettipop 20 sprites x 144          2880 px^2   0.36x default
-     fx-bubbletrail 11 sprites x 506 + bloom  5800 px^2   0.73x default
+     fx-bubbletrail 11 sprites x 225          2480 px^2   0.31x default
+
+   Bubble Trail went DOWN, from 0.73x. The bloom of additive sugar grains
+   it used to leave on the wall is gone rather than retuned: at 20% opacity
+   added to a pastel wall it was drawing nothing, and a mechanism that
+   draws nothing is not a small effect, it is a bug that costs frames. The
+   soft 0.30m blob it used to ride went with it. What replaced both is
+   colour and blend, which cost no pixels at all.
 
    Both distances and both sizes scale as 1/d, so those ratios hold at
    every range -- with one exception, which is where the first cut of this
@@ -699,8 +831,10 @@ const CONFETTI = [0xffb7c5, 0xa8dcf0, 0xb8f2d8, 0xd4c5f9, 0xffefa8, 0xffd3b6, 0x
    NO EXTRA COST. Counts are per shot, halve under SOFTWARE_GPU, and are
    bounded whatever the range: a 90m rifle shot lays down the same five
    particles a 6m one does. Nine players on automatics is roughly 110 shots
-   a second; that is five particles of each into pools of 900 and 520 that
-   were already sized for kill confetti.
+   a second; that is at most seventeen particles a shot spread across pools
+   of 900, 420 and 360, each of which recycles its oldest slot and allocates
+   nothing. The two pools added for silhouette are the small ones, and they
+   are two more draw calls of nothing when nobody in the room owns them.
    ===================================================================== */
 
 /* Half. Far enough that the effect keeps a recognisable colour of its own,
@@ -729,35 +863,50 @@ function fxAwayFromLens(x, y, z) {
   return dx * dx + dy * dy + dz * dz > FX_EFFECT_CLEAR * FX_EFFECT_CLEAR;
 }
 
-/* Every colour below is one of the seven the town is already painted in
-   (CONFETTI above, which is the same list the kill burst and the store
-   cards use) or a shade of one of them. Nothing is mixed to order and
-   nothing arrives from another game: an imported hue is what sank two
-   rounds of weapon skins, and the tan star was that same failure by a
-   different route -- 0xfff1a6 is a house butter, it was the fade that
-   dragged it to 0x8c845b. Three hue families, one each, far enough apart
-   to name across a road: LILAC, RAINBOW, MINT. */
+/* Every colour below belongs to a hue this town is already painted in --
+   the coral of the roofs and the truck, the sky of the south house and the
+   glass, the violet of the periwinkle roof and the perimeter wall. What has
+   changed since the last round is the VALUE they are taken at.
+
+   Confetti Pop's palette is the town's own pastels and it is the one that
+   landed on screen, because being seven hues at once is a signal that
+   survives being pale. The other two are one hue each, and one pale hue on
+   a pale wall is nothing. So Starfall's amethyst and Bubble Trail's aqua
+   are taken two or three steps down the value ramp -- the same colours a
+   little deeper, occupying exactly the same pixels. A saturated colour is
+   not a bigger effect, it is a visible one, and it costs the match nothing.
+
+   Nothing here is near-white and nothing is neon: the deepest value below
+   sits at luma 0.49, well clear of the town's ink at 0.27 and of its tyre
+   grey at 0.52, and nothing exceeds the chroma of the roofs. Three hue
+   families, three silhouettes, three directions -- AMETHYST needles that
+   fall, RAINBOW sparkles that scatter, AQUA bubbles that rise. */
 const SHOT_EFFECTS = {
-  /* STARFALL — a comet's tail. Candy stars are flung along the shot, hang
-     for an instant and sag, so the wake keeps a soft downward curve after
-     the shot itself has landed. Amethyst: the one cool violet in the town,
-     worn by nothing else, and a sagging line of it is a shape no other
-     effect makes. 17 sprites, 2450 px^2 at the reference frame — 0.31x the
-     default hit, and no ring. */
+  /* STARFALL — a fall, not a sparkle. Six-ray needle stars are flung along
+     the shot, hang for an instant and sag hard: the `star` pool has the
+     heaviest gravity in the game, so the wake keeps a deepening downward
+     curve after the shot itself has landed, and the burst arcs up off the
+     wall and comes back down while you are still looking at it. Amethyst,
+     the one cool violet in the town, worn by nothing else. 17 sprites,
+     2770 px^2 at the reference frame — 0.35x the default hit, and no ring.
+
+     Its two carrying colours read at 0.078 and 0.063 against the pale
+     lilac wall, against a floor of 0.041. The lilacs it used to wear read
+     at 0.036. Same shape budget, same counts, three times the contrast. */
   'fx-starfall': {
     name: 'Starfall',
-    muzzleTint: C(0xd8ccff),
-    colors: [0xd4c5f9, 0xc3b0f2, 0xece4ff],
-    wake:   { sys: 'conf', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzleTint: C(0xc9b0ff),
+    colors: [0x8a72d0, 0xa47ce0, 0x9d7fd8],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
     muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
-    burst:  { sys: 'conf', count: 8, push: [1.6, 3.6], lift: [1.4, 3.0], life: [0.34, 0.52] }
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
   },
   /* CONFETTI POP — a party popper on the end of the barrel. A wide, fast,
      tumbling scatter in the town's whole party palette, thin along the shot
      and loud at both ends: a fistful out of the muzzle, and a real pop where
      it lands. The one that falls fastest, and the only rainbow — being all
-     seven at once is the identity, which is why it can share a texture with
-     Starfall and still never be mistaken for it. 20 sprites, 2880 px^2,
+     seven at once is the identity. This is the one that came out of the
+     last round working, so nothing about it moves. 20 sprites, 2880 px^2,
      0.36x the default hit. */
   'fx-confettipop': {
     name: 'Confetti Pop',
@@ -767,22 +916,26 @@ const SHOT_EFFECTS = {
     muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
     burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
   },
-  /* BUBBLE TRAIL — the only one that goes UP. Soap lights drift off the shot
-     line and rise instead of falling, and the hit ends in a cluster of
-     bubbles swelling and going soft. House mint and house sky. Direction
-     alone tells it from the other two at any distance, in any light, at
-     speed. Its sprite is the big soft blob rather than the star, so it runs
-     the fewest of them: 11 sprites and four bloom grains, 5800 px^2 counted
-     as solid quads, 0.73x the default hit — and nearer 0.3x once the blob's
-     40% ink coverage is allowed for. */
+  /* BUBBLE TRAIL — the only one that goes UP, and now the only one that is
+     round. Bubbles lift off the shot line under the `bead` pool's negative
+     gravity, wobble out of the barrel, and hold full strength for four
+     fifths of their life before going in one frame — a pop rather than a
+     dissolve. Sea-glass aqua through sky: deep enough to sit on a cream
+     wall, which the mint and the near-white it used to wear were not.
+     11 sprites, 2480 px^2, 0.31x the default hit — DOWN from 0.73x.
+
+     This is the one the round is about. It was drawn additively in three
+     near-whites, which on a pastel wall is the same pixel the default
+     already draws there and no pixel at all anywhere else. Normal blending
+     and three colours two steps deeper take its carrying contrast from
+     0.000 to 0.084, on a footprint that shrank by more than half. */
   'fx-bubbletrail': {
     name: 'Bubble Trail',
-    muzzleTint: C(0xbdf0e2),
-    colors: [0xb8f2d8, 0xa8dcf0, 0xd8f6ff],
-    wake:   { sys: 'spark', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
+    muzzleTint: C(0xa8e8e0),
+    colors: [0x35b0a4, 0x45b2c0, 0x54b6cf],
+    wake:   { sys: 'bead', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
     muzzle: { count: 3, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
-    burst:  { sys: 'spark', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50],
-              bloom: 4 }
+    burst:  { sys: 'bead', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50] }
   }
 };
 
@@ -795,8 +948,11 @@ function fxEffectFor(id) {
     : null;
 }
 
+/* An effect names a pool and gets that pool, or the default one if it names
+   something this build has never heard of — the same forgiveness fxEffectFor
+   gives an unknown id, for the same reason. */
 function fxEffectSystem(name) {
-  return name === 'spark' ? FX.spark : FX.conf;
+  return FX[name] && FX_POOLS[name] ? FX[name] : FX.conf;
 }
 
 /* One particle's colour: the effect's, mixed half way to whoever fired. */
@@ -854,27 +1010,6 @@ function fxEffectMuzzlePuff(effect, x, y, z, ux, uy, uz) {
   }
 }
 
-/* Bubble Trail's landing: the same swelling, softening grains a marshmallow
-   leaves on a wall, in the effect's colour rather than the surface's. Same
-   pool, same update loop, same budget — only the tint and the count differ. */
-function fxEffectBloom(effect, q, count) {
-  for (let i = 0; i < fxEffectCount(count); i++) {
-    const index = FX.sugarI++ % FX.sugar.length;
-    const d = FX.sugar[index];
-    const a = fxRand(0, TAU), side = fxRand(0.2, 1.0);
-    d.x = q.x + q.nx * 0.04; d.y = q.y + q.ny * 0.04; d.z = q.z + q.nz * 0.04;
-    d.vx = q.nx * fxRand(0.2, 0.8) + Math.cos(a) * side;
-    d.vy = q.ny * fxRand(0.2, 0.8) + fxRand(0.3, 1.0);
-    d.vz = q.nz * fxRand(0.2, 0.8) + Math.sin(a) * side;
-    d.size = fxRand(0.030, 0.058);
-    d.t = 0; d.dur = fxRand(0.40, 0.58);
-    fxEffectTint(_fxColorA, fxPick(effect.colors), _fxColorB);
-    fxSetInstanceColor(FX.sugarMesh, index, _fxColorA);
-    _fxQuat.identity();
-    fxSetInstance(FX.sugarMesh, index, d.x, d.y, d.z, _fxQuat, d.size, d.size, d.size);
-  }
-}
-
 /* The flourish on a hit. It is added to the weapon's own impact and never
    replaces it: what a shot did — a bubble splash, a mallow stuck to a wall,
    a lollipop shattering — is the weapon's identity and the feedback everyone
@@ -894,7 +1029,6 @@ function fxEffectBurst(effect, q) {
      silhouette and the biggest single thing on the frame; an effect that
      added a second one would both double the area and copy the shape it is
      supposed to be distinguishable from. */
-  if (b.bloom) fxEffectBloom(effect, q, b.bloom);
   const count = fxEffectCount(b.count);
   for (let i = 0; i < count; i++) {
     const a = fxRand(0, TAU), side = fxRand(b.push[0], b.push[1]);
@@ -1205,8 +1339,7 @@ function fxSpawnPuff(x, y, z, color) {
 function fxShake(amount) { FX.shakeV += amount; }
 
 function updateFX(dt) {
-  psUpdate(FX.conf, dt);
-  psUpdate(FX.spark, dt);
+  for (const name of Object.keys(FX_POOLS)) psUpdate(FX[name], dt);
 
   for (let i = 0; i < FX.bubbles.length; i++) {
     const b = FX.bubbles[i];
@@ -1440,9 +1573,11 @@ function buildEffectPreview(effectId) {
     const colors = effect ? effect.colors : [0xfff4df];
     /* Down for the two that fall, up for the one that rises: the preview
        has to be able to show that, because it is the single thing that
-       tells Bubble Trail from the other two across a map. */
-    const drift = effect && effect.wake.rise[1] > 0 && effect.wake.sys === 'spark'
-      ? 0.30 : -0.42;
+       tells Bubble Trail from the other two across a map. Read off the
+       pool's own gravity rather than restated here, so the card can never
+       drift out of agreement with the world. */
+    const pool = effect ? FX_POOLS[effect.wake.sys] : null;
+    const drift = pool && pool.grav < 0 ? 0.30 : -0.42;
     const motes = [];
     const total = effect ? FX_PREVIEW.wake + FX_PREVIEW.pop : FX_PREVIEW.pop;
     for (let i = 0; i < total; i++) {
