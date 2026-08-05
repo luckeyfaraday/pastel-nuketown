@@ -971,6 +971,77 @@ test('catalog reads Stripe prices and reports missing price configuration unavai
   assert.equal(requests, 1);
 });
 
+/* A shop of nine items should not be closed by one of them. Reading a price is
+   a separate Stripe request per item, so one mistyped or archived price ID used
+   to take the whole storefront down with a 502. */
+test('one unreadable price takes its own item off sale and leaves the rest open', async (t) => {
+  const { database, shop } = await accountModules();
+  const db = database.openStoreDatabase(':memory:');
+  t.after(() => db.close());
+  const warnings = [];
+  let clock = 1_800_000_000_000;
+  const store = shop.createShopService({
+    ...serviceOptions(db),
+    now: () => clock,
+    logger: { warn: (message) => warnings.push(message) },
+    priceIds: {
+      'smg-cottoncloud': 'price_cotton',
+      'char-midnight': 'price_missing',
+      'fx-starfall': 'price_archived'
+    },
+    fetchImpl: async (url) => {
+      if (url.endsWith('/prices/price_cotton'))
+        return response({ id: 'price_cotton', active: true, unit_amount: 425, currency: 'eur' });
+      if (url.endsWith('/prices/price_archived'))
+        return response({ id: 'price_archived', active: false, unit_amount: 500, currency: 'eur' });
+      return response({}, { ok: false });
+    }
+  });
+
+  const items = await store.catalog();
+  assert.equal(items.length, 9);
+  const byId = new Map(items.map((item) => [item.id, item]));
+  assert.equal(byId.get('smg-cottoncloud').available, true);
+  assert.deepEqual(byId.get('smg-cottoncloud').price, { unitAmount: 425, currency: 'eur' });
+  assert.equal(byId.get('char-midnight').available, false);
+  assert.equal(byId.get('char-midnight').price, null);
+  /* An archived price is a real answer, so it reports the same way a cosmetic
+     with no price configured does — and does not mean Stripe is unreachable. */
+  assert.equal(byId.get('fx-starfall').available, false);
+  assert.equal(byId.get('char-cloudknight').available, false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /price_missing/);
+  assert.match(warnings[0], /char-midnight/);
+
+  /* The catalog is read on every page load. An item silently leaving the shop
+     has to be visible in the journal without a Stripe outage writing a line per
+     visitor, so the same broken price stays quiet until its cache window is up. */
+  await store.catalog();
+  await store.catalog();
+  assert.equal(warnings.length, 1);
+  clock += 5 * 60 * 1000;
+  await store.catalog();
+  assert.equal(warnings.length, 2);
+});
+
+test('a shop that answers for nothing at all is unreachable, not sold out', async (t) => {
+  const { database, shop } = await accountModules();
+  const db = database.openStoreDatabase(':memory:');
+  t.after(() => db.close());
+  const store = shop.createShopService({
+    ...serviceOptions(db),
+    logger: { warn: () => {} },
+    priceIds: { 'smg-cottoncloud': 'price_cotton', 'char-midnight': 'price_midnight' },
+    fetchImpl: async () => response({}, { ok: false })
+  });
+
+  await assert.rejects(
+    store.catalog(),
+    (error) => error.code === 'stripe_unavailable',
+    'a storefront nobody can price should not be reported as nine sold-out items'
+  );
+});
+
 test('checkout sends the authenticated user and catalog item to Stripe', async (t) => {
   const { database, shop } = await accountModules();
   const db = database.openStoreDatabase(':memory:');

@@ -110,40 +110,76 @@ export function createShopService(options) {
   async function loadPrice(priceId) {
     const cached = priceCache.get(priceId);
     if (cached && cached.expiresAt > now()) return cached.loading;
-    if (!cached || cached.expiresAt <= now()) {
-      const loading = stripeRequest(`/prices/${encodeURIComponent(priceId)}`)
-        .then((price) => {
-          if (!price || typeof price.id !== 'string' ||
-              typeof price.currency !== 'string' ||
-              !Number.isSafeInteger(price.unit_amount))
-            throw new HttpError(502, 'stripe_unavailable', 'Stripe returned an invalid price.');
-          return price;
-        })
-        .catch((error) => {
-          const current = priceCache.get(priceId);
-          if (current && current.loading === loading) priceCache.delete(priceId);
-          throw error;
-        });
-      priceCache.set(priceId, { loading, expiresAt: now() + priceCacheMs });
-      return loading;
-    }
-    return cached.loading;
+    const loading = stripeRequest(`/prices/${encodeURIComponent(priceId)}`)
+      .then((price) => {
+        if (!price || typeof price.id !== 'string' ||
+            typeof price.currency !== 'string' ||
+            !Number.isSafeInteger(price.unit_amount))
+          throw new HttpError(502, 'stripe_unavailable', 'Stripe returned an invalid price.');
+        return price;
+      })
+      .catch((error) => {
+        const current = priceCache.get(priceId);
+        if (current && current.loading === loading) priceCache.delete(priceId);
+        throw error;
+      });
+    priceCache.set(priceId, { loading, expiresAt: now() + priceCacheMs });
+    return loading;
   }
 
+  /* An item quietly dropping off the shelves has to be visible in the journal,
+     and the catalog is read on every page load, so the two pull against each
+     other: with Stripe down that is nine lines per visitor. One line per price
+     per cache window is the compromise — often enough to see the outage start,
+     quiet enough to leave the log readable. A price that recovers forgets its
+     warning, so a second outage announces itself immediately. */
+  const priceWarnedAt = new Map();
+
+  function warnAboutPrice(priceId, cosmeticId, error) {
+    const last = priceWarnedAt.get(priceId);
+    if (last !== undefined && now() - last < priceCacheMs) return;
+    priceWarnedAt.set(priceId, now());
+    warn(
+      `Stripe price ${priceId} for ${cosmeticId} could not be read, ` +
+      `so it is off sale: ${(error && error.message) || error}`
+    );
+  }
+
+  /* One price Stripe will not answer for should not close the whole shop. The
+     item shape already says `available: false` for a cosmetic with no price
+     configured, and from the player's side an unreadable price is the same
+     thing, so the loads are settled one at a time and the other eight stay on
+     sale. A single mistyped price ID used to 502 the storefront.
+
+     Losing every one of them is a different report, though: "nothing is for
+     sale" would be a lie about a store that is simply unreachable. So the
+     failure is rethrown when no price resolved at all, and the client keeps
+     showing the message it already has for a store it cannot reach. */
   async function catalog(userId = null) {
     const owned = new Set(userId ? db.listEntitlements(userId) : []);
-    return Promise.all(COSMETICS.map(async (cosmetic) => {
+    let resolved = 0;
+    let firstFailure = null;
+    const items = await Promise.all(COSMETICS.map(async (cosmetic) => {
       const priceId = priceIds[cosmetic.id];
       let price = null;
       let available = false;
       if (typeof priceId === 'string' && priceId) {
-        const stripePrice = await loadPrice(priceId);
-        available = stripePrice.active !== false;
-        if (available) {
-          price = {
-            unitAmount: stripePrice.unit_amount,
-            currency: stripePrice.currency
-          };
+        try {
+          const stripePrice = await loadPrice(priceId);
+          /* A price Stripe answered for counts as reachable whether or not the
+             item is on sale, because an inactive price is a real answer. */
+          resolved++;
+          priceWarnedAt.delete(priceId);
+          available = stripePrice.active !== false;
+          if (available) {
+            price = {
+              unitAmount: stripePrice.unit_amount,
+              currency: stripePrice.currency
+            };
+          }
+        } catch (error) {
+          if (!firstFailure) firstFailure = error;
+          warnAboutPrice(priceId, cosmetic.id, error);
         }
       }
       return {
@@ -156,6 +192,8 @@ export function createShopService(options) {
         ...(userId ? { owned: owned.has(cosmetic.id) } : {})
       };
     }));
+    if (firstFailure && resolved === 0) throw firstFailure;
+    return items;
   }
 
   async function checkout(userId, cosmeticId) {
