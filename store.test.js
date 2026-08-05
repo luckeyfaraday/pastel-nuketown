@@ -514,6 +514,37 @@ test('every script the built page fetches off a CDN is pinned to its bytes', () 
 });
 
 /* ---------------------------------------------------------------------
+   …and that both halves agree on what they are saying
+
+   The store shipped unable to sell anything: the page posted `itemId` and
+   the relay read `body.cosmeticId`, so every BUY came back "unknown
+   cosmetic". Two full test suites had nothing to say about it, because
+   neither crosses the boundary — the relay's tests write the request body
+   themselves, and the tests above answer with a relay that agrees with
+   whatever this file sends. Each half was internally consistent and blind.
+
+   So read both sources and compare the one name they have to share. A
+   regex over source is a poor substitute for an integration test and is
+   used here on purpose: the client is a browser global soup that cannot
+   import account-store.mjs, and a test that cannot fail on the real defect
+   is worth less than an ugly one that can.
+   --------------------------------------------------------------------- */
+test('the checkout field the page sends is the field the relay reads', () => {
+  const client = fs.readFileSync(path.join(__dirname, 'src', '82-store.js'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, 'account-store.mjs'), 'utf8');
+
+  const sent = /storeAPI\(\s*'\/shop\/checkout'[\s\S]{0,300}?body:\s*\{\s*([A-Za-z_$][\w$]*)\s*:/.exec(client);
+  assert.ok(sent, 'no /shop/checkout request body found in src/82-store.js — has the call moved?');
+
+  const read = /shop\.checkout\(\s*[^,]+,\s*body\.([A-Za-z_$][\w$]*)\s*\)/.exec(server);
+  assert.ok(read, 'no /shop/checkout route argument found in account-store.mjs — has the route moved?');
+
+  assert.equal(sent[1], read[1],
+    `the page sends { ${sent[1]}: … } and the relay reads body.${read[1]}, ` +
+    'so every purchase fails as an unknown cosmetic');
+});
+
+/* ---------------------------------------------------------------------
    Where the token is allowed to go
    --------------------------------------------------------------------- */
 
