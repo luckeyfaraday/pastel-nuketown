@@ -477,6 +477,43 @@ test('the built page runs the scrubber before it loads anything off a CDN', () =
 });
 
 /* ---------------------------------------------------------------------
+   …and that the CDN cannot come back as something else
+
+   Running the scrubber first keeps a freshly issued token away from third
+   party code on its way past. It is not the whole job: the session that
+   token becomes lives in localStorage for thirty days, where a substituted
+   CDN response would simply read it on the next load instead. The version
+   is pinned, so the bytes are pinned too, and a response that is not this
+   file does not execute at all. Both copies of Three.js are the same file,
+   so both tags carry the same digest — and neither is checked at all
+   without crossorigin, which is the part that is easy to drop.
+   --------------------------------------------------------------------- */
+test('every script the built page fetches off a CDN is pinned to its bytes', () => {
+  const built = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  /* The fallback tag is assembled inside a JS string, so this looks for the
+     src= that both forms share rather than for a <script> element. */
+  const remote = /\bsrc\s*=\s*\\?["'](https?:\/\/[^"'\\]+)/gi;
+  const loads = [];
+  for (let m = remote.exec(built); m; m = remote.exec(built))
+    loads.push({ url: m[1], tag: built.slice(m.index, m.index + 400) });
+
+  assert.equal(loads.length, 2,
+    `expected the pinned CDN copy and its fallback, found ${loads.length}: ` +
+    loads.map((load) => load.url).join(', '));
+
+  const digests = new Set();
+  for (const { url, tag } of loads) {
+    const digest = /\bintegrity\s*=\s*\\?["'](sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2})\\?["']/.exec(tag);
+    assert.ok(digest, `${url} is loaded with no integrity hash to check it against`);
+    assert.match(tag, /\bcrossorigin\s*=\s*\\?["']anonymous\\?["']/,
+      `${url} has an integrity hash the browser will not check without crossorigin`);
+    digests.add(digest[1]);
+  }
+  assert.equal(digests.size, 1,
+    'the two CDN copies of the same file were pinned to different hashes');
+});
+
+/* ---------------------------------------------------------------------
    Where the token is allowed to go
    --------------------------------------------------------------------- */
 
