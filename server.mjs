@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from 'node:crypto';
+import { randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
@@ -8,6 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createAccountStoreFromEnvironment } from './account-store.mjs';
 import { COSMETICS_BY_ID } from './cosmetics.mjs';
+import { HttpError, readJsonBody, sendJson } from './http-utils.mjs';
+import { clientAddressFromRequest, createBanRegistry } from './moderation.mjs';
 import Protocol from './net-protocol.js';
 
 const ROOT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -73,6 +75,7 @@ function claimSlot(room) {
 }
 
 export function createRelayServer(options = {}) {
+  const relayNow = typeof options.now === 'function' ? options.now : Date.now;
   const indexPath = options.indexPath || DEFAULT_INDEX_PATH;
   const protocolPath = options.protocolPath || DEFAULT_PROTOCOL_PATH;
   const maxMessageBytes = positiveInteger(
@@ -208,9 +211,19 @@ export function createRelayServer(options = {}) {
     ? options.statsPath
     : null;
   const statsFlushMs = positiveInteger(options.statsFlushMs, 10_000);
+  const adminToken = typeof options.adminToken === 'string' ? options.adminToken : '';
+  if (adminToken && (adminToken.length < 32 || adminToken.length > 512 ||
+      !/^[\x21-\x7e]+$/.test(adminToken))) {
+    throw new Error('adminToken must be 32-512 visible ASCII characters.');
+  }
 
   const rooms = new Map();
   const peers = new Map();
+  const bans = options.banRegistry || createBanRegistry({
+    path: typeof options.banPath === 'string' && options.banPath ? options.banPath : null,
+    now: relayNow,
+    idFactory: options.banIdFactory
+  });
 
   /* Lifetime matches played, for the title screen. This counts entries into a
      room, not people: there are no accounts, so the only thing that could tell
@@ -417,13 +430,14 @@ export function createRelayServer(options = {}) {
      handshake. It is optional and a bad or expired value is signed-out state,
      not a failed game connection. Most importantly, the returned entitlement
      set comes from the database rather than from either cosmetic claim. */
-  function approvedCosmetics(message) {
+  function approvedIdentity(message) {
     const declared = Protocol.sanitizeCosmetics(
       message && message.cosmetics,
       catalogAcceptsCosmetic
     );
     const token = message && message.authToken;
     let entitlements = [];
+    let userId = null;
     if (accountStore && accountStore.auth &&
         typeof accountStore.auth.authenticate === 'function' &&
         typeof token === 'string' && /^[A-Za-z0-9_-]{20,512}$/.test(token)) {
@@ -431,18 +445,23 @@ export function createRelayServer(options = {}) {
         const account = accountStore.auth.authenticate({
           authorization: `Bearer ${token}`
         }, false);
-        if (account && Array.isArray(account.entitlements))
+        if (account && Array.isArray(account.entitlements)) {
           entitlements = account.entitlements;
+          userId = account.userId;
+        }
       } catch (error) {
         /* Authentication is deliberately fail-closed for appearance and
            fail-open for play: the peer keeps its seat, wearing the default. */
       }
     }
     const owned = new Set(entitlements);
-    return Protocol.sanitizeCosmetics(
-      declared,
-      (id, kind, slot) => owned.has(id) && catalogAcceptsCosmetic(id, kind, slot)
-    );
+    return {
+      userId,
+      cosmetics: Protocol.sanitizeCosmetics(
+        declared,
+        (id, kind, slot) => owned.has(id) && catalogAcceptsCosmetic(id, kind, slot)
+      )
+    };
   }
 
   function snapshotWithApprovedCosmetics(room, message) {
@@ -465,6 +484,159 @@ export function createRelayServer(options = {}) {
     return { ...message, actors };
   }
 
+  function adminAuthorized(request) {
+    const value = request && request.headers && request.headers.authorization;
+    if (typeof value !== 'string' || !value.startsWith('Bearer ')) return false;
+    const supplied = Buffer.from(value.slice(7), 'utf8');
+    const expected = Buffer.from(adminToken, 'utf8');
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  }
+
+  function publicPeer(peer) {
+    return {
+      id: peer.id,
+      name: peer.name,
+      room: peer.room.code,
+      role: peer.role,
+      slot: peer.slot,
+      signedIn: !!peer.userId,
+      network: bans.networkFingerprint(peer.address)
+    };
+  }
+
+  function onlinePeers() {
+    return Array.from(peers.values())
+      .filter((peer) => peer.room)
+      .sort((a, b) => a.room.code.localeCompare(b.room.code) ||
+        a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  function selectPeer(selector) {
+    const wanted = typeof selector === 'string' ? selector.trim() : '';
+    if (!wanted || wanted.length > 100)
+      throw new HttpError(400, 'invalid_selector', 'Provide a player name or peer id.');
+    const players = onlinePeers();
+    const exactId = players.filter((peer) => peer.id === wanted);
+    if (exactId.length === 1) return exactId[0];
+    const folded = wanted.toLocaleLowerCase('en-US');
+    const exactName = players.filter((peer) =>
+      peer.name.toLocaleLowerCase('en-US') === folded
+    );
+    if (exactName.length === 1) return exactName[0];
+    if (exactName.length > 1) {
+      const error = new HttpError(409, 'ambiguous_player',
+        'More than one online player has that name; use the peer id.');
+      error.candidates = exactName.map(publicPeer);
+      throw error;
+    }
+    const byPrefix = wanted.length >= 4
+      ? players.filter((peer) => peer.id.startsWith(wanted))
+      : [];
+    if (byPrefix.length === 1) return byPrefix[0];
+    if (byPrefix.length > 1) {
+      const error = new HttpError(409, 'ambiguous_player',
+        'That peer-id prefix matches more than one player; use more characters.');
+      error.candidates = byPrefix.map(publicPeer);
+      throw error;
+    }
+    throw new HttpError(404, 'player_not_found', 'No matching player is online.');
+  }
+
+  function disconnectByOperator(peer, action, reason) {
+    const description = describePeer(peer);
+    const roomCode = peer.room && peer.room.code;
+    peer.moderated = true;
+    const message = action === 'banned'
+      ? 'Banned by the server operator.'
+      : 'Removed by the server operator.';
+    sendError(peer, action, message);
+    console.warn(`Admin ${action}: ${description} from room ${roomCode}` +
+      (reason ? ` (${reason})` : ''));
+    try { peer.ws.close(1008, action); }
+    catch (error) { peer.ws.terminate(); }
+  }
+
+  async function handleAdminHttp(request, response, pathname) {
+    if (pathname !== '/admin' && !pathname.startsWith('/admin/')) return false;
+    if (!adminToken) {
+      sendJson(response, 404, { error: 'not_found', message: 'Not found.' });
+      return true;
+    }
+    if (!adminAuthorized(request)) {
+      sendJson(response, 401, { error: 'unauthorized', message: 'Invalid admin token.' }, {
+        'www-authenticate': 'Bearer'
+      });
+      return true;
+    }
+
+    try {
+      if (request.method === 'GET' && pathname === '/admin/players') {
+        sendJson(response, 200, { players: onlinePeers().map(publicPeer) });
+        return true;
+      }
+      if (request.method === 'GET' && pathname === '/admin/bans') {
+        sendJson(response, 200, { bans: bans.list() });
+        return true;
+      }
+      if (request.method === 'POST' &&
+          (pathname === '/admin/kick' || pathname === '/admin/ban')) {
+        const body = await readJsonBody(request, 4096);
+        const peer = selectPeer(body.selector);
+        const reason = typeof body.reason === 'string'
+          ? body.reason.trim().replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200)
+          : '';
+        const player = publicPeer(peer);
+        let result = null;
+        if (pathname === '/admin/ban') {
+          try {
+            result = bans.add(peer, reason);
+          } catch (error) {
+            throw new HttpError(500, 'ban_store_failed',
+              `The ban was not saved: ${error.message}`);
+          }
+        }
+        sendJson(response, 200, {
+          player,
+          ...(result ? { ban: result.ban, created: result.created } : {})
+        });
+        disconnectByOperator(peer, pathname === '/admin/ban' ? 'banned' : 'kicked', reason);
+        return true;
+      }
+      if (request.method === 'POST' && pathname === '/admin/unban') {
+        const body = await readJsonBody(request, 4096);
+        let result;
+        try {
+          result = bans.remove(body.selector);
+        } catch (error) {
+          throw new HttpError(500, 'ban_store_failed',
+            `The ban was not removed: ${error.message}`);
+        }
+        if (result.status === 'missing')
+          throw new HttpError(404, 'ban_not_found', 'No matching ban exists.');
+        if (result.status === 'ambiguous') {
+          const error = new HttpError(409, 'ambiguous_ban',
+            'That ban-id prefix matches more than one ban; use more characters.');
+          error.matches = result.matches;
+          throw error;
+        }
+        sendJson(response, 200, { ban: result.ban });
+        console.warn(`Admin unbanned: ${result.ban.name || result.ban.id} (${result.ban.id})`);
+        return true;
+      }
+      sendJson(response, 404, { error: 'not_found', message: 'Admin route not found.' });
+      return true;
+    } catch (error) {
+      const status = error instanceof HttpError ? error.status : 500;
+      sendJson(response, status, {
+        error: error instanceof HttpError ? error.code : 'internal_error',
+        message: error instanceof HttpError ? error.message : 'Internal server error.',
+        ...(Array.isArray(error.candidates) ? { candidates: error.candidates } : {}),
+        ...(Array.isArray(error.matches) ? { matches: error.matches } : {})
+      });
+      return true;
+    }
+  }
+
   async function handleHttp(request, response) {
     let requestUrl;
     let pathname;
@@ -476,6 +648,8 @@ export function createRelayServer(options = {}) {
       response.end('Bad request\n');
       return;
     }
+
+    if (await handleAdminHttp(request, response, pathname)) return;
 
     if (accountStore && await accountStore.handleHttp(request, response, requestUrl))
       return;
@@ -758,14 +932,15 @@ export function createRelayServer(options = {}) {
     return `"${peer.name}" (${peer.id.slice(0, 8)}, seat ${peer.slot})`;
   }
 
-  function enterRoom(peer, room, role, name, cosmetics) {
+  function enterRoom(peer, room, role, name, identity) {
     if (peer.joinTimer) clearTimeout(peer.joinTimer);
     peer.joinTimer = null;
     peer.name = name;
     peer.role = role;
     peer.room = room;
     peer.slot = claimSlot(room);
-    peer.cosmetics = Protocol.sanitizeCosmetics(cosmetics, catalogAcceptsCosmetic);
+    peer.userId = identity.userId;
+    peer.cosmetics = Protocol.sanitizeCosmetics(identity.cosmetics, catalogAcceptsCosmetic);
     peer.lastSeq = -1;
     /* Arriving is activity. A drop-in gets the full grace period to find the
        deploy card, and nobody is judged on time spent before they were here. */
@@ -778,6 +953,17 @@ export function createRelayServer(options = {}) {
        the total. Host migration reuses the peers already counted — it does not
        come back through here. */
     countMatchPlayed();
+  }
+
+  function rejectBannedIdentity(peer, name, identity) {
+    const ban = bans.match({ userId: identity.userId, address: peer.address });
+    if (!ban) return false;
+    peer.moderated = true;
+    sendError(peer, 'banned', 'Banned by the server operator.');
+    console.warn(`Rejected banned player "${name}" (${peer.id.slice(0, 8)})`);
+    try { peer.ws.close(1008, 'banned'); }
+    catch (error) { peer.ws.terminate(); }
+    return true;
   }
 
   /* The round is part of the handshake, not just of `start`. A player who
@@ -811,6 +997,8 @@ export function createRelayServer(options = {}) {
       sendError(peer, 'invalid-name', 'Choose a player name.');
       return;
     }
+    const identity = approvedIdentity(message);
+    if (rejectBannedIdentity(peer, name, identity)) return;
     if (rooms.size >= maxRooms) {
       sendError(peer, 'server-full', 'The room server is full.');
       return;
@@ -843,7 +1031,7 @@ export function createRelayServer(options = {}) {
       listed: message.listed !== false
     };
     rooms.set(code, room);
-    enterRoom(peer, room, 'host', name, approvedCosmetics(message));
+    enterRoom(peer, room, 'host', name, identity);
     roomReply(peer);
     broadcastMembers(room);
   }
@@ -854,6 +1042,8 @@ export function createRelayServer(options = {}) {
       sendError(peer, 'invalid-name', 'Choose a player name.');
       return;
     }
+    const identity = approvedIdentity(message);
+    if (rejectBannedIdentity(peer, name, identity)) return;
 
     const code = Protocol.normalizeRoomCode(message.room);
     const room = rooms.get(code);
@@ -875,7 +1065,7 @@ export function createRelayServer(options = {}) {
       return;
     }
 
-    enterRoom(peer, room, 'guest', name, approvedCosmetics(message));
+    enterRoom(peer, room, 'guest', name, identity);
     /* Before either reply: the arrival is the second body that starts the
        clock, and both messages are meant to carry the clock's answer. */
     scheduleAutoStart(room);
@@ -1217,6 +1407,7 @@ export function createRelayServer(options = {}) {
   }
 
   function handleMessage(peer, raw) {
+    if (peer.moderated) return;
     if (!consumeRateToken(peer)) {
       sendError(peer, 'rate-limit', 'Too many messages.');
       peer.ws.close(1008, 'rate limit exceeded');
@@ -1261,6 +1452,7 @@ export function createRelayServer(options = {}) {
     peer.room = null;
     peer.role = null;
     peer.name = '';
+    peer.userId = null;
     peer.cosmetics = Protocol.sanitizeCosmetics(null);
     peer.lastSeq = -1;
   }
@@ -1500,11 +1692,13 @@ export function createRelayServer(options = {}) {
     leaveRoom(peer);
   }
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, request) => {
     const peer = {
       ws,
       id: String(makeId()),
       name: '',
+      userId: null,
+      address: clientAddressFromRequest(request),
       role: null,
       room: null,
       slot: -1,
@@ -1512,6 +1706,7 @@ export function createRelayServer(options = {}) {
       lastSeq: -1,
       alive: true,
       cleanedUp: false,
+      moderated: false,
       rateTokens: rateBurst,
       rateUpdatedAt: Date.now(),
       joinTimer: null,
@@ -1560,6 +1755,13 @@ export function createRelayServer(options = {}) {
     ws.on('error', () => {
       cleanupPeer(peer);
     });
+    const networkBan = bans.match(peer);
+    if (networkBan) {
+      peer.moderated = true;
+      sendError(peer, 'banned', 'Banned by the server operator.');
+      console.warn(`Rejected banned network ${bans.networkFingerprint(peer.address)}`);
+      try { ws.close(1008, 'banned'); } catch (error) { ws.terminate(); }
+    }
   });
 
   server.on('upgrade', (request, socket, head) => {
@@ -1672,6 +1874,12 @@ function statsPathFromEnvironment(env) {
   return stateDir ? resolve(stateDir, 'stats.json') : null;
 }
 
+export function banPathFromEnvironment(env) {
+  if (env.BAN_PATH) return resolve(env.BAN_PATH);
+  const stateDir = (env.STATE_DIRECTORY || '').split(':')[0];
+  return stateDir ? resolve(stateDir, 'bans.json') : null;
+}
+
 export function accountStoreForEnvironment(env, options = {}) {
   /* Production remains strict by default. Local and LAN relays can opt out
      explicitly without inventing OAuth and Stripe credentials; this removes
@@ -1693,6 +1901,8 @@ if (isMain) {
   const relay = createRelayServer({
     allowedOrigins: configuredOrigins,
     accountStore,
+    adminToken: process.env.ADMIN_TOKEN || '',
+    banPath: banPathFromEnvironment(process.env),
     statsPath: statsPathFromEnvironment(process.env),
     /* Both halves of the aim limit are a decision made after reading the logs,
        so both are a restart rather than a code change. Unset leaves the

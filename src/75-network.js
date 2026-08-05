@@ -904,8 +904,9 @@ function netConnect(kind, requestedRoom, quickPlan) {
           'Connection lost — return to the menu to reconnect.');
       } else {
         NET.mode = 'solo'; NET.phase = 'idle';
-        netShowMainMenu('Connection closed. Is the game server running?');
-        netStatus('Connection closed.', 'error');
+        const reason = NET.endReason;
+        netShowMainMenu(reason || 'Connection closed. Is the game server running?');
+        netStatus(reason || 'Connection closed.', 'error');
       }
     }
     netSetMenuBusy(false);
@@ -1110,7 +1111,8 @@ function netHandleWire(raw) {
     NET.starting = false;
     /* Held for the close that follows: an error the relay hangs up on is the
        reason, and by the time the socket shuts the message is gone. */
-    if (msg.code === 'idle') NET.endReason = errorText;
+    if (msg.code === 'idle' || msg.code === 'kicked' || msg.code === 'banned')
+      NET.endReason = errorText;
     if (NET.phase === 'connecting') {
       const plan = NET.quick;
       /* Only a join can be retried elsewhere. A create that fails failed for a

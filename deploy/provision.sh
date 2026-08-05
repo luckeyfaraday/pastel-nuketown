@@ -14,6 +14,7 @@ set -euo pipefail
 # which is how a price ID is taken off sale. A fresh host has no file and still
 # reaches the loud guards below.
 ACCOUNT_ENV_NAMES=(
+  ADMIN_TOKEN
   GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URI GAME_ORIGIN
   STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
   STRIPE_PRICE_SMG_COTTONCLOUD STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW
@@ -99,6 +100,9 @@ STRIPE_PRICE_CHAR_CLOUDKNIGHT="${STRIPE_PRICE_CHAR_CLOUDKNIGHT:-}"
 STRIPE_PRICE_FX_STARFALL="${STRIPE_PRICE_FX_STARFALL:-}"
 STRIPE_PRICE_FX_CONFETTIPOP="${STRIPE_PRICE_FX_CONFETTIPOP:-}"
 STRIPE_PRICE_FX_BUBBLETRAIL="${STRIPE_PRICE_FX_BUBBLETRAIL:-}"
+# Generated once and retained in the root-only environment file. It never goes
+# in a command argument, the checkout, or Caddy's public route.
+ADMIN_TOKEN="${ADMIN_TOKEN:-$(openssl rand -hex 32)}"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$1"; }
 
@@ -213,6 +217,9 @@ npm ci --silent
 npm run build
 npm test
 chown -R nuketown:nuketown "$APP_DIR"
+# A root-run operator tool can read /etc/nuketown.env without copying its token
+# into shell history. Keep a stable command path across release checkouts.
+install -m 755 -o root -g root "$APP_DIR/moderate.mjs" /usr/local/sbin/nuketown-admin
 
 say "systemd unit (allowed origins: ${ALLOWED_ORIGINS:-<any>})"
 # Keep credentials out of the world-readable unit itself. systemd reads this
@@ -302,6 +309,11 @@ if ! command -v caddy >/dev/null 2>&1; then
 fi
 cat > /etc/caddy/Caddyfile <<CADDY
 $DOMAIN {
+    # The operator API is reached directly over the loopback listener. The
+    # bearer token remains mandatory there; this rule is a second boundary so
+    # the public reverse proxy never forwards an admin request at all.
+    @admin path /admin /admin/*
+    respond @admin 404
     reverse_proxy 127.0.0.1:8080
 }
 CADDY
