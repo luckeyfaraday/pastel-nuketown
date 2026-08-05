@@ -81,3 +81,25 @@ export const COSMETICS = Object.freeze([
 export const COSMETICS_BY_ID = new Map(
   COSMETICS.map((cosmetic) => [cosmetic.id, cosmetic])
 );
+
+/* The pass uses the store's existing product contract but is not a wearable
+   cosmetic. Keeping it out of COSMETICS prevents preview/equip validation from
+   treating it as appearance; the shop can withhold it from its public listing
+   while STORE_PRODUCTS_BY_ID keeps checkout and webhooks able to resolve it. */
+export const PREMIUM_PASS_ID = 'battlepass-season-1-premium';
+export const PREMIUM_PASS_PRODUCT = Object.freeze({
+  id: PREMIUM_PASS_ID,
+  displayName: 'Season 1 Premium Pass',
+  type: 'battlepass',
+  slot: null,
+  priceEnvVar: 'STRIPE_PRICE_BATTLEPASS_SEASON_1_PREMIUM'
+});
+
+export const STORE_PRODUCTS = Object.freeze([
+  ...COSMETICS,
+  PREMIUM_PASS_PRODUCT
+]);
+
+export const STORE_PRODUCTS_BY_ID = new Map(
+  STORE_PRODUCTS.map((product) => [product.id, product])
+);

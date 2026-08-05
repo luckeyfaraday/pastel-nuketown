@@ -1,6 +1,10 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
-import { COSMETICS, COSMETICS_BY_ID } from './cosmetics.mjs';
+import {
+  PREMIUM_PASS_ID,
+  STORE_PRODUCTS,
+  STORE_PRODUCTS_BY_ID
+} from './cosmetics.mjs';
 import { HttpError } from './http-utils.mjs';
 
 function requireString(value, label) {
@@ -76,7 +80,19 @@ export function createShopService(options) {
   const stripeApiBase = options.stripeApiBase || 'https://api.stripe.com/v1';
   const webhookToleranceSeconds = options.webhookToleranceSeconds || 300;
   const priceCacheMs = options.priceCacheMs || 5 * 60 * 1000;
+  const catalogProducts = options.includePremiumPassInCatalog === true
+    ? STORE_PRODUCTS
+    : STORE_PRODUCTS.filter((product) => product.id !== PREMIUM_PASS_ID);
   const configuredLogger = options.logger || console;
+  const onEntitlementGranted = typeof options.onEntitlementGranted === 'function'
+    ? options.onEntitlementGranted
+    : () => [];
+  const onEntitlementRevoked = typeof options.onEntitlementRevoked === 'function'
+    ? options.onEntitlementRevoked
+    : () => [];
+  const onEntitlementRestored = typeof options.onEntitlementRestored === 'function'
+    ? options.onEntitlementRestored
+    : () => [];
   /* A warning is diagnostic, never part of applying the Stripe event. Fall
      back field-by-field so a partial injected logger cannot throw inside the
      receipt-and-entitlement transaction and make Stripe retry forever. */
@@ -129,10 +145,12 @@ export function createShopService(options) {
 
   /* An item quietly dropping off the shelves has to be visible in the journal,
      and the catalog is read on every page load, so the two pull against each
-     other: with Stripe down that is nine lines per visitor. One line per price
-     per cache window is the compromise — often enough to see the outage start,
-     quiet enough to leave the log readable. A price that recovers forgets its
-     warning, so a second outage announces itself immediately. */
+     other: without throttling, a Stripe outage would be one line per item per
+     visitor.
+     One line per price per cache window is the compromise — often enough to see
+     the outage start, quiet enough to leave the log readable. A price that
+     recovers forgets its warning, so a second outage announces itself
+     immediately. */
   const priceWarnedAt = new Map();
 
   function warnAboutPrice(priceId, cosmeticId, error) {
@@ -146,9 +164,9 @@ export function createShopService(options) {
   }
 
   /* One price Stripe will not answer for should not close the whole shop. The
-     item shape already says `available: false` for a cosmetic with no price
+     item shape already says `available: false` for a product with no price
      configured, and from the player's side an unreadable price is the same
-     thing, so the loads are settled one at a time and the other eight stay on
+     thing, so the loads are settled one at a time and the other items stay on
      sale. A single mistyped price ID used to 502 the storefront.
 
      Losing every one of them is a different report, though: "nothing is for
@@ -159,8 +177,8 @@ export function createShopService(options) {
     const owned = new Set(userId ? db.listEntitlements(userId) : []);
     let resolved = 0;
     let firstFailure = null;
-    const items = await Promise.all(COSMETICS.map(async (cosmetic) => {
-      const priceId = priceIds[cosmetic.id];
+    const items = await Promise.all(catalogProducts.map(async (product) => {
+      const priceId = priceIds[product.id];
       let price = null;
       let available = false;
       if (typeof priceId === 'string' && priceId) {
@@ -179,17 +197,18 @@ export function createShopService(options) {
           }
         } catch (error) {
           if (!firstFailure) firstFailure = error;
-          warnAboutPrice(priceId, cosmetic.id, error);
+          warnAboutPrice(priceId, product.id, error);
         }
       }
       return {
-        id: cosmetic.id,
-        displayName: cosmetic.displayName,
-        type: cosmetic.type,
-        slot: cosmetic.slot,
+        id: product.id,
+        displayName: product.displayName,
+        type: product.type,
+        slot: product.slot,
+        productKind: product.type === 'battlepass' ? 'battlepass' : 'cosmetic',
         available,
         price,
-        ...(userId ? { owned: owned.has(cosmetic.id) } : {})
+        ...(userId ? { owned: owned.has(product.id) } : {})
       };
     }));
     if (firstFailure && resolved === 0) throw firstFailure;
@@ -197,7 +216,7 @@ export function createShopService(options) {
   }
 
   async function checkout(userId, cosmeticId) {
-    const cosmetic = COSMETICS_BY_ID.get(cosmeticId);
+    const cosmetic = STORE_PRODUCTS_BY_ID.get(cosmeticId);
     if (!cosmetic)
       throw new HttpError(400, 'unknown_cosmetic', 'That cosmetic does not exist.');
     if (db.hasEntitlement(userId, cosmetic.id))
@@ -268,7 +287,7 @@ export function createShopService(options) {
     /* Old or hand-built Stripe objects should be acknowledged, but they must
        never mint an item outside this catalog or for a user that does not
        exist. Retrying such an event forever cannot make it safer. */
-    if (!userId || !db.getUser(userId) || !COSMETICS_BY_ID.has(cosmeticId))
+    if (!userId || !db.getUser(userId) || !STORE_PRODUCTS_BY_ID.has(cosmeticId))
       return { action: 'ignored' };
     const paymentIntentId = stripeReference(object.payment_intent);
     if (db.hasEntitlement(userId, cosmeticId)) {
@@ -281,14 +300,21 @@ export function createShopService(options) {
         `payment intent ${paymentIntentId || '<missing>'}.`
       );
     }
+    const grantedAt = now();
     db.grantEntitlement({
       userId,
       cosmeticId,
       checkoutSessionId: stripeReference(object.id),
       paymentIntentId,
-      grantedAt: now()
+      grantedAt
     });
-    return { action: 'granted', userId, cosmeticId };
+    const rewardsUnlocked = onEntitlementGranted(userId, cosmeticId, grantedAt);
+    return {
+      action: 'granted',
+      userId,
+      cosmeticId,
+      rewardsUnlocked: Array.isArray(rewardsUnlocked) ? rewardsUnlocked : []
+    };
   }
 
   function refundedInFull(object) {
@@ -325,20 +351,30 @@ export function createShopService(options) {
 
   function revokedCharge(object) {
     const purchase = purchaseOfCharge(object);
+    const revokedAt = now();
+    const rewardsRevoked = [];
     const revoked = db.revokePurchase({
       paymentIntentId: purchase.paymentIntentId,
       userId: purchase.userId,
       cosmeticId: purchase.cosmeticId,
-      revokedAt: now()
+      revokedAt,
+      apply: ({ userId, cosmeticId, revocationId }) => {
+        const rewards = onEntitlementRevoked(
+          userId,
+          cosmeticId,
+          revokedAt,
+          revocationId
+        );
+        if (Array.isArray(rewards)) rewardsRevoked.push(...rewards);
+      }
     });
-    return { action: 'revoked', count: revoked };
+    return { action: 'revoked', count: revoked, rewardsRevoked };
   }
 
   /* Winning a dispute puts the money back on this side of the table, and the
      item it paid for has to come back with it. Without this, a chargeback the
-     player never raised — or raised and lost — took a cosmetic they had in fact
-     paid for and left them no way at all to get it back, since the store
-     refuses to sell something the account already has a row for.
+     player never raised — or raised and lost — would leave a product revoked
+     after Stripe says its payment stands.
 
      A refund is the one thing that outranks a win: money that has genuinely
      gone back keeps the entitlement revoked. Stripe will not let a charge be
@@ -347,12 +383,23 @@ export function createShopService(options) {
   function restoredCharge(object) {
     const purchase = purchaseOfCharge(object);
     if (refundedInFull(purchase.charge)) return { action: 'ignored' };
+    const restoredAt = now();
+    const rewardsRestored = [];
     const restored = db.restorePurchase({
       paymentIntentId: purchase.paymentIntentId,
       userId: purchase.userId,
-      cosmeticId: purchase.cosmeticId
+      cosmeticId: purchase.cosmeticId,
+      apply: ({ userId, cosmeticId, revocationId }) => {
+        const rewards = onEntitlementRestored(
+          userId,
+          cosmeticId,
+          restoredAt,
+          revocationId
+        );
+        if (Array.isArray(rewards)) rewardsRestored.push(...rewards);
+      }
     });
-    return { action: 'restored', count: restored };
+    return { action: 'restored', count: restored, rewardsRestored };
   }
 
   /* Two dispute events need the charge object itself rather than its id: a

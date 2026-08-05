@@ -1,7 +1,8 @@
 import { resolve } from 'node:path';
 
 import { createAuthService } from './auth.mjs';
-import { COSMETICS } from './cosmetics.mjs';
+import { createBattlePassService } from './battlepass.mjs';
+import { STORE_PRODUCTS } from './cosmetics.mjs';
 import {
   headerValue,
   HttpError,
@@ -19,6 +20,7 @@ const ROUTE_METHODS = new Map([
   ['/auth/logout', 'POST'],
   ['/shop/catalog', 'GET'],
   ['/shop/checkout', 'POST'],
+  ['/battlepass/me', 'GET'],
   ['/stripe/webhook', 'POST']
 ]);
 
@@ -65,6 +67,11 @@ export function createAccountStore(options = {}) {
     now: options.now,
     ...(options.authOptions || {})
   });
+  const battlePass = createBattlePassService({
+    db,
+    now: options.now,
+    ...(options.battlePassOptions || {})
+  });
   const shop = createShopService({
     db,
     stripeSecretKey: options.stripeSecretKey,
@@ -73,7 +80,11 @@ export function createAccountStore(options = {}) {
     priceIds: options.priceIds,
     fetchImpl: options.fetchImpl,
     now: options.now,
-    ...(options.shopOptions || {})
+    includePremiumPassInCatalog: options.includePremiumPassInCatalog,
+    ...(options.shopOptions || {}),
+    onEntitlementGranted: battlePass.entitlementGranted,
+    onEntitlementRevoked: battlePass.entitlementRevoked,
+    onEntitlementRestored: battlePass.entitlementRestored
   });
   let closed = false;
 
@@ -191,6 +202,12 @@ export function createAccountStore(options = {}) {
         return true;
       }
 
+      if (pathname === '/battlepass/me') {
+        const account = auth.authenticate(request.headers, true);
+        sendJson(response, 200, battlePass.me(account.userId), headers);
+        return true;
+      }
+
       if (pathname === '/stripe/webhook') {
         const rawBody = await readRequestBody(request);
         const result = await shop.webhook(
@@ -227,7 +244,7 @@ export function createAccountStore(options = {}) {
     if (ownsDatabase) db.close();
   }
 
-  return { db, auth, shop, handleHttp, close };
+  return { db, auth, shop, battlePass, handleHttp, close };
 }
 
 export function createAccountStoreFromEnvironment(env, options = {}) {
@@ -239,10 +256,10 @@ export function createAccountStoreFromEnvironment(env, options = {}) {
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET'
   ]);
-  const priceIds = Object.fromEntries(COSMETICS.map((cosmetic) => [
-    cosmetic.id,
-    typeof env[cosmetic.priceEnvVar] === 'string'
-      ? env[cosmetic.priceEnvVar].trim()
+  const priceIds = Object.fromEntries(STORE_PRODUCTS.map((product) => [
+    product.id,
+    typeof env[product.priceEnvVar] === 'string'
+      ? env[product.priceEnvVar].trim()
       : ''
   ]));
   return createAccountStore({
@@ -255,6 +272,8 @@ export function createAccountStoreFromEnvironment(env, options = {}) {
     stripeSecretKey: env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
     priceIds,
+    includePremiumPassInCatalog:
+      env.BATTLEPASS_CATALOG_ENABLED === 'true',
     ...options
   });
 }

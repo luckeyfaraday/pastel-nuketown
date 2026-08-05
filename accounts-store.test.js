@@ -963,6 +963,7 @@ test('catalog reads Stripe prices and reports missing price configuration unavai
 
   const items = await store.catalog();
   assert.equal(items.length, 9);
+  assert.equal(items.some((item) => item.id === 'battlepass-season-1-premium'), false);
   assert.deepEqual(items[0].price, { unitAmount: 425, currency: 'eur' });
   assert.equal(items[0].available, true);
   assert.equal(items[1].price, null);
@@ -971,7 +972,49 @@ test('catalog reads Stripe prices and reports missing price configuration unavai
   assert.equal(requests, 1);
 });
 
-/* A shop of nine items should not be closed by one of them. Reading a price is
+test('premium pass catalog exposure is default-off without disabling checkout', async (t) => {
+  const { database, shop } = await accountModules();
+  const db = database.openStoreDatabase(':memory:');
+  t.after(() => db.close());
+  const user = db.upsertGoogleUser({
+    subject: 'google-hidden-pass',
+    email: 'hidden-pass@example.com',
+    displayName: 'Hidden Pass Buyer'
+  });
+  const passId = 'battlepass-season-1-premium';
+  const makeStore = (includePremiumPassInCatalog) => shop.createShopService({
+    ...serviceOptions(db),
+    includePremiumPassInCatalog,
+    priceIds: { [passId]: 'price_season_1' },
+    fetchImpl: async (url) => {
+      if (url.endsWith('/prices/price_season_1')) {
+        return response({
+          id: 'price_season_1',
+          active: true,
+          unit_amount: 900,
+          currency: 'usd'
+        });
+      }
+      if (url.endsWith('/checkout/sessions'))
+        return response({ url: 'https://checkout.stripe.test/season-1' });
+      throw new Error(`Unexpected Stripe request ${url}`);
+    }
+  });
+
+  const hidden = makeStore();
+  assert.equal((await hidden.catalog()).some((item) => item.id === passId), false);
+  assert.deepEqual(await hidden.checkout(user.id, passId), {
+    url: 'https://checkout.stripe.test/season-1'
+  });
+
+  const visible = makeStore(true);
+  assert.equal((await visible.catalog()).some((item) => item.id === passId), true);
+  assert.deepEqual(await visible.checkout(user.id, passId), {
+    url: 'https://checkout.stripe.test/season-1'
+  });
+});
+
+/* A shop with several products should not be closed by one of them. Reading a price is
    a separate Stripe request per item, so one mistyped or archived price ID used
    to take the whole storefront down with a 502. */
 test('one unreadable price takes its own item off sale and leaves the rest open', async (t) => {
@@ -1038,7 +1081,7 @@ test('a shop that answers for nothing at all is unreachable, not sold out', asyn
   await assert.rejects(
     store.catalog(),
     (error) => error.code === 'stripe_unavailable',
-    'a storefront nobody can price should not be reported as nine sold-out items'
+    'a storefront nobody can price should not be reported as ten sold-out products'
   );
 });
 
