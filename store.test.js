@@ -1858,3 +1858,59 @@ test('a card whose picture cannot be taken keeps the gradient it always had', ()
     character: null, effect: null, weapons: { smg: null, shotgun: null, rifle: null }
   });
 });
+
+/* =====================================================================
+   THE PRICE ON THE CARD
+
+   /shop/catalog answers { unitAmount, currency } — Stripe's smallest unit
+   with a name on it — and the card used to hand that object to a formatter
+   that only read strings and numbers, so every shelf in the store showed a
+   blank where the price belongs. These pin the shape the relay actually
+   sends, and the two older shapes the formatter has always understood.
+   ===================================================================== */
+
+test('a price is read in the shape the relay sends it', () => {
+  const ctx = makeStore();
+  assert.equal(ctx.storePriceText({ unitAmount: 499, currency: 'usd' }), '$4.99');
+  assert.equal(ctx.storePriceText({ unitAmount: 425, currency: 'eur' }), '€4.25');
+  assert.equal(ctx.storePriceText({ unitAmount: 350, currency: 'gbp' }), '£3.50');
+  /* Stripe counts a yen whole, so the unit is not divided away. */
+  assert.equal(ctx.storePriceText({ unitAmount: 1200, currency: 'jpy' }), '¥1200');
+  /* A currency with no symbol in the table keeps its code. */
+  assert.equal(ctx.storePriceText({ unitAmount: 500, currency: 'sek' }), 'SEK 5.00');
+  /* The two older shapes keep working. */
+  assert.equal(ctx.storePriceText(499), '$4.99');
+  assert.equal(ctx.storePriceText('4.99 kr'), '4.99 kr');
+  /* Anything unreadable leaves the space empty rather than lying. */
+  assert.equal(ctx.storePriceText(null), '');
+  assert.equal(ctx.storePriceText({}), '');
+  assert.equal(ctx.storePriceText({ unitAmount: -5, currency: 'usd' }), '');
+  assert.equal(ctx.storePriceText({ unitAmount: '499', currency: 'usd' }), '');
+});
+
+test('the cards show the prices the catalog sends', async () => {
+  /* The body is the envelope account-store.mjs answers with, and each item
+     is the shape shop.mjs builds — displayName, available, and a price
+     object, exactly as a signed-out page load receives them. */
+  const ctx = makeCase({
+    reply: url => /\/shop\/catalog/.test(url)
+      ? { status: 200, body: { items: [
+            { id: 'smg-cottoncloud', displayName: 'Folded Paper Crane', type: 'weapon',
+              slot: 'smg', productKind: 'cosmetic', available: true,
+              price: { unitAmount: 499, currency: 'usd' } },
+            { id: 'char-midnight', displayName: 'Midnight', type: 'character',
+              slot: null, productKind: 'cosmetic', available: true,
+              price: { unitAmount: 425, currency: 'eur' } },
+            { id: 'fx-starfall', displayName: 'Starfall', type: 'effect',
+              slot: null, productKind: 'cosmetic', available: true,
+              price: { unitAmount: 1200, currency: 'jpy' } }
+          ] } }
+      : { status: 404, body: null }
+  });
+  ctx.storeShow(true);
+  await settle();
+
+  const prices = ctx.__dom.storeGrid.querySelectorAll('.sprice')
+    .map(el => el.textContent);
+  assert.deepEqual(prices, ['$4.99', '€4.25', '¥1200']);
+});
