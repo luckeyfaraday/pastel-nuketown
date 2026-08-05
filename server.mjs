@@ -228,6 +228,10 @@ export function createRelayServer(options = {}) {
     options.battlePassMaxRetryAttempts,
     BATTLE_PASS_MAX_RETRY_ATTEMPTS
   );
+  const maxUnrecordedBattlePassMatches = positiveInteger(
+    options.maxUnrecordedBattlePassMatches,
+    100
+  );
   const roomRandom = typeof options.roomRandom === 'function'
     ? options.roomRandom
     : secureRandom;
@@ -242,6 +246,7 @@ export function createRelayServer(options = {}) {
   const rooms = new Map();
   const peers = new Map();
   const unrecordedBattlePassMatches = new Map();
+  let droppedUnrecordedBattlePassMatches = 0;
   let battlePassRetryTimer = null;
   let battlePassRetryAt = null;
 
@@ -454,15 +459,15 @@ export function createRelayServer(options = {}) {
   /* A browser WebSocket cannot attach an Authorization header, so the same
      bearer credential used by the account HTTP API travels once in the room
      handshake. It is optional and a bad or expired value is signed-out state,
-     not a failed game connection. Most importantly, the returned entitlement
-     set comes from the database rather than from either cosmetic claim. */
+     not a failed game connection. Paid entitlements and active earned claims
+     remain separate records; ownedCosmeticIds unions them only for this gate. */
   function approvedIdentity(message) {
     const declared = Protocol.sanitizeCosmetics(
       message && message.cosmetics,
       catalogAcceptsCosmetic
     );
     const token = message && message.authToken;
-    let entitlements = [];
+    let ownedCosmetics = [];
     let userId = null;
     if (accountStore && accountStore.auth &&
         typeof accountStore.auth.authenticate === 'function' &&
@@ -472,15 +477,17 @@ export function createRelayServer(options = {}) {
           authorization: `Bearer ${token}`
         }, false);
         if (account && Array.isArray(account.entitlements)) {
-          entitlements = account.entitlements;
           userId = account.userId;
+          ownedCosmetics = typeof accountStore.ownedCosmeticIds === 'function'
+            ? accountStore.ownedCosmeticIds(account)
+            : account.entitlements;
         }
       } catch (error) {
         /* Authentication is deliberately fail-closed for appearance and
            fail-open for play: the peer keeps its seat, wearing the default. */
       }
     }
-    const owned = new Set(entitlements);
+    const owned = new Set(ownedCosmetics);
     return {
       userId,
       cosmetics: Protocol.sanitizeCosmetics(
@@ -1074,6 +1081,42 @@ export function createRelayServer(options = {}) {
     );
   }
 
+  function battlePassFallbackState() {
+    let operator = 0;
+    for (const queued of unrecordedBattlePassMatches.values())
+      if (queued.operator) operator++;
+    return {
+      queued: unrecordedBattlePassMatches.size,
+      operator,
+      dropped: droppedUnrecordedBattlePassMatches
+    };
+  }
+
+  /* This queue exists only when SQLite could not even accept the durable
+     pending row. Keep a bounded, operator-countable last resort instead of
+     retaining participant arrays without limit. If it fills, terminal entries
+     are discarded first and every discarded result remains visible in the
+     cumulative counter and error log. */
+  function queueUnrecordedBattlePassMatch(matchId, result) {
+    if (!unrecordedBattlePassMatches.has(matchId) &&
+        unrecordedBattlePassMatches.size >= maxUnrecordedBattlePassMatches) {
+      let discard = null;
+      for (const [candidateId, candidate] of unrecordedBattlePassMatches) {
+        if (candidate.operator) { discard = candidateId; break; }
+        if (discard === null) discard = candidateId;
+      }
+      if (discard !== null) {
+        unrecordedBattlePassMatches.delete(discard);
+        droppedUnrecordedBattlePassMatches++;
+        console.error(
+          `Battle-pass in-memory fallback is capped at ` +
+          `${maxUnrecordedBattlePassMatches}; discarded match ${discard}.`
+        );
+      }
+    }
+    unrecordedBattlePassMatches.set(matchId, result);
+  }
+
   function scheduleBattlePassRetry(nextRetryAt = Date.now() + battlePassRetryMs) {
     if (battlePassRetryTimer && battlePassRetryAt <= nextRetryAt) return;
     if (battlePassRetryTimer) clearTimeout(battlePassRetryTimer);
@@ -1169,17 +1212,23 @@ export function createRelayServer(options = {}) {
     return combined;
   }
 
-  function awardBattlePassForRoom(room) {
+  function awardBattlePassForRoom(room, endingUserIds = []) {
     const battlePass = accountStore && accountStore.battlePass;
     if (!room.matchId || !battlePass ||
         typeof battlePass.recordMatchResult !== 'function') return false;
+    const openingParticipants = room.battlePassParticipants || new Set();
+    /* An all-anonymous match has no account award to miss. It is ordinary
+       play, so do not turn its duration and participant floors into warnings. */
+    if (openingParticipants.size === 0) return false;
     /* A bearer at the opening whistle and a seat at the result are both
-       required. This keeps a drive-by join, or an account that left the
-       match running behind it, from becoming a completed-match participant. */
+       required. A disconnect that itself forces fallback is part of that
+       forced result, so fallback supplies that account in endingUserIds. */
     const present = new Set(
       Array.from(room.members.values(), (member) => member.userId).filter(Boolean)
     );
-    const participants = Array.from(room.battlePassParticipants || [])
+    for (const userId of endingUserIds)
+      if (typeof userId === 'string' && userId) present.add(userId);
+    const participants = Array.from(openingParticipants)
       .filter((userId) => present.has(userId));
     const awardedAt = relayNow();
     const durationMs = awardedAt - room.battlePassStartedAt;
@@ -1244,7 +1293,7 @@ export function createRelayServer(options = {}) {
       /* If even the durable insert is temporarily unavailable, retain the full
          relay-authored result in memory and apply the same bounded retry policy
          after ending play. */
-      unrecordedBattlePassMatches.set(result.matchId, {
+      queueUnrecordedBattlePassMatch(result.matchId, {
         ...result,
         attemptCount: 1,
         nextAttemptAt: Date.now() + battlePassRetryMs,
@@ -1578,7 +1627,16 @@ export function createRelayServer(options = {}) {
     return null;
   }
 
-  function fallbackRestart(room) {
+  function fallbackRestart(room, additionalEndingUserIds = []) {
+    const migrationDepartures = room.migrating
+      ? room.migrating.departedUserIds
+      : [];
+    if (room.started) {
+      awardBattlePassForRoom(room, [
+        ...migrationDepartures,
+        ...additionalEndingUserIds
+      ]);
+    }
     if (room.migrating && room.migrating.timer) clearTimeout(room.migrating.timer);
     room.migrating = null;
     clearSnapshotStall(room);
@@ -1662,6 +1720,7 @@ export function createRelayServer(options = {}) {
   function beginMigration(room, failedHost, removeHost) {
     clearSnapshotStall(room);
     clearAutoStart(room);
+    const failedUserId = failedHost.userId;
     if (removeHost) {
       room.members.delete(failedHost.id);
       clearRoomMembership(failedHost);
@@ -1669,15 +1728,13 @@ export function createRelayServer(options = {}) {
       failedHost.role = 'guest';
     }
     if (!room.members.size) {
-      rooms.delete(room.code);
-      room.host = null;
-      room.started = false;
+      fallbackRestart(room, failedUserId ? [failedUserId] : []);
       return;
     }
     if (!room.started || !canMigrateSeamlessly(room)) {
       /* fallbackRestart puts the room back in a lobby, which is a lobby that
          needs its clock re-armed — it does that itself. */
-      fallbackRestart(room);
+      fallbackRestart(room, failedUserId ? [failedUserId] : []);
       return;
     }
     room.migrating = {
@@ -1686,9 +1743,10 @@ export function createRelayServer(options = {}) {
       expected: new Set(),
       snapshot: room.latestSnapshot,
       checkpoint: room.latestCheckpoint,
-      /* Authority changes do not restart the match. Preserve the opening-whistle
-         account set so the surviving roster can still be paid at the result. */
-      battlePassParticipants: new Set(room.battlePassParticipants),
+      /* If every promotion fails, the disconnects themselves become the
+         forced result. Remember those account ids so fallback can treat them
+         as present at that endpoint after their room memberships are cleared. */
+      departedUserIds: new Set(failedUserId ? [failedUserId] : []),
       timer: null
     };
     attemptPromotion(room);
@@ -1698,7 +1756,6 @@ export function createRelayServer(options = {}) {
     if (!room.migrating) return;
     const migration = room.migrating;
     if (migration.timer) clearTimeout(migration.timer);
-    room.battlePassParticipants = migration.battlePassParticipants;
     room.migrating = null;
     for (const member of room.members.values()) {
       member.lastSeq = -1;
@@ -1718,6 +1775,8 @@ export function createRelayServer(options = {}) {
 
   function migrateHostedRoom(room, departedHost) {
     if (room.migrating) {
+      if (departedHost.userId)
+        room.migrating.departedUserIds.add(departedHost.userId);
       room.members.delete(departedHost.id);
       clearRoomMembership(departedHost);
       attemptPromotion(room);
@@ -1877,6 +1936,13 @@ export function createRelayServer(options = {}) {
   async function close() {
     if (heartbeat) clearInterval(heartbeat);
     if (idleSweep) clearInterval(idleSweep);
+    /* A planned shutdown is also a match result for every room still in play.
+       Record those relay-authored results while memberships and the account
+       database are still available, then give any fallback queue one final
+       chance to reach the durable pending table. */
+    for (const room of rooms.values())
+      if (room.started) awardBattlePassForRoom(room);
+    retryBattlePassAwards();
     if (battlePassRetryTimer) clearTimeout(battlePassRetryTimer);
     battlePassRetryTimer = null;
     battlePassRetryAt = null;
@@ -1885,6 +1951,14 @@ export function createRelayServer(options = {}) {
     if (statsTimer) clearTimeout(statsTimer);
     statsTimer = null;
     flushStats();
+    const fallback = battlePassFallbackState();
+    if (fallback.queued > 0) {
+      console.error(
+        `Relay closing with ${fallback.queued} unrecorded battle-pass ` +
+        `matches (${fallback.operator} awaiting operator attention, ` +
+        `${fallback.dropped} previously discarded).`
+      );
+    }
     for (const room of rooms.values()) {
       clearSnapshotStall(room);
       clearAutoStart(room);
@@ -1908,6 +1982,7 @@ export function createRelayServer(options = {}) {
     wss,
     rooms,
     retryBattlePassAwards,
+    battlePassFallbackState,
     listen: (...args) => server.listen(...args),
     address: () => server.address(),
     close

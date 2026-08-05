@@ -1,8 +1,8 @@
 'use strict';
 
 /* Season 1 battle-pass rewards must be real, renderable cosmetics: every
-   id resolves in the catalog, in the matching client renderer table, and
-   the client's BP_REWARDS mirror matches the server ladder order. */
+   id resolves in the catalog and matching renderer, while the client's
+   reward and XP mirrors match the server ladder exactly. */
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -120,14 +120,17 @@ function loadShotEffects() {
 
 function loadClientBpMirror() {
   const source = fs.readFileSync(path.join(__dirname, 'src/82-store.js'), 'utf8');
-  /* Pull only the BP_REWARDS / BP_KINDS literals — the rest of the file needs
+  /* Pull only the battle-pass mirror literals — the rest of the file needs
      DOM and the earlier store globals. */
+  const thresholdsMatch = source.match(/const BP_XP_THRESHOLDS = (\[[\s\S]*?\n\]);/);
   const rewardsMatch = source.match(/const BP_REWARDS = (\[[\s\S]*?\n\]);/);
   const kindsMatch = source.match(/const BP_KINDS = (\{[\s\S]*?\n\});/);
+  assert.ok(thresholdsMatch, 'BP_XP_THRESHOLDS not found in 82-store.js');
   assert.ok(rewardsMatch, 'BP_REWARDS not found in 82-store.js');
   assert.ok(kindsMatch, 'BP_KINDS not found in 82-store.js');
   const sandbox = {};
   vm.runInNewContext(
+    `this.BP_XP_THRESHOLDS = ${thresholdsMatch[1]}; ` +
     `this.BP_REWARDS = ${rewardsMatch[1]}; this.BP_KINDS = ${kindsMatch[1]};`,
     sandbox);
   return sandbox;
@@ -239,19 +242,37 @@ test('server reward ladder and client BP_REWARDS mirror are identical', async ()
   }
 });
 
-test('battle-pass cosmetics are earn-only: not in the shop product list', async () => {
+test('server XP curve and client BP_XP_THRESHOLDS mirror are identical', async () => {
+  const catalog = await import('./season1.mjs');
+  const client = loadClientBpMirror();
+  assert.deepEqual(
+    Array.from(client.BP_XP_THRESHOLDS),
+    Array.from(catalog.SEASON_1_XP_CURVE)
+  );
+  for (let index = 0; index < catalog.SEASON_1_TIERS.length; index++)
+    assert.equal(client.BP_XP_THRESHOLDS[index], catalog.SEASON_1_TIERS[index].xpRequired);
+});
+
+test('battle-pass cosmetics are earn-only products with catalogued shape metadata', async () => {
   const cosmetics = await import('./cosmetics.mjs');
   for (const item of cosmetics.BATTLEPASS_COSMETICS) {
     assert.equal(item.priceEnvVar, null, `${item.id} has a price env var`);
     assert.equal(cosmetics.STORE_PRODUCTS_BY_ID.has(item.id), false,
       `${item.id} is listed as a store product`);
     assert.ok(cosmetics.COSMETICS_BY_ID.has(item.id),
-      `${item.id} must still resolve for equip/validation`);
+      `${item.id} must resolve for relay shape validation`);
   }
   for (const item of cosmetics.SHOP_COSMETICS) {
     assert.equal(typeof item.priceEnvVar, 'string');
     assert.ok(cosmetics.STORE_PRODUCTS_BY_ID.has(item.id));
   }
+});
+
+test('tier-one lanes have distinct player-facing names', async () => {
+  const cosmetics = await import('./cosmetics.mjs');
+  const free = cosmetics.COSMETICS_BY_ID.get('s1-free-smg-first-light');
+  const premium = cosmetics.COSMETICS_BY_ID.get('s1-premium-smg-first-light');
+  assert.notEqual(free.displayName, premium.displayName);
 });
 
 test('weapon rewards require a slot; characters and effects are slotless', async () => {

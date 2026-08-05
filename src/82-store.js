@@ -84,7 +84,9 @@ const ACCOUNT = {
   tokenOrigin: null,    // the relay that issued it; it is never shown to another
   expiresAt: 0,         // 0 when the relay did not say
   user: null,           // { userId, email, displayName } once /auth/me confirms it
-  owned: new Set(),     // entitlement ids, only ever straight from the relay
+  entitlements: new Set(), // paid product ids, straight from the relay
+  earned: new Set(),    // active battle-pass claim ids, straight from the relay
+  owned: new Set(),     // the equip answer: paid entitlements plus active claims
   items: null,          // last /shop/catalog answer, or null if we have never had one
   checkingOut: false,
   lastRefresh: 0,
@@ -429,6 +431,8 @@ function storeForgetToken() {
    in and the look comes back; it was never the thing being owned. */
 function storeSetSignedOut() {
   ACCOUNT.user = null;
+  ACCOUNT.entitlements = new Set();
+  ACCOUNT.earned = new Set();
   ACCOUNT.owned = new Set();
   storeApplyEquipped();
   storeRenderAccount();
@@ -442,6 +446,10 @@ function storeCleanEntitlements(value) {
   for (const id of value.slice(0, 64))
     if (typeof id === 'string' && id && id.length <= 120) owned.add(id);
   return owned;
+}
+
+function storeRebuildOwned() {
+  ACCOUNT.owned = new Set([...ACCOUNT.entitlements, ...ACCOUNT.earned]);
 }
 
 /* The cached token is a guess; this is the answer, and it is asked again on
@@ -469,7 +477,9 @@ function storeRefreshMe() {
         ? body.displayName.trim().slice(0, 40)
         : (typeof body.email === 'string' ? body.email.split('@')[0].slice(0, 40) : 'PLAYER')
     };
-    ACCOUNT.owned = storeCleanEntitlements(body.entitlements);
+    ACCOUNT.entitlements = storeCleanEntitlements(body.entitlements);
+    ACCOUNT.earned = storeCleanEntitlements(body.earnedRewards);
+    storeRebuildOwned();
     storeApplyEquipped();
     storeRenderAccount();
     storeRenderGrid();
@@ -656,16 +666,28 @@ function storeSignOut() {
    WHAT IS EQUIPPED
    ===================================================================== */
 
-/* Which slot an id can go in. The nine are known here, and anything the relay
-   adds later still works as long as a weapon id starts with the gun it is
-   for — which is the shape the whole catalog is already in. */
+/* Which slot an id can go in. Shop ids come from STORE_BY_ID. Earned ids are
+   accepted only when they occur in the mirrored battle-pass ladder, then their
+   explicit kind token supplies the character/effect/weapon slot. */
 function storeSlotOf(id, type) {
   const known = STORE_BY_ID.get(id);
-  const kind = known ? known.type : type;
+  let rewardKind = null;
+  if (!known && typeof id === 'string') {
+    for (const pair of BP_REWARDS) {
+      if (pair.free === id || pair.premium === id) {
+        rewardKind = bpRewardKind(id);
+        break;
+      }
+    }
+  }
+  const kind = known ? known.type
+    : (rewardKind === 'char' ? 'character'
+      : (rewardKind === 'fx' ? 'effect'
+        : (STORE_SLOTS.indexOf(rewardKind) >= 0 ? 'weapon' : type)));
   if (kind === 'character') return { kind: 'character' };
   if (kind === 'effect') return { kind: 'effect' };
   if (kind !== 'weapon' || typeof id !== 'string') return null;
-  const slot = id.split('-')[0];
+  const slot = rewardKind || id.split('-')[0];
   return STORE_SLOTS.indexOf(slot) >= 0 ? { kind: 'weapon', slot: slot } : null;
 }
 
@@ -689,8 +711,9 @@ function storeReadEquipPrefs() {
 
 /* Equipped is a preference and lives in localStorage; owning the thing is
    not, and lives on the server. So the stored choice is filtered through
-   whatever entitlements the relay just handed us, and anything that is not
-   on that list drops out of the live selection without a word. It stays in
+   the paid entitlements and active earned claims the relay just handed us,
+   and anything that is not in their union drops out of the live selection.
+   It stays in
    storage though — a player who signs out, or who loads the page while the
    relay is down, gets their look back the moment the server confirms it
    again, rather than silently losing a setting to a bad minute. */
@@ -805,9 +828,10 @@ function storeRefreshCatalog() {
        as "you own nothing" for ids the catalog did not mention. */
     if (storeSignedIn()) {
       for (const item of items) {
-        if (item.owned) ACCOUNT.owned.add(item.id);
-        else ACCOUNT.owned.delete(item.id);
+        if (item.owned) ACCOUNT.entitlements.add(item.id);
+        else ACCOUNT.entitlements.delete(item.id);
       }
+      storeRebuildOwned();
       storeApplyEquipped();
     }
     storeRenderGrid();
@@ -2145,9 +2169,8 @@ function initStore() {
    season1.mjs because the client is not sent it. The mirror is only
    shape — which rewards sit at which tier — so state (what is reached,
    what is claimed, whether the pass is owned) is never read out of it.
-   The reward ids carry no art yet and will be remapped when they do, so
-   nothing below branches on an id: nodes are keyed by tier and lane, and
-   an id the mirror does not recognise still draws a card.
+   Reward ids resolve to the engine's existing cosmetic renderers; pass state
+   remains keyed by tier and lane, and an unrecognised id still draws a card.
    ===================================================================== */
 
 const BP_PRODUCT_ID = 'battlepass-season-1-premium';
@@ -2235,12 +2258,17 @@ function bpCleanMe(body) {
     return Number.isFinite(ms) ? ms : null;
   };
   const claimed = new Set();
+  const earned = new Set();
   if (Array.isArray(body.claimedRewards)) {
     for (const entry of body.claimedRewards.slice(0, 64)) {
       if (!entry || typeof entry !== 'object') continue;
       const tier = int(entry.tier, 1, BP_REWARDS.length, 0);
       const lane = entry.lane === 'free' || entry.lane === 'premium' ? entry.lane : null;
-      if (tier && lane) claimed.add(tier + ':' + lane);
+      const expected = tier && lane ? BP_REWARDS[tier - 1][lane] : null;
+      if (tier && lane && entry.rewardId === expected) {
+        claimed.add(tier + ':' + lane);
+        earned.add(expected);
+      }
     }
   }
   return {
@@ -2255,7 +2283,8 @@ function bpCleanMe(body) {
        tier-25 answer and passes through untouched. */
     xpToNextTier: body.xpToNextTier === null ? null : int(body.xpToNextTier, 0, 1000000000, -1),
     premium: body.premium === true,
-    claimed: claimed
+    claimed: claimed,
+    earned: earned
   };
 }
 
@@ -2305,6 +2334,11 @@ function battlepassRefresh() {
        route yet, a season the relay will not describe, a body that does
        not fit — leaves the ladder standing read-only. */
     BATTLEPASS.me = res.ok ? bpCleanMe(res.body) : null;
+    if (BATTLEPASS.me) {
+      ACCOUNT.earned = new Set(BATTLEPASS.me.earned);
+      storeRebuildOwned();
+      storeApplyEquipped();
+    }
     battlepassRender();
     return !!BATTLEPASS.me;
   }, () => {
@@ -2397,6 +2431,8 @@ function bpRewardKind(id) {
    reads "Season One Legend". An id with nothing left reads "Reward". */
 function bpRewardName(id) {
   if (typeof id !== 'string' || !id) return 'Reward';
+  if (id === 's1-free-smg-first-light') return 'First Light Blush';
+  if (id === 's1-premium-smg-first-light') return 'First Light Gold';
   const kind = bpRewardKind(id);
   let tail = kind
     ? id.slice(id.indexOf('-' + kind + '-') + kind.length + 2)
@@ -2605,16 +2641,34 @@ function bpMakeNode(tierNum, lane, rewardId, me) {
   const info = kind ? BP_KINDS[kind] : null;
   const name = bpRewardName(rewardId);
   const grand = lane === 'premium' && tierNum === BP_REWARDS.length;
+  const equippable = state === 'claimed' && ACCOUNT.owned.has(rewardId) &&
+    !!storeSlotOf(rewardId);
+  const equipped = equippable && storeIsEquipped(rewardId);
 
-  const node = document.createElement('div');
-  node.className = 'bp-node bp-' + lane + ' n-' + state + (grand ? ' grand' : '');
-  node.setAttribute('role', 'img');
+  const node = document.createElement(equippable ? 'button' : 'div');
+  node.className = 'bp-node bp-' + lane + ' n-' + state +
+    (grand ? ' grand' : '') + (equippable ? ' can-equip' : '');
+  if (equippable) {
+    node.type = 'button';
+    node.setAttribute('aria-pressed', String(equipped));
+    node.addEventListener('click', () => {
+      storeEquip(rewardId);
+      battlepassRenderLadder();
+    });
+  } else {
+    node.setAttribute('role', 'img');
+  }
   node.setAttribute('aria-label', 'Tier ' + tierNum + ' ' + lane + ' reward: ' + name +
-    (info ? ' (' + info.label + ')' : '') + ' — ' + bpStateText(state, tierNum));
+    (info ? ' (' + info.label + ')' : '') + ' — ' + bpStateText(state, tierNum) +
+    (equippable ? (equipped ? '; equipped' : '; equip') : ''));
   node.appendChild(bpText('div', 'bp-glyph', info ? info.glyph : '🎁'));
   node.appendChild(bpText('div', 'bp-name', name));
 
-  if (state === 'claimed') node.appendChild(bpText('div', 'bp-badge', '✓'));
+  if (state === 'claimed') {
+    node.appendChild(bpText('div', 'bp-badge', '✓'));
+    if (equippable)
+      node.appendChild(bpText('div', 'bp-ready', equipped ? 'EQUIPPED' : 'EQUIP'));
+  }
   else if (state === 'locked' || state === 'premium-locked') node.appendChild(bpText('div', 'bp-badge', '🔒'));
   else if (state === 'ready') node.appendChild(bpText('div', 'bp-ready', 'READY'));
   return node;

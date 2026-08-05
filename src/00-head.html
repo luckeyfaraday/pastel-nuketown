@@ -722,10 +722,13 @@ body.touch .sens{display:none}
 .bp-node.n-ready{background:linear-gradient(180deg,#fffbe6,#ffefa8);
   box-shadow:0 3px 0 var(--ink),0 0 0 3px rgba(127,230,180,.9)}
 .bp-node.bp-premium.n-ready{background:linear-gradient(160deg,#f3e9ff,#ffd9ec)}
-/* claimed: done and worn soft — the tick is the state. */
+/* Claimed rewards are wearable inventory. The tick marks ownership and the
+   bottom strip makes the card's equip action explicit. */
 .bp-node.n-claimed{background:linear-gradient(180deg,#e2fbe9,#c8ffe4)}
 .bp-node.n-claimed .bp-glyph,.bp-node.n-claimed .bp-name{opacity:.72}
 .bp-node.n-claimed .bp-badge{background:#7fe6b4}
+.bp-node.can-equip{cursor:pointer;font:inherit;color:inherit}
+.bp-node.can-equip:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
 /* premium-locked: the tier is reached but the pass is not owned. The reward
    stays fully visible and gets a shimmer, because this node is the advert. */
 .bp-node.n-premium-locked{overflow:hidden;background:linear-gradient(160deg,#efe2ff,#ffd9ec)}

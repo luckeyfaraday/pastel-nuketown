@@ -6,9 +6,10 @@
    changing what that item is. */
 
 /* Shop-sold cosmetics only. Battle-pass rewards live in BATTLEPASS_COSMETICS
-   and are merged into COSMETICS / COSMETICS_BY_ID for equip and validation,
-   but they never enter STORE_PRODUCTS — that is what keeps them off the
-   catalog and out of checkout, not a price env var nobody sets. */
+   and are merged into COSMETICS / COSMETICS_BY_ID for shape validation and
+   renderer metadata. Ownership is the union of paid entitlements and active
+   battle-pass claims; reward ids never enter STORE_PRODUCTS — that is what
+   keeps them off the shop and out of checkout. */
 export const SHOP_COSMETICS = Object.freeze([
   Object.freeze({
     id: 'smg-cottoncloud',
@@ -92,7 +93,7 @@ function bpCosmetic(id, displayName, type, slot) {
 
 export const BATTLEPASS_COSMETICS = Object.freeze([
   // Free lane
-  bpCosmetic('s1-free-smg-first-light', 'First Light', 'weapon', 'smg'),
+  bpCosmetic('s1-free-smg-first-light', 'First Light Blush', 'weapon', 'smg'),
   bpCosmetic('s1-free-fx-paper-star', 'Paper Star', 'effect', null),
   bpCosmetic('s1-free-char-pink-horizon', 'Pink Horizon', 'character', null),
   bpCosmetic('s1-free-shotgun-cloud-nine', 'Cloud Nine', 'weapon', 'shotgun'),
@@ -118,7 +119,7 @@ export const BATTLEPASS_COSMETICS = Object.freeze([
   bpCosmetic('s1-free-shotgun-almost-there', 'Almost There', 'weapon', 'shotgun'),
   bpCosmetic('s1-free-rifle-season-one', 'Season One', 'weapon', 'rifle'),
   // Premium lane
-  bpCosmetic('s1-premium-smg-first-light', 'First Light', 'weapon', 'smg'),
+  bpCosmetic('s1-premium-smg-first-light', 'First Light Gold', 'weapon', 'smg'),
   bpCosmetic('s1-premium-fx-dawn-sparks', 'Dawn Sparks', 'effect', null),
   bpCosmetic('s1-premium-char-sunrise-scout', 'Sunrise Scout', 'character', null),
   bpCosmetic('s1-premium-shotgun-peach-frost', 'Peach Frost', 'weapon', 'shotgun'),

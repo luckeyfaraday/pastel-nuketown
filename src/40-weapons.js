@@ -473,7 +473,7 @@ const WEAPON_SKINS = {
      entry still carries weapon / name / col / flash / tracer so weaponForSkin
      and the viewmodel dress them the same way as the shop skins. */
   's1-free-smg-first-light': {
-    weapon: 'smg', name: 'First Light',
+    weapon: 'smg', name: 'First Light Blush',
     col: { body: 0xf4a8b8, accent: 0xffe29a, metal: 0xf0e6d8, grip: 0x7a6a8e },
     flash: 0xffe8b0, tracer: 0xffc0d0
   },
@@ -498,7 +498,7 @@ const WEAPON_SKINS = {
     flash: 0xe8c0ff, tracer: 0xc8a0f0
   },
   's1-premium-smg-first-light': {
-    weapon: 'smg', name: 'First Light',
+    weapon: 'smg', name: 'First Light Gold',
     col: { body: 0xf090a8, accent: 0xffd070, metal: 0xfff4e0, grip: 0x6a5080 },
     flash: 0xffe8a0, tracer: 0xffa0b8
   },

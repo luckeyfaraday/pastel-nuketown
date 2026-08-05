@@ -191,6 +191,11 @@ export function openStoreDatabase(path, options = {}) {
   if (!pendingMatchColumns.some((column) => column.name === 'operator_at')) {
     database.exec('ALTER TABLE battlepass_pending_matches ADD COLUMN operator_at INTEGER');
   }
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS battlepass_pending_due
+      ON battlepass_pending_matches(next_attempt_at, awarded_at, match_id)
+      WHERE retry_state = 'pending'
+  `);
 
   const earnedEntitlementsMigration = 'season-1-earned-entitlements-cleanup';
   const migrationApplied = database.prepare(`
@@ -336,6 +341,12 @@ export function openStoreDatabase(path, options = {}) {
         AND revoked_at IS NULL
       ORDER BY claimed_at, CASE lane WHEN 'free' THEN 0 ELSE 1 END, reward_id
     `),
+    activeBattlePassClaimIds: database.prepare(`
+      SELECT reward_id
+      FROM battlepass_claimed_rewards
+      WHERE user_id = ? AND revoked_at IS NULL
+      ORDER BY reward_id
+    `),
     claimBattlePassReward: database.prepare(`
       INSERT OR IGNORE INTO battlepass_claimed_rewards (
         user_id, season_id, lane, reward_id, claimed_at, revoked_at,
@@ -393,8 +404,14 @@ export function openStoreDatabase(path, options = {}) {
         match_id, user_ids_json, duration_ms, participant_count,
         snapshot_count, awarded_at, attempt_count, next_attempt_at
       FROM battlepass_pending_matches
+      WHERE retry_state = 'pending' AND next_attempt_at <= ?
+      ORDER BY next_attempt_at, awarded_at, match_id
+      LIMIT ?
+    `),
+    nextPendingBattlePassAttempt: database.prepare(`
+      SELECT MIN(next_attempt_at) AS next_attempt_at
+      FROM battlepass_pending_matches
       WHERE retry_state = 'pending'
-      ORDER BY awarded_at, match_id
     `),
     failPendingBattlePassMatch: database.prepare(`
       UPDATE battlepass_pending_matches
@@ -646,6 +663,11 @@ export function openStoreDatabase(path, options = {}) {
     };
   }
 
+  function listClaimedBattlePassRewards(userId) {
+    return statements.activeBattlePassClaimIds.all(userId)
+      .map((row) => row.reward_id);
+  }
+
   /* Rewards are written from the frozen server catalog, never from a request.
      This claims table is earned inventory; `entitlements` remains exclusively
      the record of products paid for through the shop. */
@@ -738,8 +760,10 @@ export function openStoreDatabase(path, options = {}) {
     ).changes > 0;
   }
 
-  function pendingBattlePassMatches() {
-    return statements.pendingBattlePassMatches.all().map((row) => {
+  function pendingBattlePassMatches(eligibleAt = Date.now(), limit = 100) {
+    if (!Number.isSafeInteger(eligibleAt) || !Number.isSafeInteger(limit) || limit <= 0)
+      throw new Error('A pending battle-pass scan needs a time and positive limit.');
+    return statements.pendingBattlePassMatches.all(eligibleAt, limit).map((row) => {
       let userIds;
       let parseError = null;
       try {
@@ -764,6 +788,13 @@ export function openStoreDatabase(path, options = {}) {
         nextAttemptAt: Number(row.next_attempt_at)
       };
     });
+  }
+
+  function nextPendingBattlePassAttemptAt() {
+    const row = statements.nextPendingBattlePassAttempt.get();
+    return row && Number.isSafeInteger(row.next_attempt_at)
+      ? Number(row.next_attempt_at)
+      : null;
   }
 
   function failPendingBattlePassMatch({
@@ -908,11 +939,13 @@ export function openStoreDatabase(path, options = {}) {
     processWebhookEvent,
     countProcessedWebhookEvents,
     getBattlePassProgress,
+    listClaimedBattlePassRewards,
     claimBattlePassRewards,
     revokeBattlePassPremiumRewards,
     restoreBattlePassPremiumRewards,
     recordPendingBattlePassMatch,
     pendingBattlePassMatches,
+    nextPendingBattlePassAttemptAt,
     failPendingBattlePassMatch,
     deletePendingBattlePassMatch,
     awardBattlePassMatch,

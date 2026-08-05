@@ -88,6 +88,14 @@ export function createAccountStore(options = {}) {
   });
   let closed = false;
 
+  function ownedCosmeticIds(account) {
+    if (!account || typeof account.userId !== 'string') return [];
+    return Array.from(new Set([
+      ...(Array.isArray(account.entitlements) ? account.entitlements : []),
+      ...battlePass.claimedRewardIds(account.userId)
+    ])).sort();
+  }
+
   function corsHeaders(request) {
     const origin = headerValue(request.headers, 'origin');
     if (!origin) return {};
@@ -171,11 +179,14 @@ export function createAccountStore(options = {}) {
 
       if (pathname === '/auth/me') {
         const account = auth.authenticate(request.headers, true);
+        const earnedRewards = battlePass.claimedRewardIds(account.userId);
         sendJson(response, 200, {
           userId: account.userId,
           email: account.email,
           displayName: account.displayName,
-          entitlements: account.entitlements
+          entitlements: account.entitlements,
+          earnedRewards,
+          ownedCosmetics: ownedCosmeticIds(account)
         }, headers);
         return true;
       }
@@ -244,7 +255,7 @@ export function createAccountStore(options = {}) {
     if (ownsDatabase) db.close();
   }
 
-  return { db, auth, shop, battlePass, handleHttp, close };
+  return { db, auth, shop, battlePass, ownedCosmeticIds, handleHttp, close };
 }
 
 export function createAccountStoreFromEnvironment(env, options = {}) {

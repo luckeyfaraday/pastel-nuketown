@@ -151,6 +151,11 @@ test('the shipped effects are exactly the effects the catalog sells', async () =
   /* Every catalogued effect — shop or battle-pass — must resolve in the
      renderer. Battle-pass effects are earn-only and are not in SHOP_COSMETICS. */
   const catalogued = COSMETICS.filter((item) => item.type === 'effect');
+  assert.deepEqual(
+    Object.keys(SHOT_EFFECTS).sort(),
+    catalogued.map((item) => item.id).sort(),
+    'an effect renderer without a catalog entry is unreachable inventory'
+  );
   for (const item of catalogued) {
     assert.equal(item.slot, null, `${item.id} claims a slot`);
     assert.ok(SHOT_EFFECTS[item.id], `${item.id} has no renderer entry`);

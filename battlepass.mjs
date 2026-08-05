@@ -26,6 +26,7 @@ export const BATTLE_PASS_AWARD_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const BATTLE_PASS_RETRY_BASE_MS = 1_000;
 export const BATTLE_PASS_MAX_RETRY_DELAY_MS = 60_000;
 export const BATTLE_PASS_MAX_RETRY_ATTEMPTS = 5;
+export const BATTLE_PASS_PENDING_SCAN_LIMIT = 100;
 
 export function createBattlePassService(options = {}) {
   if (!options.db) throw new Error('The battle pass needs an account database.');
@@ -99,6 +100,10 @@ export function createBattlePassService(options = {}) {
       premium: db.hasEntitlement(userId, PREMIUM_PASS_ID),
       claimedRewards: progress.claimedRewards
     };
+  }
+
+  function claimedRewardIds(userId) {
+    return db.listClaimedBattlePassRewards(userId);
   }
 
   /* A match result contains identity and relay-observed evidence, never
@@ -177,13 +182,10 @@ export function createBattlePassService(options = {}) {
     const failures = [];
     const deadLetters = [];
     let nextRetryAt = null;
-    for (const pending of db.pendingBattlePassMatches()) {
-      if (pending.nextAttemptAt > attemptedAt) {
-        nextRetryAt = nextRetryAt === null
-          ? pending.nextAttemptAt
-          : Math.min(nextRetryAt, pending.nextAttemptAt);
-        continue;
-      }
+    for (const pending of db.pendingBattlePassMatches(
+      attemptedAt,
+      BATTLE_PASS_PENDING_SCAN_LIMIT
+    )) {
       try {
         if (pending.parseError) throw pending.parseError;
         const result = awardMatchAt(
@@ -217,6 +219,12 @@ export function createBattlePassService(options = {}) {
             : Math.min(nextRetryAt, failure.nextAttemptAt);
         }
       }
+    }
+    const nextPendingAt = db.nextPendingBattlePassAttemptAt();
+    if (nextPendingAt !== null) {
+      nextRetryAt = nextRetryAt === null
+        ? nextPendingAt
+        : Math.min(nextRetryAt, nextPendingAt);
     }
     return { awarded, failures, deadLetters, nextRetryAt };
   }
@@ -284,7 +292,7 @@ export function createBattlePassService(options = {}) {
   ) {
     if (productId !== PREMIUM_PASS_ID ||
         !db.hasEntitlement(userId, PREMIUM_PASS_ID)) return [];
-    return db.restoreBattlePassPremiumRewards({
+    const restored = db.restoreBattlePassPremiumRewards({
       userId,
       seasonId: SEASON_1_ID,
       revocationId
@@ -292,10 +300,22 @@ export function createBattlePassService(options = {}) {
       tier: REWARD_TIERS.get(`${reward.lane}\0${reward.rewardId}`) ?? null,
       ...reward
     }));
+    /* A restore is current ownership again, not merely an undo of rows that
+       existed at the refund. Unlock the premium lane at the account's current
+       XP so tiers earned while the pass was revoked are included even when the
+       season has already ended and no later match can trigger another unlock. */
+    const progress = progressFor(userId);
+    const newlyUnlocked = unlockEarned(userId, progress.xp, restoredAt)
+      .filter((reward) => reward.lane === 'premium');
+    const byReward = new Map();
+    for (const reward of [...restored, ...newlyUnlocked])
+      byReward.set(reward.rewardId, reward);
+    return Array.from(byReward.values());
   }
 
   return {
     me,
+    claimedRewardIds,
     awardMatch,
     recordMatchResult,
     retryPendingMatches,

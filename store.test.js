@@ -627,6 +627,85 @@ test('equipped preferences are filtered against what the relay says is owned', a
   assert.equal(ctx.__get('EQUIPPED').weapons.rifle, null);
 });
 
+test('active battle-pass claims resolve their slots and equip, while unearned claims do not', async () => {
+  const earnedId = 's1-free-smg-first-light';
+  const earned = makeStore({
+    reply: url => url === RELAY + '/auth/me'
+      ? { status: 200, body: {
+        userId: 'bp-earned', email: 'earned@e.com', displayName: 'Earned',
+        entitlements: [], earnedRewards: [earnedId], ownedCosmetics: [earnedId]
+      } }
+      : { status: 404, body: null }
+  });
+  earned.localStorage.setItem('pastel-nuketown-token', JSON.stringify({
+    token: 'GOOD', origin: RELAY, expiresAt: 0
+  }));
+  earned.localStorage.setItem('pastel-nuketown-equipped', JSON.stringify({
+    character: null, effect: null, weapons: { smg: earnedId }
+  }));
+  earned.initStore();
+  await settle();
+
+  assert.deepEqual(earned.__json(`storeSlotOf('${earnedId}')`), {
+    kind: 'weapon', slot: 'smg'
+  });
+  assert.deepEqual(earned.__json("storeSlotOf('s1-free-char-pink-horizon')"), {
+    kind: 'character'
+  });
+  assert.deepEqual(earned.__json("storeSlotOf('s1-premium-fx-dawn-sparks')"), {
+    kind: 'effect'
+  });
+  assert.equal(earned.__get('EQUIPPED').weapons.smg, earnedId);
+
+  const unearned = makeStore({
+    reply: url => url === RELAY + '/auth/me'
+      ? { status: 200, body: {
+        userId: 'bp-unearned', email: 'unearned@e.com', displayName: 'Unearned',
+        entitlements: [], earnedRewards: [], ownedCosmetics: []
+      } }
+      : { status: 404, body: null }
+  });
+  unearned.localStorage.setItem('pastel-nuketown-token', JSON.stringify({
+    token: 'GOOD', origin: RELAY, expiresAt: 0
+  }));
+  unearned.localStorage.setItem('pastel-nuketown-equipped', JSON.stringify({
+    weapons: { smg: earnedId }
+  }));
+  unearned.initStore();
+  await settle();
+  assert.equal(unearned.__get('EQUIPPED').weapons.smg, null);
+  unearned.storeEquip(earnedId);
+  assert.equal(unearned.__get('EQUIPPED').weapons.smg, null);
+});
+
+test('a claimed battle-pass card offers the equip action', () => {
+  const ctx = makeStore();
+  const made = [];
+  ctx.document.createElement = tag => {
+    const node = {
+      tagName: String(tag).toUpperCase(),
+      children: [],
+      attributes: {},
+      listeners: {},
+      appendChild(child) { this.children.push(child); return child; },
+      setAttribute(name, value) { this.attributes[name] = String(value); },
+      addEventListener(type, listener) { this.listeners[type] = listener; }
+    };
+    made.push(node);
+    return node;
+  };
+  ctx.__get("ACCOUNT.owned = new Set(['s1-free-smg-first-light'])");
+  const me = ctx.__get("({ tier: 1, premium: false, claimed: new Set(['1:free']) })");
+  const card = ctx.bpMakeNode(1, 'free', 's1-free-smg-first-light', me);
+
+  assert.equal(card.tagName, 'BUTTON');
+  assert.equal(card.attributes['aria-pressed'], 'false');
+  assert.equal(typeof card.listeners.click, 'function');
+  card.listeners.click();
+  assert.equal(ctx.__get('EQUIPPED').weapons.smg, 's1-free-smg-first-light');
+  assert.ok(made.some((node) => node.textContent === 'EQUIP'));
+});
+
 test('editing localStorage alone cannot present an unowned item as equipped', () => {
   const ctx = makeStore();
   ctx.localStorage.setItem('pastel-nuketown-equipped', JSON.stringify({

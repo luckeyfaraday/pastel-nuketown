@@ -513,6 +513,93 @@ test('the existing Stripe entitlement path sells the pass and retroactively open
   assert.equal(accountStore.db.countProcessedWebhookEvents(), 1);
 });
 
+test('earned cosmetics pass the client and relay ownership gates until their claim is revoked', async (t) => {
+  const { catalog, cosmetics, accounts, server } = await modules();
+  const clock = Date.parse(catalog.SEASON_1_START) + 1;
+  const accountStore = accounts.createAccountStore(makeAccountOptions({ now: () => clock }));
+  t.after(() => accountStore.close());
+  const earnedUser = createUser(accountStore.db, 'wear-earned');
+  const unearnedUser = createUser(accountStore.db, 'wear-unearned');
+  const paid = webhookEnvelope('bp_equip_paid', earnedUser.id, cosmetics.PREMIUM_PASS_ID);
+  await accountStore.shop.webhook(paid, webhookSignature(paid, clock));
+  awardQualifyingMatch(accountStore.battlePass, 'wear-xp-1', [earnedUser.id, unearnedUser.id]);
+  awardQualifyingMatch(accountStore.battlePass, 'wear-xp-2', [earnedUser.id, unearnedUser.id]);
+  const premiumReward = catalog.SEASON_1.tiers[0].premiumReward;
+
+  const session = accountStore.auth.issueSession(earnedUser.id);
+  const me = await httpRequest(accountStore, '/auth/me', {
+    headers: { authorization: `Bearer ${session.token}` }
+  });
+  assert.deepEqual(me.json().entitlements, [cosmetics.PREMIUM_PASS_ID]);
+  assert.ok(me.json().earnedRewards.includes(premiumReward));
+  assert.ok(me.json().ownedCosmetics.includes(premiumReward));
+  assert.equal(accountStore.db.listEntitlements(earnedUser.id).includes(premiumReward), false,
+    'earned ownership remains outside the paid entitlements table');
+
+  let peer = 0;
+  const relayAccountStore = { ...accountStore, close() {} };
+  const relay = server.createRelayServer({
+    accountStore: relayAccountStore,
+    heartbeatMs: 0,
+    idleKickMs: 0,
+    autoStartMs: 0,
+    idFactory: () => `peer-wear-${++peer}`,
+    roomRandom: () => 0
+  });
+  try {
+    const wearer = connectAuthenticatedPeer(relay, accountStore, earnedUser, {
+      t: 'create', name: 'Earned Wearer',
+      cosmetics: { weapons: { smg: premiumReward } }
+    });
+    const room = wearer.latest('room').room;
+    const claimant = connectAuthenticatedPeer(relay, accountStore, unearnedUser, {
+      t: 'join', name: 'Unearned Claimant', room,
+      cosmetics: { weapons: { smg: premiumReward } }
+    });
+    const roster = claimant.latest('members').members;
+    assert.equal(roster.find((member) => member.name === 'Earned Wearer')
+      .cosmetics.weapons.smg, premiumReward);
+    assert.equal(roster.find((member) => member.name === 'Unearned Claimant').cosmetics,
+      undefined);
+  } finally {
+    await relay.close();
+  }
+
+  const refunded = stripeEvent('evt_bp_equip_refund', 'charge.refunded', {
+    id: 'ch_bp_equip',
+    payment_intent: 'pi_bp_equip_paid',
+    refunded: true
+  });
+  await accountStore.shop.webhook(refunded, webhookSignature(refunded, clock));
+  assert.equal(accountStore.battlePass.claimedRewardIds(earnedUser.id)
+    .includes(premiumReward), false);
+  const refundedMe = await httpRequest(accountStore, '/auth/me', {
+    headers: { authorization: `Bearer ${session.token}` }
+  });
+  assert.equal(refundedMe.json().earnedRewards.includes(premiumReward), false);
+  assert.equal(refundedMe.json().ownedCosmetics.includes(premiumReward), false,
+    'the client ownership answer drops a revoked claim');
+
+  const afterRefund = server.createRelayServer({
+    accountStore,
+    heartbeatMs: 0,
+    idleKickMs: 0,
+    autoStartMs: 0,
+    idFactory: () => 'peer-refunded-wearer',
+    roomRandom: () => 0
+  });
+  try {
+    const rejected = connectAuthenticatedPeer(afterRefund, accountStore, earnedUser, {
+      t: 'create', name: 'Refunded Wearer',
+      cosmetics: { weapons: { smg: premiumReward } }
+    });
+    assert.equal(rejected.latest('members').members[0].cosmetics, undefined,
+      'a revoked premium claim no longer passes the relay ownership gate');
+  } finally {
+    await afterRefund.close();
+  }
+});
+
 test('client-authored progress is rejected and a zero-play create/start/lobby loop awards nothing', async (t) => {
   const { catalog, accounts, server } = await modules();
   const clock = Date.parse(catalog.SEASON_1_START) + 1;
@@ -639,6 +726,57 @@ test('a match shorter than the 90-second balance floor awards no XP', async (t) 
       t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1, round: 1
     });
     assert.deepEqual(users.map((user) => accountStore.battlePass.me(user.id).xp), [0, 0]);
+  } finally {
+    await relay.close();
+  }
+});
+
+test('anonymous rounds are silent while a signed-in refused round still warns', async (t) => {
+  const { catalog, accounts, server } = await modules();
+  const clock = Date.parse(catalog.SEASON_1_START) + 1;
+  const warnings = [];
+  t.mock.method(console, 'warn', (message) => warnings.push(message));
+  const accountStore = accounts.createAccountStore(makeAccountOptions({ now: () => clock }));
+  t.after(() => accountStore.close());
+  const signedUser = createUser(accountStore.db, 'warning-signed');
+  let peer = 0;
+  const relay = server.createRelayServer({
+    accountStore,
+    now: () => clock,
+    heartbeatMs: 0,
+    idleKickMs: 0,
+    autoStartMs: 0,
+    idFactory: () => `peer-warning-${++peer}`,
+    matchIdFactory: (() => {
+      let match = 0;
+      return () => `match-warning-${++match}`;
+    })(),
+    roomRandom: () => 0
+  });
+  try {
+    const host = new FakeWebSocket();
+    const guest = new FakeWebSocket();
+    relay.wss.emit('connection', host, {});
+    relay.wss.emit('connection', guest, {});
+    host.message({ t: 'create', v: Protocol.VERSION, name: 'Anonymous Host' });
+    const room = host.latest('room').room;
+    guest.message({ t: 'join', v: Protocol.VERSION, name: 'Anonymous Guest', room });
+    host.message({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+    host.message({
+      t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1, round: 1
+    });
+    assert.deepEqual(warnings, [], 'an all-anonymous round is not a missed award');
+
+    connectAuthenticatedPeer(relay, accountStore, signedUser, {
+      t: 'join', name: 'Signed Player', room
+    });
+    host.message({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+    host.message({
+      t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1, round: 2
+    });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /match-warning-2/);
+    assert.match(warnings[0], /participants \(1\/2\)/);
   } finally {
     await relay.close();
   }
@@ -827,6 +965,103 @@ test('a 90-second two-account match with ten observed snapshots pays both accoun
   } finally {
     await relay.close();
   }
+});
+
+test('a non-seamless host fallback records the qualifying in-flight match', async (t) => {
+  const { catalog, accounts, server, battlepass } = await modules();
+  let clock = Date.parse(catalog.SEASON_1_START) + 1;
+  const accountStore = accounts.createAccountStore(makeAccountOptions({ now: () => clock }));
+  t.after(() => accountStore.close());
+  const users = [
+    createUser(accountStore.db, 'fallback-host'),
+    createUser(accountStore.db, 'fallback-guest')
+  ];
+  let peer = 0;
+  const relay = server.createRelayServer({
+    accountStore,
+    now: () => clock,
+    heartbeatMs: 0,
+    idleKickMs: 0,
+    autoStartMs: 0,
+    idFactory: () => `peer-fallback-${++peer}`,
+    matchIdFactory: () => 'match-fallback-result',
+    roomRandom: () => 0
+  });
+  try {
+    const host = connectAuthenticatedPeer(relay, accountStore, users[0], {
+      t: 'create', name: 'Fallback Host'
+    });
+    const roomCode = host.latest('room').room;
+    connectAuthenticatedPeer(relay, accountStore, users[1], {
+      t: 'join', name: 'Fallback Guest', room: roomCode
+    });
+    host.message({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+    const observationGap = battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS /
+      battlepass.BATTLE_PASS_MIN_SNAPSHOTS;
+    relaySpacedSnapshots(
+      host,
+      battlepass.BATTLE_PASS_MIN_SNAPSHOTS,
+      () => { clock += observationGap; }
+    );
+    clock += battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS -
+      observationGap * (battlepass.BATTLE_PASS_MIN_SNAPSHOTS - 1);
+
+    /* Empty actor snapshots cannot migrate seamlessly, so losing this host
+       ends the match through fallbackRestart instead of the lobby handler. */
+    host.terminate();
+    assert.equal(relay.rooms.get(roomCode).started, false);
+    assert.deepEqual(
+      users.map((user) => accountStore.battlePass.me(user.id).xp),
+      [catalog.SEASON_1_MATCH_XP, catalog.SEASON_1_MATCH_XP]
+    );
+  } finally {
+    await relay.close();
+  }
+});
+
+test('relay close records every qualifying in-flight room before shutting down', async (t) => {
+  const { catalog, accounts, server, battlepass } = await modules();
+  let clock = Date.parse(catalog.SEASON_1_START) + 1;
+  const accountStore = accounts.createAccountStore(makeAccountOptions({ now: () => clock }));
+  const users = [
+    createUser(accountStore.db, 'close-host'),
+    createUser(accountStore.db, 'close-guest')
+  ];
+  let peer = 0;
+  const relayAccountStore = { ...accountStore, close() {} };
+  const relay = server.createRelayServer({
+    accountStore: relayAccountStore,
+    now: () => clock,
+    heartbeatMs: 0,
+    idleKickMs: 0,
+    autoStartMs: 0,
+    idFactory: () => `peer-close-${++peer}`,
+    matchIdFactory: () => 'match-relay-close',
+    roomRandom: () => 0
+  });
+  const host = connectAuthenticatedPeer(relay, accountStore, users[0], {
+    t: 'create', name: 'Close Host'
+  });
+  connectAuthenticatedPeer(relay, accountStore, users[1], {
+    t: 'join', name: 'Close Guest', room: host.latest('room').room
+  });
+  host.message({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+  const observationGap = battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS /
+    battlepass.BATTLE_PASS_MIN_SNAPSHOTS;
+  relaySpacedSnapshots(
+    host,
+    battlepass.BATTLE_PASS_MIN_SNAPSHOTS,
+    () => { clock += observationGap; }
+  );
+  clock += battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS -
+    observationGap * (battlepass.BATTLE_PASS_MIN_SNAPSHOTS - 1);
+
+  await relay.close();
+  assert.deepEqual(
+    users.map((user) => accountStore.battlePass.me(user.id).xp),
+    [catalog.SEASON_1_MATCH_XP, catalog.SEASON_1_MATCH_XP]
+  );
+  accountStore.close();
 });
 
 test('a late first snapshot does not extend the independent 90-second floor', async (t) => {
@@ -1163,6 +1398,69 @@ test('a persistent award failure ends the round for every player and stays recov
   );
 });
 
+test('the non-durable fallback queue is bounded and exposes operator counts', async (t) => {
+  const { catalog, accounts, server, battlepass } = await modules();
+  let clock = Date.parse(catalog.SEASON_1_START) + 1;
+  const accountStore = accounts.createAccountStore(makeAccountOptions({ now: () => clock }));
+  t.after(() => accountStore.close());
+  const users = [
+    createUser(accountStore.db, 'fallback-queue-host'),
+    createUser(accountStore.db, 'fallback-queue-guest')
+  ];
+  accountStore.battlePass.recordMatchResult = () => {
+    throw new Error('pending table unavailable');
+  };
+  const errors = [];
+  t.mock.method(console, 'error', (message) => errors.push(message));
+  let peer = 0;
+  let match = 0;
+  const relay = server.createRelayServer({
+    accountStore,
+    now: () => clock,
+    heartbeatMs: 0,
+    idleKickMs: 0,
+    autoStartMs: 0,
+    battlePassMaxRetryAttempts: 1,
+    maxUnrecordedBattlePassMatches: 2,
+    idFactory: () => `peer-fallback-queue-${++peer}`,
+    matchIdFactory: () => `match-fallback-queue-${++match}`,
+    roomRandom: () => 0
+  });
+  try {
+    const host = connectAuthenticatedPeer(relay, accountStore, users[0], {
+      t: 'create', name: 'Fallback Queue Host'
+    });
+    connectAuthenticatedPeer(relay, accountStore, users[1], {
+      t: 'join', name: 'Fallback Queue Guest', room: host.latest('room').room
+    });
+    const observationGap = battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS /
+      battlepass.BATTLE_PASS_MIN_SNAPSHOTS;
+    for (let round = 1; round <= 3; round++) {
+      host.message({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+      relaySpacedSnapshots(
+        host,
+        battlepass.BATTLE_PASS_MIN_SNAPSHOTS,
+        () => { clock += observationGap; },
+        round
+      );
+      clock += battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS -
+        observationGap * (battlepass.BATTLE_PASS_MIN_SNAPSHOTS - 1);
+      host.message({
+        t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1, round
+      });
+    }
+
+    assert.deepEqual(relay.battlePassFallbackState(), {
+      queued: 2,
+      operator: 2,
+      dropped: 1
+    });
+    assert.ok(errors.some((message) => /fallback is capped at 2/.test(message)));
+  } finally {
+    await relay.close();
+  }
+});
+
 test('a permanently corrupt pending row backs off and stops in operator state', async (t) => {
   const { catalog, accounts, server } = await modules();
   const clock = Date.parse(catalog.SEASON_1_START) + 1;
@@ -1209,6 +1507,39 @@ test('a permanently corrupt pending row backs off and stops in operator state', 
   } finally {
     await relay.close();
   }
+});
+
+test('pending scans materialize only due rows up to the indexed batch limit', async (t) => {
+  const { catalog, database } = await modules();
+  const db = database.openStoreDatabase(':memory:');
+  t.after(() => db.close());
+  const clock = Date.parse(catalog.SEASON_1_START) + 1;
+  const insert = db.database.prepare(`
+    INSERT INTO battlepass_pending_matches (
+      match_id, user_ids_json, duration_ms, participant_count,
+      snapshot_count, awarded_at, next_attempt_at
+    ) VALUES (?, '[]', 90000, 0, 10, ?, ?)
+  `);
+  for (let index = 0; index < 140; index++)
+    insert.run(`due-${String(index).padStart(3, '0')}`, clock + index, clock);
+  for (let index = 0; index < 20; index++)
+    insert.run(`future-${String(index).padStart(3, '0')}`, clock + index, clock + 60_000);
+
+  const due = db.pendingBattlePassMatches(clock, 25);
+  assert.equal(due.length, 25);
+  assert.ok(due.every((pending) => pending.nextAttemptAt <= clock));
+  assert.ok(due.every((pending) => pending.matchId.startsWith('due-')));
+
+  const plan = db.database.prepare(`
+    EXPLAIN QUERY PLAN
+    SELECT match_id
+    FROM battlepass_pending_matches
+    WHERE retry_state = 'pending' AND next_attempt_at <= ?
+    ORDER BY next_attempt_at, awarded_at, match_id
+    LIMIT ?
+  `).all(clock, 25);
+  assert.ok(plan.some((step) => /battlepass_pending_due/.test(step.detail)),
+    JSON.stringify(plan));
 });
 
 test('an unrelated poisoned row does not report a clean match as pending', async (t) => {
@@ -1565,7 +1896,7 @@ test('premium reward claims revoke on refund and restore with the purchase', asy
     .filter((reward) => reward.lane === 'premium').length, 1);
 });
 
-test('restoring a tier-12 purchase does not grant tiers earned after its refund', async (t) => {
+test('restoring a pass after season end unlocks tiers earned while it was revoked', async (t) => {
   const { catalog, cosmetics, accounts, battlepass } = await modules();
   let clock = Date.parse(catalog.SEASON_1_START) + 1;
   const accountStore = accounts.createAccountStore(makeAccountOptions({ now: () => clock }));
@@ -1599,6 +1930,8 @@ test('restoring a tier-12 purchase does not grant tiers earned after its refund'
   assert.equal(accountStore.battlePass.me(user.id).claimedRewards
     .filter((reward) => reward.lane === 'premium').length, 0);
 
+  clock = Date.parse(catalog.SEASON_1_END) + 24 * 60 * 60 * 1000;
+
   const restored = stripeEvent('evt_exact_restore_won', 'charge.dispute.closed', {
     id: 'dp_exact_restore',
     status: 'won',
@@ -1613,13 +1946,11 @@ test('restoring a tier-12 purchase does not grant tiers earned after its refund'
     restored,
     webhookSignature(restored, clock)
   );
-  assert.equal(result.result.rewardsRestored.length, 12);
+  assert.equal(result.result.rewardsRestored.length, 15);
   assert.deepEqual(accountStore.battlePass.me(user.id).claimedRewards
     .filter((reward) => reward.lane === 'premium')
-    .map((reward) => reward.tier), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-  assert.equal(accountStore.battlePass.me(user.id).claimedRewards.some(
-    (reward) => reward.lane === 'premium' && reward.tier >= 13
-  ), false);
+    .map((reward) => reward.tier),
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
 });
 
 test('unknown persisted reward ids remain explicit in serialized progress', async (t) => {
@@ -1658,6 +1989,11 @@ test('deployment and relay structure retain the production battle-pass safeguard
   );
   const relaySource = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
   assert.doesNotMatch(relaySource, /function hasClientProgressField/);
+  assert.doesNotMatch(relaySource,
+    /battlePassParticipants:\s*new Set\(room\.battlePassParticipants\)/,
+    'migration must not carry a participant snapshot that nothing mutates');
+  assert.doesNotMatch(relaySource,
+    /room\.battlePassParticipants\s*=\s*migration\.battlePassParticipants/);
   assert.doesNotMatch(relaySource, /Object\.entries\(value\)/,
     'the hot path must not walk each message a second time for progress keys');
 });

@@ -1227,7 +1227,9 @@ test('account HTTP routes reject foreign CORS and unknown or owned checkout item
     userId: user.id,
     email: 'http@example.com',
     displayName: 'HTTP Player',
-    entitlements: []
+    entitlements: [],
+    earnedRewards: [],
+    ownedCosmetics: []
   });
 
   const unknown = await httpRequest(accounts, '/shop/checkout', {

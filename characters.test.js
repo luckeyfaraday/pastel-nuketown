@@ -157,9 +157,15 @@ test('the default character is untouched by every non-id', () => {
   }
 });
 
-test('every skin id is a known character and builds a full rig', () => {
+test('character renderers and catalog entries are bidirectionally identical', async () => {
   const api = loadCharacters();
   const allIds = Object.keys(api.CHARACTER_SKINS);
+  const { COSMETICS } = await import('./cosmetics.mjs');
+  const catalogIds = COSMETICS
+    .filter((item) => item.type === 'character')
+    .map((item) => item.id);
+  assert.deepEqual(allIds.slice().sort(), catalogIds.slice().sort(),
+    'a renderer without a catalog entry is unreachable inventory');
   for (const id of SHOP_SKIN_IDS)
     assert.ok(api.CHARACTER_SKINS[id], `shop skin ${id} is missing`);
   for (const id of allIds) {
