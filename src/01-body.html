@@ -90,6 +90,9 @@
       <button class="mini-btn locker-btn locker-store" id="storeOpen" type="button">
         <span aria-hidden="true">🧁</span><span>STORE</span>
       </button>
+      <button class="mini-btn locker-btn locker-pass" id="battlepassOpen" type="button">
+        <span aria-hidden="true">🎫</span><span>SEASON&nbsp;1</span>
+      </button>
       <div id="lockerNote" role="status" aria-live="polite"></div>
     </div>
     <label class="sens" for="sensRange">
@@ -219,6 +222,29 @@
       </div>
     </div>
     <div id="storeGrid"></div>
+  </div>
+</div>
+
+<!-- Season 1 battle pass. A .screen dialog in the store's pattern: opened
+     from the locker row, closed by CLOSE, by Escape and by the wash, with
+     the title card made inert underneath. Everything below the header is
+     drawn by 82-store.js from /battlepass/me and the mirrored ladder. -->
+<div class="screen off" id="battlepass" role="dialog" aria-modal="true" aria-labelledby="bpTitle">
+  <div class="bp-card panel" tabindex="-1">
+    <div class="bp-head">
+      <div class="bp-head-text">
+        <h2 id="bpTitle">SEASON 1 <em>FIRST LIGHT</em></h2>
+        <div class="bp-sub" id="bpSeason"></div>
+      </div>
+      <button class="mini-btn" id="bpClose" type="button">CLOSE</button>
+    </div>
+    <div id="bpNote" role="status" aria-live="polite"></div>
+    <div class="bp-progress" id="bpProgress"></div>
+    <div class="bp-cta" id="bpCta"></div>
+    <div class="bp-ladder-wrap">
+      <div class="bp-ladder" id="bpLadder"></div>
+    </div>
+    <div class="bp-foot">A confirmed match is 500 XP — three matches a day for the whole season reaches tier 25.</div>
   </div>
 </div>
 
