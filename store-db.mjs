@@ -222,6 +222,47 @@ export function openStoreDatabase(path, options = {}) {
     );
   }
 
+  /* Which row a Stripe money event is talking about. Revoking and restoring
+     have to agree on this exactly — a won dispute that gave the item back to a
+     different purchase than the chargeback took it from would be worse than
+     doing nothing — so the matching is written once and both directions of
+     `revoked_at` are prepared from it. */
+  const PURCHASE_MATCHES = {
+    paymentIntent: 'payment_intent_id = ?',
+    checkoutSession: 'checkout_session_id = ?',
+    /* Metadata cannot identify which purchase it came from. It is safe only
+       for a legacy row that has no Stripe purchase identifier of its own;
+       otherwise a late event for an older purchase could reach a newer
+       repurchase that now occupies the same user/item row. */
+    metadata: `user_id = ? AND cosmetic_id = ?
+        AND payment_intent_id IS NULL
+        AND checkout_session_id IS NULL`
+  };
+
+  function purchaseStatements(assignment, eligible) {
+    const prepared = {};
+    for (const [name, match] of Object.entries(PURCHASE_MATCHES)) {
+      prepared[name] = database.prepare(`
+        UPDATE entitlements
+        SET ${assignment}
+        WHERE ${eligible} AND (${match})
+      `);
+    }
+    return prepared;
+  }
+
+  const revokeStatements = purchaseStatements('revoked_at = ?', 'revoked_at IS NULL');
+  const restoreStatements = purchaseStatements('revoked_at = NULL', 'revoked_at IS NOT NULL');
+
+  /* Prefer Stripe's purchase identifiers whenever one is present; exactly one
+     of the three ever applies. */
+  function purchaseSelector({ paymentIntentId, checkoutSessionId, userId, cosmeticId }) {
+    if (paymentIntentId) return { match: 'paymentIntent', values: [paymentIntentId] };
+    if (checkoutSessionId) return { match: 'checkoutSession', values: [checkoutSessionId] };
+    if (userId && cosmeticId) return { match: 'metadata', values: [userId, cosmeticId] };
+    return null;
+  }
+
   function revokePurchase({
     paymentIntentId = null,
     checkoutSessionId = null,
@@ -229,39 +270,31 @@ export function openStoreDatabase(path, options = {}) {
     cosmeticId = null,
     revokedAt = Date.now()
   }) {
-    const conditions = [];
-    const values = [revokedAt];
-    /* Prefer Stripe's purchase identifiers whenever one is present. Metadata is
-       only a fallback for older events that do not carry either identifier: an
-       old charge can be refunded after the player has bought the same cosmetic
-       again, and matching its user/item metadata as an OR would wrongly revoke
-       that newer purchase. */
-    if (paymentIntentId) {
-      conditions.push('payment_intent_id = ?');
-      values.push(paymentIntentId);
-    } else if (checkoutSessionId) {
-      conditions.push('checkout_session_id = ?');
-      values.push(checkoutSessionId);
-    } else if (userId && cosmeticId) {
-      /* Metadata cannot identify which purchase it came from. It is safe only
-         for a legacy row that has no Stripe purchase identifier of its own;
-         otherwise a late event for an older purchase could revoke a newer
-         repurchase that now occupies the same user/item row. */
-      conditions.push(`(
-        user_id = ? AND cosmetic_id = ?
-        AND payment_intent_id IS NULL
-        AND checkout_session_id IS NULL
-      )`);
-      values.push(userId, cosmeticId);
-    }
-    if (conditions.length === 0) return 0;
+    const selector = purchaseSelector({
+      paymentIntentId, checkoutSessionId, userId, cosmeticId
+    });
+    if (!selector) return 0;
+    return Number(
+      revokeStatements[selector.match].run(revokedAt, ...selector.values).changes
+    );
+  }
 
-    const statement = database.prepare(`
-      UPDATE entitlements
-      SET revoked_at = ?
-      WHERE revoked_at IS NULL AND (${conditions.join(' OR ')})
-    `);
-    return Number(statement.run(...values).changes);
+  /* The undo of a revocation, for the one case that has one: a dispute the
+     merchant won. Only a row that is currently revoked can come back, so this
+     cannot mint an entitlement nobody was ever granted. It leaves `granted_at`
+     alone deliberately — the purchase generation has not changed, and the
+     checkout idempotency key is derived from it. */
+  function restorePurchase({
+    paymentIntentId = null,
+    checkoutSessionId = null,
+    userId = null,
+    cosmeticId = null
+  }) {
+    const selector = purchaseSelector({
+      paymentIntentId, checkoutSessionId, userId, cosmeticId
+    });
+    if (!selector) return 0;
+    return Number(restoreStatements[selector.match].run(...selector.values).changes);
   }
 
   /* Stripe promises at-least-once delivery, not exactly-once delivery. The
@@ -285,7 +318,13 @@ export function openStoreDatabase(path, options = {}) {
       database.exec('COMMIT');
       return { duplicate: false, result };
     } catch (error) {
-      database.exec('ROLLBACK');
+      /* Rolling back must not replace the reason for rolling back. SQLite may
+         have aborted the transaction itself already, in which case an explicit
+         ROLLBACK throws "cannot rollback - no transaction is active" on top of
+         the failure worth reading. */
+      try {
+        database.exec('ROLLBACK');
+      } catch (rollbackError) {}
       throw error;
     }
   }
@@ -306,6 +345,7 @@ export function openStoreDatabase(path, options = {}) {
     entitlementGrantVersion,
     grantEntitlement,
     revokePurchase,
+    restorePurchase,
     processWebhookEvent,
     countProcessedWebhookEvents,
     close: () => database.close()
