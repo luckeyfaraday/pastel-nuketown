@@ -91,11 +91,28 @@ export function createAuthService(options) {
     }
     /* This route is public because signing in starts before an account exists.
        Bound its only retained state so a burst of abandoned consent screens
-       costs a few megabytes, not an ever-growing process. Map iteration is
-       insertion ordered, making the oldest pending login the conservative one
-       to discard when the cap is reached. */
-    while (pendingStates.size >= maxPendingStates) {
-      pendingStates.delete(pendingStates.keys().next().value);
+       costs a few megabytes, not an ever-growing process.
+
+       The cap used to be enforced by discarding the oldest entry, which is the
+       wrong half of the trade. The oldest pending login is somebody who is at
+       that moment reading Google's consent screen; evicting it turns their
+       callback into "state missing, expired, or already used" a minute later,
+       with nothing on either end to connect the two. Anybody at all can start a
+       login, so that made a stranger's traffic enough to break a login already
+       in flight — silently, and at the far end of the flow.
+
+       A login that exists is therefore never destroyed by one that does not.
+       The expiry sweep above is the only thing that frees a live entry, and if
+       every one of them really is live the new attempt is refused plainly
+       instead. Failing at the start of a flow that has cost the player nothing
+       is the better end of a bad minute. A sustained flood denies sign-in
+       either way; the place to stop that is a rate limit at the proxy. */
+    if (pendingStates.size >= maxPendingStates) {
+      throw new HttpError(
+        503,
+        'sign_in_busy',
+        'Too many sign-ins are starting at once. Please try again in a moment.'
+      );
     }
 
     const state = makeRandomBytes(32).toString('base64url');

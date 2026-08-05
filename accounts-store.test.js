@@ -285,6 +285,44 @@ test('Google ID token claim checks reject independently re-signed tokens', async
   ));
 });
 
+/* Anybody at all can start a login, and the pending states have to be bounded
+   because of it. What must not happen is a stranger's traffic quietly taking
+   the seat of somebody who is already at Google's consent screen: that failure
+   surfaces minutes later, at the callback, as "state missing, expired, or
+   already used", with nothing to say a flood caused it. */
+test('a burst of new sign-ins is refused rather than evicting a login in flight', async (t) => {
+  const { database, auth } = await accountModules();
+  const db = database.openStoreDatabase(':memory:');
+  t.after(() => db.close());
+  let clock = 1_800_000_000_000;
+  const google = auth.createAuthService({
+    ...serviceOptions(db),
+    now: () => clock,
+    maxPendingStates: 2,
+    fetchImpl: async () => response({}, { ok: false })
+  });
+
+  const inFlight = new URL(google.startGoogleLogin()).searchParams.get('state');
+  google.startGoogleLogin();
+  assert.throws(
+    () => google.startGoogleLogin(),
+    (error) => error.status === 503 && error.code === 'sign_in_busy'
+  );
+
+  /* Reaching Google and being turned away there proves the state survived: an
+     evicted login fails earlier and differently, on the state itself. */
+  await assert.rejects(
+    google.finishGoogleLogin({ code: 'code-from-google', state: inFlight }),
+    (error) => error.code === 'invalid_oauth_code',
+    'the login already in flight was discarded to make room for a stranger'
+  );
+
+  /* And the cap is a queue, not a wall: the entries expire and sign-in reopens
+     without anybody restarting the relay. */
+  clock += 11 * 60 * 1000;
+  assert.match(google.startGoogleLogin(), /^https:\/\/accounts\.google\.com\//);
+});
+
 test('webhooks reject bad signatures and timestamps before reading events', async (t) => {
   const { database, shop } = await accountModules();
   const db = database.openStoreDatabase(':memory:');
