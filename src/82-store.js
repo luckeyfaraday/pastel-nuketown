@@ -862,12 +862,16 @@ function storeBuy(id) {
   storeNote('Opening the checkout…');
   storeRenderGrid();
 
-  /* The contract fixes the path and the reply but not the request field.
-     The item is the only thing this endpoint can need, and `itemId` is the
-     name it goes out under — if the relay chose another one, this line is
-     the whole change. */
+  /* `cosmeticId`, because that is the field account-store.mjs reads off the
+     body — not a name this side gets to pick. It went out as `itemId` for the
+     whole of the first release and the relay read `undefined` every time, so
+     every BUY answered "unknown cosmetic" and the store could not sell
+     anything at all. Nothing caught it: the relay's tests post the body
+     themselves, this file's tests answer with a fake relay, and each half was
+     internally consistent and unable to see the other. store.test.js now reads
+     both sources and fails if these two names stop matching. */
   const session = ACCOUNT.session;
-  storeAPI('/shop/checkout', { method: 'POST', auth: true, body: { itemId: id } })
+  storeAPI('/shop/checkout', { method: 'POST', auth: true, body: { cosmeticId: id } })
     .then(res => {
       /* A checkout that answers after the player has signed out is a
          redirect to a Stripe page belonging to an account that is no longer
