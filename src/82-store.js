@@ -2171,47 +2171,41 @@ const BP_XP_THRESHOLDS = [
 
 /* [tier]'s free reward and premium reward, verbatim from season1.mjs. */
 const BP_REWARDS = [
-  { free: 's1-free-spray-first-light',      premium: 's1-premium-smg-first-light' },
-  { free: 's1-free-charm-paper-star',       premium: 's1-premium-fx-dawn-sparks' },
-  { free: 's1-free-banner-pink-horizon',    premium: 's1-premium-char-sunrise-scout' },
-  { free: 's1-free-sticker-cloud-nine',     premium: 's1-premium-shotgun-peach-frost' },
-  { free: 's1-free-fx-soft-confetti',       premium: 's1-premium-rifle-sky-ribbon' },
-  { free: 's1-free-charm-tiny-teapot',      premium: 's1-premium-char-lilac-guard' },
-  { free: 's1-free-banner-bus-stop',        premium: 's1-premium-fx-prism-pop' },
-  { free: 's1-free-sticker-blue-bird',      premium: 's1-premium-smg-candy-grid' },
-  { free: 's1-free-spray-sunny-side',       premium: 's1-premium-shotgun-moon-mallow' },
-  { free: 's1-free-rifle-pastel-stripe',    premium: 's1-premium-char-neon-nap' },
-  { free: 's1-free-charm-glass-drop',       premium: 's1-premium-fx-comet-tail' },
-  { free: 's1-free-banner-nuketown-night',  premium: 's1-premium-smg-berry-static' },
-  { free: 's1-free-sticker-lucky-thirteen', premium: 's1-premium-char-starlight-runner' },
-  { free: 's1-free-spray-garden-wall',      premium: 's1-premium-shotgun-gilded-cloud' },
-  { free: 's1-free-fx-paper-petals',        premium: 's1-premium-rifle-midnight-bloom' },
-  { free: 's1-free-charm-pocket-sun',       premium: 's1-premium-char-cobalt-captain' },
-  { free: 's1-free-banner-sherbet-streak',  premium: 's1-premium-fx-aurora-trail' },
-  { free: 's1-free-sticker-tower-watch',    premium: 's1-premium-smg-prism-check' },
-  { free: 's1-free-spray-house-party',      premium: 's1-premium-shotgun-starlight' },
-  { free: 's1-free-char-cotton-cadet',      premium: 's1-premium-rifle-sunset-glass' },
-  { free: 's1-free-charm-little-rocket',    premium: 's1-premium-fx-crown-burst' },
-  { free: 's1-free-banner-final-lap',      premium: 's1-premium-char-dream-warden' },
-  { free: 's1-free-sticker-golden-ticket',  premium: 's1-premium-smg-royal-sherbet' },
-  { free: 's1-free-spray-almost-there',     premium: 's1-premium-shotgun-aurora-crown' },
-  { free: 's1-free-rifle-season-one',       premium: 's1-premium-char-season-one-legend' }
+  { free: 's1-free-smg-first-light',       premium: 's1-premium-smg-first-light' },
+  { free: 's1-free-fx-paper-star',         premium: 's1-premium-fx-dawn-sparks' },
+  { free: 's1-free-char-pink-horizon',     premium: 's1-premium-char-sunrise-scout' },
+  { free: 's1-free-shotgun-cloud-nine',    premium: 's1-premium-shotgun-peach-frost' },
+  { free: 's1-free-fx-soft-confetti',      premium: 's1-premium-rifle-sky-ribbon' },
+  { free: 's1-free-shotgun-tiny-teapot',   premium: 's1-premium-char-lilac-guard' },
+  { free: 's1-free-smg-bus-stop',          premium: 's1-premium-fx-prism-pop' },
+  { free: 's1-free-char-blue-bird',        premium: 's1-premium-smg-candy-grid' },
+  { free: 's1-free-rifle-sunny-side',      premium: 's1-premium-shotgun-moon-mallow' },
+  { free: 's1-free-rifle-pastel-stripe',   premium: 's1-premium-char-neon-nap' },
+  { free: 's1-free-fx-glass-drop',         premium: 's1-premium-fx-comet-tail' },
+  { free: 's1-free-char-nuketown-night',   premium: 's1-premium-smg-berry-static' },
+  { free: 's1-free-fx-lucky-thirteen',     premium: 's1-premium-char-starlight-runner' },
+  { free: 's1-free-smg-garden-wall',       premium: 's1-premium-shotgun-gilded-cloud' },
+  { free: 's1-free-fx-paper-petals',       premium: 's1-premium-rifle-midnight-bloom' },
+  { free: 's1-free-smg-pocket-sun',        premium: 's1-premium-char-cobalt-captain' },
+  { free: 's1-free-shotgun-sherbet-streak', premium: 's1-premium-fx-aurora-trail' },
+  { free: 's1-free-rifle-tower-watch',     premium: 's1-premium-smg-prism-check' },
+  { free: 's1-free-fx-house-party',        premium: 's1-premium-shotgun-starlight' },
+  { free: 's1-free-char-cotton-cadet',     premium: 's1-premium-rifle-sunset-glass' },
+  { free: 's1-free-smg-little-rocket',     premium: 's1-premium-fx-crown-burst' },
+  { free: 's1-free-rifle-final-lap',       premium: 's1-premium-char-dream-warden' },
+  { free: 's1-free-char-golden-ticket',    premium: 's1-premium-smg-royal-sherbet' },
+  { free: 's1-free-shotgun-almost-there',  premium: 's1-premium-shotgun-aurora-crown' },
+  { free: 's1-free-rifle-season-one',      premium: 's1-premium-char-season-one-legend' }
 ];
 
-/* The placeholder a node draws while its reward has no art: the id's kind
-   token picks the glyph and the caption, and an id with no kind token gets
-   the gift box. The ids are remapped in the art phase, so this table is a
-   kindness for today, not a contract. */
+/* Kind token → card glyph and caption. Only the five tokens the engine can
+   draw: three weapon slots, characters, and shot effects. */
 const BP_KINDS = {
   smg:     { glyph: '🫧', label: 'SMG skin' },
   shotgun: { glyph: '🍡', label: 'Shotgun skin' },
   rifle:   { glyph: '🍭', label: 'Rifle skin' },
   char:    { glyph: '🧸', label: 'Character skin' },
-  fx:      { glyph: '✨', label: 'Shot effect' },
-  spray:   { glyph: '🎨', label: 'Spray' },
-  charm:   { glyph: '🎐', label: 'Charm' },
-  banner:  { glyph: '🚩', label: 'Banner' },
-  sticker: { glyph: '🌟', label: 'Sticker' }
+  fx:      { glyph: '✨', label: 'Shot effect' }
 };
 const BP_KIND_TOKENS = Object.keys(BP_KINDS);
 

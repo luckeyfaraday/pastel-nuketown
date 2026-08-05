@@ -221,18 +221,15 @@ test('Season 1 is a frozen 25-tier, 30-day contract with an explicit reachable c
     'three relay-confirmed matches per day must be enough to finish the pass'
   );
 
-  const validation = catalog.validateSeason1Rewards(cosmetics.COSMETICS_BY_ID);
-  assert.equal(validation.valid, false);
-  assert.equal(validation.unknownIds.length, 50);
-  assert.ok(validation.unknownIds.includes(season.tiers[0].freeReward));
-  const completeCatalog = new Set(season.tiers.flatMap((tier) => [
-    tier.freeReward,
-    tier.premiumReward
-  ]));
   assert.deepEqual(
-    catalog.validateSeason1Rewards(completeCatalog),
+    catalog.validateSeason1Rewards(cosmetics.COSMETICS_BY_ID),
     { valid: true, unknownIds: [] }
   );
+  const emptyCatalog = new Set();
+  const emptyValidation = catalog.validateSeason1Rewards(emptyCatalog);
+  assert.equal(emptyValidation.valid, false);
+  assert.equal(emptyValidation.unknownIds.length, 50);
+  assert.ok(emptyValidation.unknownIds.includes(season.tiers[0].freeReward));
 });
 
 test('tier is a pure function of XP and is not persisted as writable progress', async (t) => {

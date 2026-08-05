@@ -466,6 +466,146 @@ const WEAPON_SKINS = {
         gradient: { axis: 'y', from: Cx(c.grip, 0.86), to: Cx(c.body, 1.10) }
       });                                                                    // shoulder end
     }
+  },
+
+  /* Season 1 battle-pass weapon skins. Palette-only recolors of the default
+     silhouettes — same toy shapes, town pastels, no custom geometry. Each
+     entry still carries weapon / name / col / flash / tracer so weaponForSkin
+     and the viewmodel dress them the same way as the shop skins. */
+  's1-free-smg-first-light': {
+    weapon: 'smg', name: 'First Light',
+    col: { body: 0xf4a8b8, accent: 0xffe29a, metal: 0xf0e6d8, grip: 0x7a6a8e },
+    flash: 0xffe8b0, tracer: 0xffc0d0
+  },
+  's1-free-smg-bus-stop': {
+    weapon: 'smg', name: 'Bus Stop',
+    col: { body: 0x7ec8e8, accent: 0xffc478, metal: 0xe8e0f0, grip: 0x5a6a7a },
+    flash: 0xffd8a0, tracer: 0x90d0f0
+  },
+  's1-free-smg-garden-wall': {
+    weapon: 'smg', name: 'Garden Wall',
+    col: { body: 0x4ec878, accent: 0xf060a0, metal: 0xe8f0e0, grip: 0x5a7060 },
+    flash: 0xd0f0c0, tracer: 0xa0e0b8
+  },
+  's1-free-smg-pocket-sun': {
+    weapon: 'smg', name: 'Pocket Sun',
+    col: { body: 0xffc86a, accent: 0xff8a9a, metal: 0xfff0d0, grip: 0x8a6a50 },
+    flash: 0xffe090, tracer: 0xffd070
+  },
+  's1-free-smg-little-rocket': {
+    weapon: 'smg', name: 'Little Rocket',
+    col: { body: 0xd090e8, accent: 0x90e0f0, metal: 0xf0e8ff, grip: 0x605078 },
+    flash: 0xe8c0ff, tracer: 0xc8a0f0
+  },
+  's1-premium-smg-first-light': {
+    weapon: 'smg', name: 'First Light',
+    col: { body: 0xf090a8, accent: 0xffd070, metal: 0xfff4e0, grip: 0x6a5080 },
+    flash: 0xffe8a0, tracer: 0xffa0b8
+  },
+  's1-premium-smg-candy-grid': {
+    weapon: 'smg', name: 'Candy Grid',
+    col: { body: 0xff8ab0, accent: 0x70e0d0, metal: 0xffe8f0, grip: 0x704060 },
+    flash: 0xffb0d0, tracer: 0xff90b8
+  },
+  's1-premium-smg-berry-static': {
+    weapon: 'smg', name: 'Berry Static',
+    col: { body: 0xc060a0, accent: 0x90d0ff, metal: 0xe8d0f0, grip: 0x503858 },
+    flash: 0xe090c8, tracer: 0xd070b0
+  },
+  's1-premium-smg-prism-check': {
+    weapon: 'smg', name: 'Prism Check',
+    col: { body: 0xa090e8, accent: 0xffb070, metal: 0xf0e8ff, grip: 0x504870 },
+    flash: 0xd0c0ff, tracer: 0xb0a0f0
+  },
+  's1-premium-smg-royal-sherbet': {
+    weapon: 'smg', name: 'Royal Sherbet',
+    col: { body: 0xff90a0, accent: 0xffd060, metal: 0xffe8d0, grip: 0x784858 },
+    flash: 0xffc080, tracer: 0xffa888
+  },
+  's1-free-shotgun-cloud-nine': {
+    weapon: 'shotgun', name: 'Cloud Nine',
+    col: { body: 0x70b0f0, accent: 0xff6088, metal: 0xf0f4ff, grip: 0x7080a0 },
+    flash: 0xffd0d8, tracer: 0xb0d0f0
+  },
+  's1-free-shotgun-tiny-teapot': {
+    weapon: 'shotgun', name: 'Tiny Teapot',
+    col: { body: 0x90a0e0, accent: 0xf0c070, metal: 0xe8e0f8, grip: 0x7a6048 },
+    flash: 0xffd890, tracer: 0xa0b0f0
+  },
+  's1-free-shotgun-sherbet-streak': {
+    weapon: 'shotgun', name: 'Sherbet Streak',
+    col: { body: 0xffb070, accent: 0xff90b0, metal: 0xfff0d8, grip: 0x886050 },
+    flash: 0xffd090, tracer: 0xffb888
+  },
+  's1-free-shotgun-almost-there': {
+    weapon: 'shotgun', name: 'Almost There',
+    col: { body: 0x50d088, accent: 0xe050b0, metal: 0xe8f8f0, grip: 0x587068 },
+    flash: 0xd0f0d8, tracer: 0xa0d8b0
+  },
+  's1-premium-shotgun-peach-frost': {
+    weapon: 'shotgun', name: 'Peach Frost',
+    col: { body: 0xffb090, accent: 0xa0d8f0, metal: 0xfff0e8, grip: 0x806058 },
+    flash: 0xffd0b0, tracer: 0xffb8a0
+  },
+  's1-premium-shotgun-moon-mallow': {
+    weapon: 'shotgun', name: 'Moon Mallow',
+    col: { body: 0x9080e0, accent: 0xf0a050, metal: 0xf8f0ff, grip: 0x686080 },
+    flash: 0xffe0c0, tracer: 0xc8c0e8
+  },
+  's1-premium-shotgun-gilded-cloud': {
+    weapon: 'shotgun', name: 'Gilded Cloud',
+    col: { body: 0xe8d090, accent: 0x90c0e8, metal: 0xfff8e0, grip: 0x786848 },
+    flash: 0xffe8a0, tracer: 0xe0d080
+  },
+  's1-premium-shotgun-starlight': {
+    weapon: 'shotgun', name: 'Starlight',
+    col: { body: 0xb0a0e0, accent: 0xffe090, metal: 0xf0e8ff, grip: 0x585070 },
+    flash: 0xfff0b0, tracer: 0xc0b0f0
+  },
+  's1-premium-shotgun-aurora-crown': {
+    weapon: 'shotgun', name: 'Aurora Crown',
+    col: { body: 0x70d0b8, accent: 0xd090e0, metal: 0xe0f8f0, grip: 0x406860 },
+    flash: 0xa0f0d8, tracer: 0x80e0c8
+  },
+  's1-free-rifle-sunny-side': {
+    weapon: 'rifle', name: 'Sunny Side',
+    col: { body: 0xffc070, accent: 0x80d0e8, metal: 0xfff0d8, grip: 0x786050 },
+    flash: 0xffe0a0, tracer: 0xffd080
+  },
+  's1-free-rifle-pastel-stripe': {
+    weapon: 'rifle', name: 'Pastel Stripe',
+    col: { body: 0xb060e0, accent: 0x40d090, metal: 0xf0e8f8, grip: 0x685878 },
+    flash: 0xe0c0f0, tracer: 0xc8a0e0
+  },
+  's1-free-rifle-tower-watch': {
+    weapon: 'rifle', name: 'Tower Watch',
+    col: { body: 0x80b0d0, accent: 0xffb080, metal: 0xe0e8f0, grip: 0x485868 },
+    flash: 0xb0d0e8, tracer: 0x90c0d8
+  },
+  's1-free-rifle-final-lap': {
+    weapon: 'rifle', name: 'Final Lap',
+    col: { body: 0xf08090, accent: 0x80e0c0, metal: 0xffe8e8, grip: 0x704850 },
+    flash: 0xffb0b8, tracer: 0xf090a0
+  },
+  's1-free-rifle-season-one': {
+    weapon: 'rifle', name: 'Season One',
+    col: { body: 0xb090d8, accent: 0xf0c070, metal: 0xf0e8ff, grip: 0x584870 },
+    flash: 0xd8c0f0, tracer: 0xc0a0e0
+  },
+  's1-premium-rifle-sky-ribbon': {
+    weapon: 'rifle', name: 'Sky Ribbon',
+    col: { body: 0x70c0e8, accent: 0xff90b0, metal: 0xe0f0ff, grip: 0x406070 },
+    flash: 0xa0d8f0, tracer: 0x80c8e8
+  },
+  's1-premium-rifle-midnight-bloom': {
+    weapon: 'rifle', name: 'Midnight Bloom',
+    col: { body: 0x5840c0, accent: 0xf040a0, metal: 0xd0c8e8, grip: 0x403858 },
+    flash: 0xb0a0e0, tracer: 0x9080c8
+  },
+  's1-premium-rifle-sunset-glass': {
+    weapon: 'rifle', name: 'Sunset Glass',
+    col: { body: 0xe07080, accent: 0xf0b060, metal: 0xffe0d8, grip: 0x684048 },
+    flash: 0xffa090, tracer: 0xf08090
   }
 };
 

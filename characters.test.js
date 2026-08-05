@@ -20,7 +20,10 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const SKIN_IDS = ['char-midnight', 'char-sherbetfox', 'char-cloudknight'];
+/* Shop-sold characters must stay three unique silhouettes. Battle-pass
+   colourways reuse those geometries and are measured for envelope/jersey
+   with every other CHARACTER_SKINS entry. */
+const SHOP_SKIN_IDS = ['char-midnight', 'char-sherbetfox', 'char-cloudknight'];
 const JERSEY = { body: 0x123456, trim: 0x654321 };
 
 /* A stub scene graph: enough THREE for buildCharacter to run under node, and
@@ -156,8 +159,10 @@ test('the default character is untouched by every non-id', () => {
 
 test('every skin id is a known character and builds a full rig', () => {
   const api = loadCharacters();
-  assert.deepEqual(Object.keys(api.CHARACTER_SKINS).sort(), SKIN_IDS.slice().sort());
-  for (const id of SKIN_IDS) {
+  const allIds = Object.keys(api.CHARACTER_SKINS);
+  for (const id of SHOP_SKIN_IDS)
+    assert.ok(api.CHARACTER_SKINS[id], `shop skin ${id} is missing`);
+  for (const id of allIds) {
     const ch = api.build(id);
     for (const pivot of ['root', 'hips', 'torso', 'headPiv', 'legL', 'legR', 'armL', 'armR', 'gun', 'muzzle'])
       assert.ok(ch[pivot], `${id} is missing the ${pivot} pivot`);
@@ -169,8 +174,9 @@ test('every skin id is a known character and builds a full rig', () => {
 test('every skin fills the default character envelope', () => {
   const api = loadCharacters();
   const def = api.measure(api.build());
+  const allIds = Object.keys(api.CHARACTER_SKINS);
 
-  for (const id of SKIN_IDS) {
+  for (const id of allIds) {
     const m = api.measure(api.build(id));
     const near = (got, want, over, under, what) => {
       assert.ok(got <= want + over, `${id} ${what} ${got.toFixed(3)} exceeds default ${want.toFixed(3)} by more than ${over}`);
@@ -198,7 +204,8 @@ test('every skin fills the default character envelope', () => {
 
 test('the jersey stays the dominant colour on torso and arms', () => {
   const api = loadCharacters();
-  for (const id of [undefined].concat(SKIN_IDS)) {
+  const allIds = Object.keys(api.CHARACTER_SKINS);
+  for (const id of [undefined].concat(allIds)) {
     const ch = api.build(id);
     const torso = boxesOf(ch.torso);
     const arms = boxesOf(ch.armL, ch.gun).concat(boxesOf(ch.armR, ch.gun));
@@ -212,7 +219,11 @@ test('the jersey stays the dominant colour on torso and arms', () => {
   }
 });
 
-/* The product requirement: a different character, not a recoloured one. */
+/* The product requirement for shop skins: a different character, not a
+   recoloured one. Battle-pass colourways intentionally reuse the three
+   creature geometries with new palettes, so pairwise uniqueness applies
+   only to the three shop-sold ids. Every skin — shop or pass — must still
+   differ from the default's head. */
 test('every skin is a different character, not a repaint', () => {
   const api = loadCharacters();
   const parts = (ch) => ({
@@ -222,7 +233,8 @@ test('every skin is a different character, not a repaint', () => {
     arm: boxesOf(ch.armL, ch.gun).map(geom)
   });
   const def = parts(api.build());
-  const built = SKIN_IDS.map(id => [id, parts(api.build(id))]);
+  const allIds = Object.keys(api.CHARACTER_SKINS);
+  const built = allIds.map(id => [id, parts(api.build(id))]);
 
   for (const [id, p] of built) {
     // the head is the whole read at range: nothing of the default's may survive
@@ -235,13 +247,14 @@ test('every skin is a different character, not a repaint', () => {
       assert.ok(p[key].length >= 3, `${id} ${key} is too simple to read as a character`);
     }
   }
-  // ...and different from each other, too
-  for (let i = 0; i < built.length; i++) {
-    for (let j = i + 1; j < built.length; j++) {
-      const a = built[i][1].head, b = built[j][1].head;
+  // Shop skins must be three distinct silhouettes, not one sold three times.
+  const shopBuilt = SHOP_SKIN_IDS.map(id => [id, parts(api.build(id))]);
+  for (let i = 0; i < shopBuilt.length; i++) {
+    for (let j = i + 1; j < shopBuilt.length; j++) {
+      const a = shopBuilt[i][1].head, b = shopBuilt[j][1].head;
       const same = a.filter(x => b.includes(x)).length;
       assert.ok(same / Math.min(a.length, b.length) < 0.25,
-        `${built[i][0]} and ${built[j][0]} share a head`);
+        `${shopBuilt[i][0]} and ${shopBuilt[j][0]} share a head`);
     }
   }
 });
@@ -252,7 +265,7 @@ test('no skin costs more meshes than the default character', () => {
   const api = loadCharacters();
   const meshes = (ch) => { let n = 0; ch.root.traverse(o => { if (o.isMesh) n++; }); return n; };
   const def = meshes(api.build());
-  for (const id of SKIN_IDS)
+  for (const id of Object.keys(api.CHARACTER_SKINS))
     assert.equal(meshes(api.build(id)), def, `${id} adds meshes to the character`);
 });
 

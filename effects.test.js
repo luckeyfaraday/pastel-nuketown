@@ -140,21 +140,24 @@ const chroma = (hex) => { const p = rgb(hex); return (Math.max(...p) - Math.min(
    --------------------------------------------------------------------- */
 
 test('the shipped effects are exactly the effects the catalog sells', async () => {
-  const { COSMETICS } = await import('./cosmetics.mjs');
+  const { SHOP_COSMETICS, COSMETICS } = await import('./cosmetics.mjs');
   const { SHOT_EFFECTS } = loadEffects();
 
-  const sold = COSMETICS.filter((item) => item.type === 'effect');
+  const sold = SHOP_COSMETICS.filter((item) => item.type === 'effect');
   assert.deepEqual(sold.map((item) => item.id).sort(), EFFECT_IDS.slice().sort());
-  assert.deepEqual(Object.keys(SHOT_EFFECTS).sort(), EFFECT_IDS.slice().sort(),
-    'the renderer and the shop disagree about what an effect is');
+  for (const id of EFFECT_IDS)
+    assert.ok(SHOT_EFFECTS[id], `shop effect ${id} has no renderer`);
 
-  for (const item of sold) {
-    /* Slotless, like a character: one effect themes every gun, which is
-       what makes it one purchase. A slot here would let the relay accept
-       an effect into a weapon slot. */
+  /* Every catalogued effect — shop or battle-pass — must resolve in the
+     renderer. Battle-pass effects are earn-only and are not in SHOP_COSMETICS. */
+  const catalogued = COSMETICS.filter((item) => item.type === 'effect');
+  for (const item of catalogued) {
     assert.equal(item.slot, null, `${item.id} claims a slot`);
+    assert.ok(SHOT_EFFECTS[item.id], `${item.id} has no renderer entry`);
     assert.equal(item.displayName, SHOT_EFFECTS[item.id].name,
-      `${item.id} is called something different in the shop`);
+      `${item.id} is called something different in the catalog`);
+  }
+  for (const item of sold) {
     assert.match(item.priceEnvVar, /^STRIPE_PRICE_FX_[A-Z]+$/, `${item.id} price variable`);
   }
 });

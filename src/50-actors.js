@@ -62,6 +62,70 @@ const CHARACTER_SKINS = {
     name: 'Cloud Knight',
     col: { plate: 0xf7fbff, shade: 0xc6dcf0, gold: 0xffd9a8,
            visor: 0x40395a, glow: 0xa9ecff }
+  },
+
+  /* Season 1 battle-pass characters. Each reuses one of the three shop
+     creature geometries (fox / knight / robot) with a new pastel colourway
+     so the mesh still fills the hit envelope and jersey share rules. */
+  's1-free-char-pink-horizon': {
+    name: 'Pink Horizon',
+    col: { fur: 0xf090a8, deep: 0xd07088, cream: 0xffe8f0,
+           nose: 0x5a4060, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
+  },
+  's1-free-char-blue-bird': {
+    name: 'Blue Bird',
+    col: { shell: 0x7ab0e0, deep: 0x5080b0, dark: 0x3a4868,
+           glow: 0xa0f0e8, lens: 0x2a3050 }
+  },
+  's1-free-char-nuketown-night': {
+    name: 'Nuketown Night',
+    col: { plate: 0xd0d8f0, shade: 0x90a0c8, gold: 0xc0a0e8,
+           visor: 0x303050, glow: 0xb0c0ff }
+  },
+  's1-free-char-cotton-cadet': {
+    name: 'Cotton Cadet',
+    col: { shell: 0xe8d0e8, deep: 0xb0a0c0, dark: 0x584868,
+           glow: 0xffd0e0, lens: 0x3a3050 }
+  },
+  's1-free-char-golden-ticket': {
+    name: 'Golden Ticket',
+    col: { fur: 0xf0c070, deep: 0xd09840, cream: 0xfff4d8,
+           nose: 0x5a4850, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
+  },
+  's1-premium-char-sunrise-scout': {
+    name: 'Sunrise Scout',
+    col: { fur: 0xffa070, deep: 0xe07848, cream: 0xfff0d8,
+           nose: 0x5a4050, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
+  },
+  's1-premium-char-lilac-guard': {
+    name: 'Lilac Guard',
+    col: { plate: 0xe8d8f8, shade: 0xb0a0d0, gold: 0xffd0a0,
+           visor: 0x403860, glow: 0xd0b0ff }
+  },
+  's1-premium-char-neon-nap': {
+    name: 'Neon Nap',
+    col: { shell: 0x70e0c0, deep: 0x40b090, dark: 0x305850,
+           glow: 0xff90c0, lens: 0x2a4040 }
+  },
+  's1-premium-char-starlight-runner': {
+    name: 'Starlight Runner',
+    col: { plate: 0xf0f0ff, shade: 0xc0c8f0, gold: 0xffe090,
+           visor: 0x383050, glow: 0xfff0b0 }
+  },
+  's1-premium-char-cobalt-captain': {
+    name: 'Cobalt Captain',
+    col: { shell: 0x5080d0, deep: 0x3050a0, dark: 0x283050,
+           glow: 0x70e0ff, lens: 0x1a2040 }
+  },
+  's1-premium-char-dream-warden': {
+    name: 'Dream Warden',
+    col: { plate: 0xe0d0f0, shade: 0xa090c8, gold: 0xffb0d0,
+           visor: 0x403858, glow: 0xe0b0ff }
+  },
+  's1-premium-char-season-one-legend': {
+    name: 'Season One Legend',
+    col: { fur: 0xe080c0, deep: 0xb05090, cream: 0xffe8f8,
+           nose: 0x503858, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
   }
 };
 
@@ -328,7 +392,20 @@ const ROBOT_PARTS = {
 const SKIN_PARTS = {
   'char-midnight': ROBOT_PARTS,
   'char-sherbetfox': FOX_PARTS,
-  'char-cloudknight': KNIGHT_PARTS
+  'char-cloudknight': KNIGHT_PARTS,
+  /* Season 1 recolors: fox / robot / knight geometries, not new silhouettes. */
+  's1-free-char-pink-horizon': FOX_PARTS,
+  's1-free-char-blue-bird': ROBOT_PARTS,
+  's1-free-char-nuketown-night': KNIGHT_PARTS,
+  's1-free-char-cotton-cadet': ROBOT_PARTS,
+  's1-free-char-golden-ticket': FOX_PARTS,
+  's1-premium-char-sunrise-scout': FOX_PARTS,
+  's1-premium-char-lilac-guard': KNIGHT_PARTS,
+  's1-premium-char-neon-nap': ROBOT_PARTS,
+  's1-premium-char-starlight-runner': KNIGHT_PARTS,
+  's1-premium-char-cobalt-captain': ROBOT_PARTS,
+  's1-premium-char-dream-warden': KNIGHT_PARTS,
+  's1-premium-char-season-one-legend': FOX_PARTS
 };
 
 function partMesh(build, withLines) {

@@ -22,31 +22,36 @@ export const SEASON_1_XP_CURVE = Object.freeze([
   33_600, 36_300, 39_100, 42_000, 45_000
 ]);
 
+/* Kind tokens are only the three types the engine can draw: smg / shotgun /
+   rifle (weapon skins), char (characters), fx (shot effects). The free lane
+   mixes all five tokens so a climber never sits on one kind for long; the
+   premium lane is denser in characters and headline weapon skins. Tier 25
+   premium is the season legend character. */
 const REWARDS = [
-  ['s1-free-spray-first-light', 's1-premium-smg-first-light'],
-  ['s1-free-charm-paper-star', 's1-premium-fx-dawn-sparks'],
-  ['s1-free-banner-pink-horizon', 's1-premium-char-sunrise-scout'],
-  ['s1-free-sticker-cloud-nine', 's1-premium-shotgun-peach-frost'],
+  ['s1-free-smg-first-light', 's1-premium-smg-first-light'],
+  ['s1-free-fx-paper-star', 's1-premium-fx-dawn-sparks'],
+  ['s1-free-char-pink-horizon', 's1-premium-char-sunrise-scout'],
+  ['s1-free-shotgun-cloud-nine', 's1-premium-shotgun-peach-frost'],
   ['s1-free-fx-soft-confetti', 's1-premium-rifle-sky-ribbon'],
-  ['s1-free-charm-tiny-teapot', 's1-premium-char-lilac-guard'],
-  ['s1-free-banner-bus-stop', 's1-premium-fx-prism-pop'],
-  ['s1-free-sticker-blue-bird', 's1-premium-smg-candy-grid'],
-  ['s1-free-spray-sunny-side', 's1-premium-shotgun-moon-mallow'],
+  ['s1-free-shotgun-tiny-teapot', 's1-premium-char-lilac-guard'],
+  ['s1-free-smg-bus-stop', 's1-premium-fx-prism-pop'],
+  ['s1-free-char-blue-bird', 's1-premium-smg-candy-grid'],
+  ['s1-free-rifle-sunny-side', 's1-premium-shotgun-moon-mallow'],
   ['s1-free-rifle-pastel-stripe', 's1-premium-char-neon-nap'],
-  ['s1-free-charm-glass-drop', 's1-premium-fx-comet-tail'],
-  ['s1-free-banner-nuketown-night', 's1-premium-smg-berry-static'],
-  ['s1-free-sticker-lucky-thirteen', 's1-premium-char-starlight-runner'],
-  ['s1-free-spray-garden-wall', 's1-premium-shotgun-gilded-cloud'],
+  ['s1-free-fx-glass-drop', 's1-premium-fx-comet-tail'],
+  ['s1-free-char-nuketown-night', 's1-premium-smg-berry-static'],
+  ['s1-free-fx-lucky-thirteen', 's1-premium-char-starlight-runner'],
+  ['s1-free-smg-garden-wall', 's1-premium-shotgun-gilded-cloud'],
   ['s1-free-fx-paper-petals', 's1-premium-rifle-midnight-bloom'],
-  ['s1-free-charm-pocket-sun', 's1-premium-char-cobalt-captain'],
-  ['s1-free-banner-sherbet-streak', 's1-premium-fx-aurora-trail'],
-  ['s1-free-sticker-tower-watch', 's1-premium-smg-prism-check'],
-  ['s1-free-spray-house-party', 's1-premium-shotgun-starlight'],
+  ['s1-free-smg-pocket-sun', 's1-premium-char-cobalt-captain'],
+  ['s1-free-shotgun-sherbet-streak', 's1-premium-fx-aurora-trail'],
+  ['s1-free-rifle-tower-watch', 's1-premium-smg-prism-check'],
+  ['s1-free-fx-house-party', 's1-premium-shotgun-starlight'],
   ['s1-free-char-cotton-cadet', 's1-premium-rifle-sunset-glass'],
-  ['s1-free-charm-little-rocket', 's1-premium-fx-crown-burst'],
-  ['s1-free-banner-final-lap', 's1-premium-char-dream-warden'],
-  ['s1-free-sticker-golden-ticket', 's1-premium-smg-royal-sherbet'],
-  ['s1-free-spray-almost-there', 's1-premium-shotgun-aurora-crown'],
+  ['s1-free-smg-little-rocket', 's1-premium-fx-crown-burst'],
+  ['s1-free-rifle-final-lap', 's1-premium-char-dream-warden'],
+  ['s1-free-char-golden-ticket', 's1-premium-smg-royal-sherbet'],
+  ['s1-free-shotgun-almost-there', 's1-premium-shotgun-aurora-crown'],
   ['s1-free-rifle-season-one', 's1-premium-char-season-one-legend']
 ];
 
