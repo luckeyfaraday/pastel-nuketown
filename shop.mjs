@@ -260,23 +260,72 @@ export function createShopService(options) {
       object.amount_refunded >= object.amount;
   }
 
-  function revokedCharge(object) {
-    const charge = object && object.charge && typeof object.charge === 'object'
+  function expandedCharge(object) {
+    return object && object.charge && typeof object.charge === 'object'
       ? object.charge
       : null;
+  }
+
+  /* Which purchase a charge-shaped event is talking about. A refund arrives as
+     the charge itself; a dispute arrives wrapping one, expanded or not. Either
+     way the PaymentIntent is the identifier worth having and the metadata is
+     the fallback, so both events ask the same question the same way. */
+  function purchaseOfCharge(object) {
+    const charge = expandedCharge(object);
     const metadata = {
       ...safeMetadata(charge),
       ...safeMetadata(object)
     };
-    const paymentIntentId = stripeReference(object && object.payment_intent) ||
-      stripeReference(charge && charge.payment_intent);
-    const revoked = db.revokePurchase({
-      paymentIntentId,
+    return {
+      charge,
+      paymentIntentId: stripeReference(object && object.payment_intent) ||
+        stripeReference(charge && charge.payment_intent),
       userId: typeof metadata.user_id === 'string' ? metadata.user_id : null,
-      cosmeticId: typeof metadata.cosmetic_id === 'string' ? metadata.cosmetic_id : null,
+      cosmeticId: typeof metadata.cosmetic_id === 'string' ? metadata.cosmetic_id : null
+    };
+  }
+
+  function revokedCharge(object) {
+    const purchase = purchaseOfCharge(object);
+    const revoked = db.revokePurchase({
+      paymentIntentId: purchase.paymentIntentId,
+      userId: purchase.userId,
+      cosmeticId: purchase.cosmeticId,
       revokedAt: now()
     });
     return { action: 'revoked', count: revoked };
+  }
+
+  /* Winning a dispute puts the money back on this side of the table, and the
+     item it paid for has to come back with it. Without this, a chargeback the
+     player never raised — or raised and lost — took a cosmetic they had in fact
+     paid for and left them no way at all to get it back, since the store
+     refuses to sell something the account already has a row for.
+
+     A refund is the one thing that outranks a win: money that has genuinely
+     gone back keeps the entitlement revoked. Stripe will not let a charge be
+     refunded while its dispute is open, but webhook delivery is not ordered, so
+     a refund already recorded has to survive this event arriving after it. */
+  function restoredCharge(object) {
+    const purchase = purchaseOfCharge(object);
+    if (refundedInFull(purchase.charge)) return { action: 'ignored' };
+    const restored = db.restorePurchase({
+      paymentIntentId: purchase.paymentIntentId,
+      userId: purchase.userId,
+      cosmeticId: purchase.cosmeticId
+    });
+    return { action: 'restored', count: restored };
+  }
+
+  /* Two dispute events need the charge object itself rather than its id: a
+     created dispute carrying no PaymentIntent of its own has nothing else to
+     name the purchase with, and a won dispute has to know whether the charge
+     has since been refunded before it hands the item back. */
+  function disputeNeedsItsCharge(event, object) {
+    if (!object || typeof object.charge !== 'string' || !object.charge) return false;
+    if (event.type === 'charge.dispute.created')
+      return !stripeReference(object.payment_intent);
+    return event.type === 'charge.dispute.closed' && object.status === 'won';
   }
 
   function applyWebhookEvent(event) {
@@ -303,6 +352,18 @@ export function createShopService(options) {
       return completedCheckout(object);
     if (event.type === 'checkout.session.async_payment_failed')
       return { action: 'ignored' };
+    if (event.type === 'charge.dispute.closed') {
+      /* `won` is the only outcome that returns the money. `lost` and
+         `warning_closed` leave the revocation exactly where it is. */
+      if (object.status !== 'won') return { action: 'ignored' };
+      const result = restoredCharge(object);
+      if (result.action === 'restored' && result.count === 0) {
+        warn(
+          `Stripe dispute event ${event.id} was won but matched zero revoked entitlements.`
+        );
+      }
+      return result;
+    }
     if (event.type === 'charge.refunded' && !refundedInFull(object))
       return { action: 'ignored' };
     if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
@@ -333,9 +394,7 @@ export function createShopService(options) {
       throw new HttpError(400, 'invalid_webhook', 'Stripe webhook envelope is invalid.');
 
     const object = event.data && event.data.object;
-    if (event.type === 'charge.dispute.created' && object &&
-        typeof object.charge === 'string' && object.charge &&
-        !stripeReference(object.payment_intent)) {
+    if (disputeNeedsItsCharge(event, object)) {
       /* Stripe normally leaves `charge` unexpanded on disputes. Resolve it
          before opening the SQLite transaction so a charge-only event can still
          find its PaymentIntent, without ever holding the write lock across a

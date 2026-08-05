@@ -663,6 +663,186 @@ test('unexpanded disputes resolve their charge and zero-match revocations warn',
   assert.match(warnings[0], /charge\.dispute\.created/);
 });
 
+/* A chargeback revokes on sight, which is right: the money is gone while the
+   dispute is open. Winning it puts the money back, and the item has to come
+   back with it — otherwise a player who never raised the dispute, or raised it
+   and lost, is left without a cosmetic they did pay for and with no way to buy
+   it again, because the store refuses to sell what the account already has a
+   row for. */
+test('a dispute the merchant wins hands the cosmetic back exactly once', async (t) => {
+  const { database, shop } = await accountModules();
+  const db = database.openStoreDatabase(':memory:');
+  t.after(() => db.close());
+  const timestamp = 1_800_000_000;
+  const user = db.upsertGoogleUser({
+    subject: 'google-dispute-won',
+    email: 'won@example.com',
+    displayName: 'Won It Back'
+  }, timestamp * 1000);
+  db.grantEntitlement({
+    userId: user.id,
+    cosmeticId: 'smg-cottoncloud',
+    checkoutSessionId: 'cs_won',
+    paymentIntentId: 'pi_won',
+    grantedAt: timestamp * 1000
+  });
+  const warnings = [];
+  const store = shop.createShopService({
+    ...serviceOptions(db),
+    now: () => timestamp * 1000,
+    logger: { warn: (message) => warnings.push(message) }
+  });
+
+  const opened = webhookBody({
+    id: 'evt_dispute_opened',
+    type: 'charge.dispute.created',
+    data: { object: { id: 'dp_won', payment_intent: 'pi_won' } }
+  });
+  await store.webhook(opened, webhookHeader(opened, 'whsec_test', timestamp));
+  assert.deepEqual(db.listEntitlements(user.id), []);
+
+  /* An identified dispute needs no charge lookup, and serviceOptions' fetch
+     throws, so this also proves the win costs Stripe no extra request. */
+  const won = webhookBody({
+    id: 'evt_dispute_won',
+    type: 'charge.dispute.closed',
+    data: { object: { id: 'dp_won', status: 'won', payment_intent: 'pi_won' } }
+  });
+  const wonSignature = webhookHeader(won, 'whsec_test', timestamp);
+  const restored = await store.webhook(won, wonSignature);
+  assert.equal(restored.result.action, 'restored');
+  assert.equal(restored.result.count, 1);
+  assert.deepEqual(db.listEntitlements(user.id), ['smg-cottoncloud']);
+
+  assert.equal((await store.webhook(won, wonSignature)).duplicate, true);
+  assert.deepEqual(db.listEntitlements(user.id), ['smg-cottoncloud']);
+  assert.equal(warnings.length, 0);
+
+  /* The restored row keeps the purchase generation it had, so the store still
+     considers the item bought rather than offering it for sale again. */
+  assert.equal(db.hasEntitlement(user.id, 'smg-cottoncloud'), true);
+  assert.equal(db.entitlementGrantVersion(user.id, 'smg-cottoncloud'), timestamp * 1000);
+});
+
+test('a lost dispute changes nothing and a won one that matches nothing warns', async (t) => {
+  const { database, shop } = await accountModules();
+  const db = database.openStoreDatabase(':memory:');
+  t.after(() => db.close());
+  const timestamp = 1_800_000_000;
+  const user = db.upsertGoogleUser({
+    subject: 'google-dispute-lost',
+    email: 'lost@example.com',
+    displayName: 'Lost It'
+  }, timestamp * 1000);
+  db.grantEntitlement({
+    userId: user.id,
+    cosmeticId: 'char-midnight',
+    checkoutSessionId: 'cs_lost',
+    paymentIntentId: 'pi_lost',
+    grantedAt: timestamp * 1000
+  });
+  const warnings = [];
+  const store = shop.createShopService({
+    ...serviceOptions(db),
+    now: () => timestamp * 1000,
+    logger: { warn: (message) => warnings.push(message) }
+  });
+  const opened = webhookBody({
+    id: 'evt_lost_opened',
+    type: 'charge.dispute.created',
+    data: { object: { id: 'dp_lost', payment_intent: 'pi_lost' } }
+  });
+  await store.webhook(opened, webhookHeader(opened, 'whsec_test', timestamp));
+
+  for (const status of ['lost', 'warning_closed', undefined]) {
+    const closed = webhookBody({
+      id: `evt_lost_closed_${status}`,
+      type: 'charge.dispute.closed',
+      data: { object: { id: 'dp_lost', status, payment_intent: 'pi_lost' } }
+    });
+    const result = await store.webhook(
+      closed,
+      webhookHeader(closed, 'whsec_test', timestamp)
+    );
+    assert.equal(result.result.action, 'ignored', `dispute closed as ${status}`);
+    assert.deepEqual(db.listEntitlements(user.id), []);
+  }
+  assert.equal(warnings.length, 0);
+
+  const stranger = webhookBody({
+    id: 'evt_won_stranger',
+    type: 'charge.dispute.closed',
+    data: { object: { id: 'dp_stranger', status: 'won', payment_intent: 'pi_nobody' } }
+  });
+  const strangerResult = await store.webhook(
+    stranger,
+    webhookHeader(stranger, 'whsec_test', timestamp)
+  );
+  assert.equal(strangerResult.result.count, 0);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /evt_won_stranger/);
+});
+
+/* Stripe will not let a charge be refunded while its dispute is open, but
+   webhook delivery is not ordered, so a refund already recorded has to survive
+   a dispute win arriving after it. Money that has genuinely gone back keeps the
+   entitlement revoked. */
+test('a refund already recorded outranks a dispute won afterwards', async (t) => {
+  const { database, shop } = await accountModules();
+  const db = database.openStoreDatabase(':memory:');
+  t.after(() => db.close());
+  const timestamp = 1_800_000_000;
+  const user = db.upsertGoogleUser({
+    subject: 'google-refund-beats-win',
+    email: 'refunded@example.com',
+    displayName: 'Refunded'
+  }, timestamp * 1000);
+  db.grantEntitlement({
+    userId: user.id,
+    cosmeticId: 'fx-starfall',
+    checkoutSessionId: 'cs_refunded',
+    paymentIntentId: 'pi_refunded',
+    grantedAt: timestamp * 1000
+  });
+  const charge = {
+    id: 'ch_refunded',
+    payment_intent: 'pi_refunded',
+    refunded: true,
+    amount: 400,
+    amount_refunded: 400
+  };
+  const store = shop.createShopService({
+    ...serviceOptions(db),
+    now: () => timestamp * 1000,
+    fetchImpl: async (url) => {
+      if (url.endsWith('/charges/ch_refunded')) return response(charge);
+      throw new Error(`Unexpected URL ${url}`);
+    }
+  });
+
+  const refunded = webhookBody({
+    id: 'evt_refund_first',
+    type: 'charge.refunded',
+    data: { object: charge }
+  });
+  await store.webhook(refunded, webhookHeader(refunded, 'whsec_test', timestamp));
+  assert.deepEqual(db.listEntitlements(user.id), []);
+
+  /* Unexpanded, so the win has to fetch the charge to find out. */
+  const won = webhookBody({
+    id: 'evt_win_after_refund',
+    type: 'charge.dispute.closed',
+    data: { object: { id: 'dp_refunded', status: 'won', charge: 'ch_refunded' } }
+  });
+  const result = await store.webhook(won, webhookHeader(won, 'whsec_test', timestamp));
+  assert.equal(result.result.action, 'ignored');
+  assert.deepEqual(
+    db.listEntitlements(user.id),
+    [],
+    'a refunded purchase came back on a dispute win'
+  );
+});
+
 test('metadata-only revocation cannot remove a newer identified purchase', async (t) => {
   const { database, shop } = await accountModules();
   const db = database.openStoreDatabase(':memory:');
