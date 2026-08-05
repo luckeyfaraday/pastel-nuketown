@@ -9,8 +9,9 @@ set -euo pipefail
 
 # The root-only file is the durable copy of production credentials. Load it on
 # later runs so the documented one-command redeploy does not require secrets in
-# shell history or process arguments. Values supplied for this invocation win,
-# which keeps intentional rotation possible; a fresh host has no file and still
+# shell history or process arguments. Any value set for this invocation wins,
+# which keeps intentional rotation possible — including an explicitly empty one,
+# which is how a price ID is taken off sale. A fresh host has no file and still
 # reaches the loud guards below.
 ACCOUNT_ENV_NAMES=(
   GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URI GAME_ORIGIN
@@ -27,8 +28,11 @@ if [ -r /etc/nuketown.env ]; then
     if [[ -v "$name" ]]; then INVOCATION_ENV["$name"]="${!name}"; fi
   done
   # EnvironmentFile values are data, not shell. Read the writer's KEY=value
-  # format without evaluation so whitespace, dollars, backticks, and quotes
-  # round-trip with the same literal meaning they have for systemd.
+  # format without evaluation, so dollars, backticks and whitespace keep the
+  # literal meaning systemd also gives them. Quotes are the one place the two
+  # readers part company — systemd strips a matching surrounding pair and this
+  # loop does not — which is why the write below refuses to store a value that
+  # starts with one rather than leave the unit and the next run disagreeing.
   while IFS='=' read -r env_name env_value || [[ -n "$env_name$env_value" ]]; do
     for name in "${ACCOUNT_ENV_NAMES[@]}"; do
       if [[ "$env_name" == "$name" ]]; then
@@ -44,7 +48,9 @@ if [ -r /etc/nuketown.env ]; then
   done
   unset INVOCATION_ENV env_name env_value
 fi
-unset ACCOUNT_ENV_NAMES
+# ACCOUNT_ENV_NAMES stays in scope: the same list writes the file back further
+# down, so the two halves of the round trip cannot drift apart as items are
+# added to the catalogue.
 
 DOMAIN="${DOMAIN:-relay.luckeysystems.com}"
 SITE="${SITE:-nuketown.luckeysystems.com}"
@@ -212,24 +218,23 @@ say "systemd unit (allowed origins: ${ALLOWED_ORIGINS:-<any>})"
 # Keep credentials out of the world-readable unit itself. systemd reads this
 # root-only file and passes the values to the service process as environment;
 # the application checkout stays read-only and contains no production secret.
+# Check every value before truncating anything: a refusal must not be what
+# destroys the credentials the host is currently running on. A leading quote is
+# the one byte systemd and the reader at the top of this script disagree about,
+# and a secret that the unit and the next redeploy read differently fails much
+# later and much less clearly than this does.
+for name in "${ACCOUNT_ENV_NAMES[@]}"; do
+  case "${!name}" in
+    [\"\']*)
+      printf 'Refusing to store %s: systemd strips surrounding quotes from an EnvironmentFile value and this script does not. Set the value without quotes.\n' "$name" >&2
+      exit 1
+      ;;
+  esac
+done
 install -m 600 -o root -g root /dev/null /etc/nuketown.env
-{
-  printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
-  printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
-  printf 'GOOGLE_REDIRECT_URI=%s\n' "$GOOGLE_REDIRECT_URI"
-  printf 'GAME_ORIGIN=%s\n' "$GAME_ORIGIN"
-  printf 'STRIPE_SECRET_KEY=%s\n' "$STRIPE_SECRET_KEY"
-  printf 'STRIPE_WEBHOOK_SECRET=%s\n' "$STRIPE_WEBHOOK_SECRET"
-  printf 'STRIPE_PRICE_SMG_COTTONCLOUD=%s\n' "$STRIPE_PRICE_SMG_COTTONCLOUD"
-  printf 'STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW=%s\n' "$STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW"
-  printf 'STRIPE_PRICE_RIFLE_BERRYSWIRL=%s\n' "$STRIPE_PRICE_RIFLE_BERRYSWIRL"
-  printf 'STRIPE_PRICE_CHAR_MIDNIGHT=%s\n' "$STRIPE_PRICE_CHAR_MIDNIGHT"
-  printf 'STRIPE_PRICE_CHAR_SHERBETFOX=%s\n' "$STRIPE_PRICE_CHAR_SHERBETFOX"
-  printf 'STRIPE_PRICE_CHAR_CLOUDKNIGHT=%s\n' "$STRIPE_PRICE_CHAR_CLOUDKNIGHT"
-  printf 'STRIPE_PRICE_FX_STARFALL=%s\n' "$STRIPE_PRICE_FX_STARFALL"
-  printf 'STRIPE_PRICE_FX_CONFETTIPOP=%s\n' "$STRIPE_PRICE_FX_CONFETTIPOP"
-  printf 'STRIPE_PRICE_FX_BUBBLETRAIL=%s\n' "$STRIPE_PRICE_FX_BUBBLETRAIL"
-} > /etc/nuketown.env
+for name in "${ACCOUNT_ENV_NAMES[@]}"; do
+  printf '%s=%s\n' "$name" "${!name}"
+done > /etc/nuketown.env
 # Unquoted heredoc: $ALLOWED_ORIGINS is expanded below. Keep literal '$' and
 # systemd specifiers out of this block, or escape them as '\$' / '%%'.
 cat > /etc/systemd/system/nuketown.service <<UNIT
