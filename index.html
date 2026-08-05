@@ -14172,12 +14172,33 @@ function storeCleanCatalog(body) {
 
 /* Stripe counts in the currency's smallest unit, so a whole number is cents
    and 499 is $4.99. A string is passed through exactly as the relay wrote
-   it, which is the escape hatch the moment a price is not dollars. */
+   it, which is the escape hatch the moment a price is not dollars. The
+   relay's own answer is those same two facts with names on them —
+   { unitAmount, currency } — and until this reads that shape the card has
+   nothing to put between the name and the BUY button. A currency Stripe
+   counts whole rather than in hundredths keeps its unit as it is: a
+   thousand yen is a thousand yen, not ten. */
+const STORE_PRICE_SYMBOLS = { usd: '$', eur: '€', gbp: '£', jpy: '¥', cad: 'C$', aud: 'A$' };
+const STORE_PRICE_WHOLE_UNITS = {
+  bif: 1, clp: 1, djf: 1, gnf: 1, jpy: 1, kmf: 1, krw: 1, mga: 1,
+  pyg: 1, rwf: 1, ugx: 1, vnd: 1, vuv: 1, xaf: 1, xof: 1, xpf: 1
+};
 function storePriceText(price) {
   if (typeof price === 'string' && price.trim()) return price.trim().slice(0, 16);
-  if (typeof price === 'number' && Number.isFinite(price) && price >= 0)
-    return '$' + (Math.round(price) / 100).toFixed(2);
-  return '';
+  let amount = null;
+  let currency = 'usd';
+  if (typeof price === 'number') amount = price;
+  else if (price && typeof price === 'object' && typeof price.unitAmount === 'number') {
+    amount = price.unitAmount;
+    if (typeof price.currency === 'string' && price.currency.trim())
+      currency = price.currency.trim().toLowerCase();
+  }
+  if (amount === null || !Number.isFinite(amount) || amount < 0) return '';
+  const symbol = STORE_PRICE_SYMBOLS[currency] || (currency.toUpperCase() + ' ');
+  const text = STORE_PRICE_WHOLE_UNITS[currency]
+    ? String(Math.round(amount))
+    : (Math.round(amount) / 100).toFixed(2);
+  return symbol + text;
 }
 
 function storeRefreshCatalog() {
