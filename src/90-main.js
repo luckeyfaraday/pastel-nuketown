@@ -252,6 +252,11 @@ function boot() {
   initReportButton();
   initAI();        set(96);
   initNetworkUI();
+  /* Nobody has to sign in to play, so nothing the store does may be able to
+     stop the game booting — not a relay that has not shipped these endpoints
+     yet, not a browser with storage switched off. Every failure inside is
+     already handled; this is the guard for the one that is not. */
+  try { initStore(); } catch (e) {}
   const requestedMode = QS.get('mode');
   setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 

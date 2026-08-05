@@ -459,6 +459,17 @@ function finishReload(a) {
   if (a.isPlayer) SFX.reloadDone(); else SFX.reloadDone(a.pos.x, a.pos.y + 1.2, a.pos.z);
 }
 
+/* Which shot effect dresses this actor's fire. The selection is cosmetics
+   the network layer has already resolved and the relay has already approved
+   — EQUIPPED for the player, the room's member record for everyone else —
+   so nothing here decides what anybody owns. With no network layer loaded
+   at all (the headless harness) every shot is the plain default, which is
+   also what a signed-out player and a relay-less page get. */
+function actorShotEffect(a) {
+  if (!a || typeof netActorCosmetics !== 'function') return null;
+  return netActorCosmetics(a).effect || null;
+}
+
 function fireWeapon(a, fireSeq, renderTime) {
   const w = WBY[a.weapon];
   const visualOnly = a.isPlayer && typeof netIsGuest === 'function' && netIsGuest();
@@ -512,12 +523,17 @@ function fireWeapon(a, fireSeq, renderTime) {
     if (restoreActors) restoreActors();
   }
 
-  fxMuzzle(mx, my, mz);
+  /* Resolved once per shot rather than once per pellet: a shotgun would
+     otherwise walk the room's roster nine times to answer the same
+     question. */
+  const effectId = actorShotEffect(a);
+  fxMuzzle(mx, my, mz, effectId);
   for (let p = 0; p < shotLines.length; p++) {
     const hit = shotHits[p];
     const endX = shotLines[p][3], endY = shotLines[p][4], endZ = shotLines[p][5];
     if (p === 0 || w.pellets <= 3 || p % 3 === 0)
-      fxTracer(mx, my, mz, endX, endY, endZ, C(a.isPlayer ? (w.tracer || 0xfff0c0) : a.colors.trim));
+      fxTracer(mx, my, mz, endX, endY, endZ,
+        C(a.isPlayer ? (w.tracer || 0xfff0c0) : a.colors.trim), effectId);
 
     if (!hit) continue;
     if (hit.kind === 'actor') {

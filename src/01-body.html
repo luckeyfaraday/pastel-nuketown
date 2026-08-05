@@ -72,6 +72,26 @@
       <span>CALLSIGN</span>
       <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
     </label>
+    <div class="locker setup-only" id="locker">
+      <button class="mini-btn locker-btn" id="signIn" type="button">
+        <svg class="gmark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+          <path fill="#4285f4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"></path>
+          <path fill="#34a853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"></path>
+          <path fill="#fbbc05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"></path>
+          <path fill="#ea4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"></path>
+        </svg>
+        <span>SIGN IN WITH GOOGLE</span>
+      </button>
+      <div class="locker-who" id="lockerWho" hidden>
+        <span class="tag">SIGNED IN</span>
+        <strong id="accountName"></strong>
+        <button class="mini-btn" id="signOut" type="button">SIGN OUT</button>
+      </div>
+      <button class="mini-btn locker-btn locker-store" id="storeOpen" type="button">
+        <span aria-hidden="true">🧁</span><span>STORE</span>
+      </button>
+      <div id="lockerNote" role="status" aria-live="polite"></div>
+    </div>
     <label class="sens" for="sensRange">
       <span>MOUSE SENSITIVITY</span>
       <input type="range" id="sensRange" min="0.4" max="2.8" step="0.05" value="1">
@@ -154,6 +174,51 @@
     <span><b>RIGHT THUMB</b> aim</span><span><b>FIRE</b> shoot</span>
     <span><b>⤒</b> jump</span><span><b>⟳</b> reload</span>
     <span><b>1 2 3</b> weapons</span><span><b>☰</b> scores</span><span><b>❚❚</b> pause</span>
+  </div>
+</div>
+
+<!-- The locker. A .screen like the title card so it inherits the same
+     centring and scrolling, and above #title so it covers the card it was
+     opened from rather than fighting it for the middle of the window. -->
+<div class="screen off" id="store" role="dialog" aria-modal="true" aria-labelledby="storeTitle">
+  <!-- tabindex="-1" so opening the panel can put focus on the dialog itself
+       without adding it to the tab order once it is there. -->
+  <div class="store-card panel" tabindex="-1">
+    <div class="store-head">
+      <div class="store-head-text">
+        <h2 id="storeTitle">THE LOCKER</h2>
+        <div class="store-sub" id="storeWho">Skins for your guns and your fighter.</div>
+      </div>
+      <button class="mini-btn" id="storeClose" type="button">CLOSE</button>
+    </div>
+    <div id="storeNote" role="status" aria-live="polite"></div>
+    <!-- The display case. One canvas, one WebGL context, whatever is selected
+         below turning slowly inside it — and, when there is one to show, the
+         default it replaces standing next to it, because the thing being sold
+         is the difference between the two. Hidden outright on a browser that
+         cannot give the store a context, which leaves the cards below exactly
+         as they were before this existed. -->
+    <div class="store-stage" id="storeStage" hidden>
+      <div class="stage-case">
+        <!-- aria-hidden: the picture is decoration for a control that is
+             already named. A screen reader gets the name and the kind out of
+             the row underneath and out of the card that was pressed. -->
+        <canvas id="storeCanvas" aria-hidden="true"></canvas>
+        <div class="stage-tags" id="stageTags">
+          <span class="stage-tag" id="stageTagA" hidden>DEFAULT</span>
+          <span class="stage-tag" id="stageTagB"></span>
+        </div>
+        <div class="stage-empty" id="stageEmpty" hidden></div>
+      </div>
+      <div class="stage-bar">
+        <div class="stage-title">
+          <div id="stageName"></div>
+          <div id="stageKind"></div>
+        </div>
+        <button class="mini-btn" id="stageCompare" type="button" aria-pressed="true">HIDE DEFAULT</button>
+      </div>
+    </div>
+    <div id="storeGrid"></div>
   </div>
 </div>
 

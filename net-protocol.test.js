@@ -152,14 +152,14 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 8);
+  assert.equal(Protocol.VERSION, 9);
   assert.equal(Protocol.MAX_PLAYERS, 9);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
 
-test('v8 envelopes are accepted and the breaking v7 envelope is refused', () => {
+test('v9 envelopes are accepted and the breaking v8 envelope is refused', () => {
   assert.equal(Protocol.sanitizeInput(validInput(), -1, -1).ok, true);
-  const old = Protocol.sanitizeInput(validInput({ v: 7 }), -1, -1);
+  const old = Protocol.sanitizeInput(validInput({ v: 8 }), -1, -1);
   assert.equal(old.ok, false);
   assert.match(old.error, /version/);
 });

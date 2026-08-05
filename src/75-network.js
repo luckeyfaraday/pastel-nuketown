@@ -126,23 +126,64 @@ function netIsMultiplayer() { return netIsHost() || netIsGuest(); }
 function netHasTransport() { return NET.mode !== 'solo'; }
 function netSocketOpen() { return NET.socket && NET.socket.readyState === WebSocket.OPEN; }
 
+function netCleanCosmetics(value) {
+  return NETP && typeof NETP.sanitizeCosmetics === 'function'
+    ? NETP.sanitizeCosmetics(value)
+    : { character: null, weapons: { smg: null, shotgun: null, rifle: null } };
+}
+
+function netHasCosmetics(value) {
+  return !!(NETP && typeof NETP.hasCosmetics === 'function' && NETP.hasCosmetics(value));
+}
+
+/* EQUIPPED arrives with the store branch and is intentionally absent in this
+   one. Reading it only at the moment it is needed keeps a signed-out build and
+   a build whose account request is still in flight on the exact default path. */
+function netEquippedCosmetics() {
+  return netCleanCosmetics(typeof EQUIPPED !== 'undefined' ? EQUIPPED : null);
+}
+
+function netMemberCosmetics(member) {
+  return netCleanCosmetics(member && member.cosmetics);
+}
+
+function netActorCosmetics(actor) {
+  if (actor && actor.cosmetics) return netCleanCosmetics(actor.cosmetics);
+  const member = actor && NET.members.find(item => item.id === actor.netId);
+  if (member) return netMemberCosmetics(member);
+  return actor && actor === G.player
+    ? netEquippedCosmetics()
+    : netCleanCosmetics(null);
+}
+
 /* Every client dresses every player the same way without asking, because the
    answer is the seat the relay already gave them rather than anything local.
    That matters most for the one actor a guest builds itself: its own. */
 function netMemberWithColor(member) {
-  return {
+  const info = {
     id: member.id,
     name: member.name,
     role: member.role,
     colors: jerseyForSlot(member.slot)
   };
+  const cosmetics = netMemberCosmetics(member);
+  if (netHasCosmetics(cosmetics)) info.cosmetics = cosmetics;
+  return info;
 }
 
 function netLocalPlayerInfo() {
-  if (!netIsMultiplayer()) return { id: null, name: 'YOU', colors: PLAYER_COLOR };
+  if (!netIsMultiplayer()) {
+    const local = { id: null, name: 'YOU', colors: PLAYER_COLOR };
+    const cosmetics = netEquippedCosmetics();
+    if (netHasCosmetics(cosmetics)) local.cosmetics = cosmetics;
+    return local;
+  }
   const m = NET.members.find(member => member.id === NET.id);
   if (!m) return { id: NET.id, name: 'PLAYER', colors: PLAYER_COLOR };
-  return { id: NET.id, name: m.name, colors: jerseyForSlot(m.slot) };
+  const local = { id: NET.id, name: m.name, colors: jerseyForSlot(m.slot) };
+  const cosmetics = netMemberCosmetics(m);
+  if (netHasCosmetics(cosmetics)) local.cosmetics = cosmetics;
+  return local;
 }
 
 function netAuthorityRoster() {
@@ -152,6 +193,58 @@ function netAuthorityRoster() {
     if (m.id !== NET.id) out.push(netMemberWithColor(m));
   }
   return out;
+}
+
+/* The builders that understand skins land on another branch. These wrappers
+   pass their optional arguments without changing the ordinary path: today the
+   extra argument is ignored, and once that branch lands it becomes the visual
+   layer over the same actor colours and weapon state. Keeping the seam here
+   also lets every existing caller in the game use the local selection without
+   editing the files owned by that branch. */
+const netAttachDefaultCharacter = attachCharacter;
+attachCharacter = function (actor) {
+  const skinId = netActorCosmetics(actor).character;
+  if (!skinId) return netAttachDefaultCharacter(actor);
+  actor.char = buildCharacter(actor.colors, skinId);
+  scene.add(actor.char.root);
+  actor.blob = makeBlobShadow();
+  actor.bubble = makeBubble();
+  actor.plate = makePlate();
+  actor.plate.sprite.position.set(0, CH.headC + 0.55, 0);
+  actor.char.root.add(actor.plate.sprite);
+  drawPlate(actor.plate, actor.name, actor.health, actor.maxHealth, actor.colors.body);
+};
+
+const netSetDefaultWeapon = vmSetWeapon;
+vmSetWeapon = function (weapon, force, skinId) {
+  if (skinId === undefined) {
+    const viewed = typeof KILLCAM !== 'undefined' && KILLCAM.shown
+      ? KILLCAM.shown
+      : G.player;
+    skinId = netActorCosmetics(viewed).weapons[weapon];
+  }
+  return netSetDefaultWeapon(weapon, force, skinId);
+};
+
+function netSetActorCosmetics(actor, value) {
+  if (!actor) return;
+  const before = netActorCosmetics(actor);
+  const after = netCleanCosmetics(value);
+  actor.cosmetics = after;
+  if (actor.char && before.character !== after.character) {
+    /* Character meshes contain the costume pieces, so a changed id is a
+       rebuild rather than a material tweak. This happens on a manifest or
+       authority transition, never on the 20Hz steady-state path. */
+    disposeActorVisuals(actor);
+    attachCharacter(actor);
+  }
+  if (actor === G.player && actor.weapon &&
+      before.weapons[actor.weapon] !== after.weapons[actor.weapon]) {
+    vmSetWeapon(actor.weapon, true, after.weapons[actor.weapon]);
+  }
+  /* A changed effect needs nothing here. It owns no mesh: it is read off
+     the actor at the instant a shot is drawn, so the next trigger pull is
+     already wearing it. */
 }
 
 /* Bots are the shortfall and nothing else, which is why the room cap and the
@@ -205,6 +298,24 @@ function netWsURL() {
   if (netIsDevOrigin()) return netSameOriginURL();
 
   return netNormalizeServer(NET_SERVER) || netSameOriginURL();
+}
+
+/* Do not send an account bearer token to a gameplay override. The store keeps
+   the origin that issued the token precisely so a shareable ?server= link
+   cannot redirect credentials; ws(s) and http(s) versions of one origin are
+   the same relay for this comparison. */
+function netAuthTokenForSocket(socketURL) {
+  if (typeof ACCOUNT === 'undefined' || !ACCOUNT ||
+      typeof ACCOUNT.token !== 'string' ||
+      typeof ACCOUNT.tokenOrigin !== 'string') return null;
+  if (!/^[A-Za-z0-9_-]{20,512}$/.test(ACCOUNT.token)) return null;
+  try {
+    const target = new URL(socketURL);
+    target.protocol = target.protocol === 'wss:' ? 'https:' : 'http:';
+    if (target.origin !== ACCOUNT.tokenOrigin) return null;
+    return ACCOUNT.token;
+  } catch (e) {}
+  return null;
 }
 
 /* Same server, plain HTTP. The room list is a poll rather than a socket
@@ -485,7 +596,10 @@ function netCleanMembers(value) {
     ids.add(raw.id);
     slots.add(raw.slot);
     if (raw.role === 'host') hosts++;
-    members.push({ id: raw.id, name: name, role: raw.role, slot: raw.slot });
+    const member = { id: raw.id, name: name, role: raw.role, slot: raw.slot };
+    const cosmetics = netCleanCosmetics(raw.cosmetics);
+    if (netHasCosmetics(cosmetics)) member.cosmetics = cosmetics;
+    members.push(member);
   }
   return hosts === 1 ? members : null;
 }
@@ -733,7 +847,7 @@ function netConnect(kind, requestedRoom, quickPlan) {
   netResetTransport();
   NET.mode = 'connecting';
   NET.phase = 'connecting';
-  NET.wanted = { kind, name, room, listed };
+  NET.wanted = { kind, name, room, listed, cosmetics: netEquippedCosmetics() };
   /* Reinstalled after the reset: a quick-play run outlives the individual
      connection attempts it is made of. */
   NET.quick = quickPlan || null;
@@ -761,7 +875,13 @@ function netConnect(kind, requestedRoom, quickPlan) {
   ws.addEventListener('open', () => {
     if (NET.socket !== ws || !NET.wanted) return;
     const w = NET.wanted;
-    netSend({ t: w.kind, v: NETP.VERSION, room: w.room, name: w.name, listed: w.listed });
+    const hello = {
+      t: w.kind, v: NETP.VERSION, room: w.room, name: w.name,
+      listed: w.listed, cosmetics: w.cosmetics
+    };
+    const authToken = netAuthTokenForSocket(socketURL);
+    if (authToken) hello.authToken = authToken;
+    netSend(hello);
   });
   ws.addEventListener('message', e => netHandleWire(e.data));
   ws.addEventListener('error', () => {
@@ -1221,6 +1341,7 @@ function netHydrateActor(actor, state, metadata, local) {
   actor.colors = {
     body: state.colors.body, trim: state.colors.trim, name: state.colors.name
   };
+  netSetActorCosmetics(actor, state.cosmetics);
   actor.pos.x = state.pos[0]; actor.pos.y = state.pos[1]; actor.pos.z = state.pos[2];
   actor.vel.x = state.vel[0]; actor.vel.y = state.vel[1]; actor.vel.z = state.vel[2];
   actor.yaw = state.yaw; actor.pitch = state.pitch;
@@ -1292,6 +1413,7 @@ function netHydrateMigration(snapshot, checkpoint) {
     const local = state.netId === NET.id;
     let actor = local ? G.player : oldActors.find(item => item.netId === state.netId);
     if (!actor) {
+      const cosmetics = netCleanCosmetics(state.cosmetics);
       actor = makeActor({
         id: state.id,
         netId: state.netId,
@@ -1304,6 +1426,7 @@ function netHydrateMigration(snapshot, checkpoint) {
         weapon: state.weapon,
         skill: slow.skill
       });
+      actor.cosmetics = cosmetics;
       attachCharacter(actor);
     }
     netHydrateActor(actor, state, slow, local);
@@ -1649,7 +1772,7 @@ function netPackDonuts() {
 
 function netPackActor(a) {
   const remote = a.controller === 'remote';
-  return {
+  const packed = {
     id: a.id,
     netId: netActorId(a),
     name: a.name,
@@ -1683,6 +1806,9 @@ function netPackActor(a) {
     bestStreak: a.bestStreak,
     lastHitBy: a.lastHitBy
   };
+  const cosmetics = a.isHuman ? netActorCosmetics(a) : netCleanCosmetics(null);
+  if (netHasCosmetics(cosmetics)) packed.cosmetics = cosmetics;
+  return packed;
 }
 
 function netPackCheckpointActor(a) {
@@ -2208,6 +2334,7 @@ function netValidActorState(s) {
 
 function netCreateReplica(s) {
   const colors = { body: s.colors.body, trim: s.colors.trim, name: s.colors.name };
+  const cosmetics = netCleanCosmetics(s.cosmetics);
   const a = makeActor({
     id: Number.isInteger(s.id) ? s.id : undefined,
     netId: s.netId,
@@ -2217,6 +2344,7 @@ function netCreateReplica(s) {
     colors: colors,
     weapon: s.weapon
   });
+  a.cosmetics = cosmetics;
   a.pos.x = s.pos[0]; a.pos.y = s.pos[1]; a.pos.z = s.pos[2];
   a.vel.x = s.vel[0]; a.vel.y = s.vel[1]; a.vel.z = s.vel[2];
   a.yaw = s.yaw; a.aimYaw = s.aimYaw; a.aimPitch = s.aimPitch; a.bodyYaw = s.bodyYaw;
@@ -2295,6 +2423,7 @@ function netApplyActorState(a, s, local, sampleTime) {
   const wasAlive = a.alive;
   const oldHp = a.health;
   const oldWeapon = a.weapon;
+  netSetActorCosmetics(a, s.cosmetics);
   a.name = NETP.cleanPlayerName(s.name);
   a.maxHealth = clamp(s.maxHealth, 1, 500);
   a.health = clamp(s.health, 0, a.maxHealth);
@@ -2643,11 +2772,15 @@ function netApplyEvent(e) {
        hook in fireWeapon. */
     if (from && from === KILLCAM.shown) vmFire(w);
     if (Array.isArray(e.lines)) {
+      /* The shooter's own effect, from the cosmetics the relay approved for
+         them — never from anything inside the event, which the host wrote. */
+      const effectId = actorShotEffect(from);
       for (let i = 0; i < e.lines.length; i++) {
         const l = e.lines[i];
         if (!Array.isArray(l) || l.length !== 6 || !l.every(Number.isFinite)) continue;
         if (i === 0 || e.lines.length <= 3 || i % 3 === 0)
-          fxTracer(l[0], l[1], l[2], l[3], l[4], l[5], C(from ? from.colors.trim : w.tracer));
+          fxTracer(l[0], l[1], l[2], l[3], l[4], l[5],
+            C(from ? from.colors.trim : w.tracer), effectId);
       }
     }
     if (from) SFX.shoot(w.id, from.pos.x, from.pos.y + 1.3, from.pos.z);
