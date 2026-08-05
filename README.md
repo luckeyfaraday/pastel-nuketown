@@ -159,7 +159,35 @@ It runs only when a build input is staged, stays out of rebases, merges and docs
 
 ## Deployment
 
-`deploy/provision.sh` provisions the multiplayer relay on a fresh Ubuntu 24.04 server. It sets up a systemd service, nginx reverse proxy, and TLS certificates. Configuration is via environment variables documented in the script header (`DOMAIN`, `SITE`, `ALLOWED_ORIGINS`, `BRANCH`).
+`deploy/provision.sh` provisions the multiplayer relay on a fresh Ubuntu 24.04 server. It sets up a systemd service, Caddy reverse proxy, and TLS certificates. Configuration is via environment variables documented in the script header (`DOMAIN`, `SITE`, `ALLOWED_ORIGINS`, `BRANCH`).
+
+### Moderating the live relay
+
+The provisioner installs an operator-only `nuketown-admin` command. Run it on
+the relay host with `sudo`; it reads the admin credential from the root-only
+service environment file, so the token does not need to appear in shell
+history.
+
+```bash
+sudo nuketown-admin players
+sudo nuketown-admin kick ostrch repeated harassment
+sudo nuketown-admin ban ostrch cheating
+sudo nuketown-admin bans
+sudo nuketown-admin unban <ban-id>
+```
+
+Names select players who are online. If two players use the same name, the
+command lists their peer IDs; repeat the command with the intended ID. A kick
+disconnects only the selected connection and allows it to return. A ban is
+persistent across relay restarts and disconnects the player immediately. It is
+enforced against the signed-in account when present and the connection's
+hashed network identity, so signing out or changing the display name does not
+bypass it. Be aware that a network ban can also affect players sharing the same
+public address. Use `unban` with the ID printed by `bans` to reverse it.
+
+The HTTP operator routes require a bearer token and the generated Caddy config
+does not expose them publicly. The ban file lives beside relay state as
+`bans.json`; raw network addresses are never written to it.
 
 ## FAQ
 
