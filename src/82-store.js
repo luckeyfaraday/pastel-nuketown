@@ -433,6 +433,7 @@ function storeSetSignedOut() {
   storeApplyEquipped();
   storeRenderAccount();
   storeRenderGrid();
+  battlepassRender();
 }
 
 function storeCleanEntitlements(value) {
@@ -472,6 +473,9 @@ function storeRefreshMe() {
     storeApplyEquipped();
     storeRenderAccount();
     storeRenderGrid();
+    /* A sign-in that lands while the pass screen is up has to show up there
+       too — it is the difference between the signed-out ladder and a tier. */
+    if (battlepassIsOpen()) battlepassRefresh();
     return true;
   }, () => {
     if (storeStale(session)) return false;
@@ -1757,9 +1761,18 @@ function storeLockerNote(text) {
 
 function storeNote(text, kind) {
   const el = document.getElementById('storeNote');
-  if (!el) return;
-  el.textContent = text || '';
-  el.dataset.kind = kind || '';
+  if (el) {
+    el.textContent = text || '';
+    el.dataset.kind = kind || '';
+  }
+  /* While the battle pass screen is the one on top, store messages — the
+     checkout ones above all — land on its own note line instead of on a
+     store panel the player is not looking at. */
+  const bp = document.getElementById('bpNote');
+  if (bp && battlepassIsOpen()) {
+    bp.textContent = text || '';
+    bp.dataset.kind = kind || '';
+  }
 }
 
 function storeRenderAccount() {
@@ -1897,6 +1910,10 @@ function storeRenderGrid() {
      taken once, off the next frame. */
   stageFillThumbs();
   stageThumbsSoon(items);
+
+  /* The pass screen's buy row depends on the same moving parts the grid
+     does — the catalog and the checkout state — so it redraws with them. */
+  if (battlepassIsOpen()) battlepassRenderCta();
 }
 
 /* =====================================================================
@@ -2042,11 +2059,22 @@ function initStore() {
   /* The wash around the card is a way out on a phone, where CLOSE sits at the
      top of a tall panel and a thumb is already at the bottom. */
   if (panel) panel.addEventListener('click', e => { if (e.target === panel) storeShow(false); });
+  /* The battle pass screen is the store's pattern a second time: the same
+     open, the same three ways out, the same trap. */
+  const bpOpen = document.getElementById('battlepassOpen');
+  const bpClose = document.getElementById('bpClose');
+  const bpPanel = document.getElementById('battlepass');
+  if (bpOpen) bpOpen.addEventListener('click', () => battlepassShow(true));
+  if (bpClose) bpClose.addEventListener('click', () => { battlepassShow(false); if (typeof SFX === 'object' && SFX) SFX.ui(); });
+  if (bpPanel) bpPanel.addEventListener('click', e => { if (e.target === bpPanel) battlepassShow(false); });
+
   /* Escape is the other way out. Nothing else claims it here — the store only
-     opens from the title menu, and the pause card's Escape handling is behind
-     a started match. */
+      opens from the title menu, and the pause card's Escape handling is behind
+      a started match. */
   addEventListener('keydown', e => { if (e.code === 'Escape' && storeIsOpen()) storeShow(false); });
+  addEventListener('keydown', e => { if (e.code === 'Escape' && battlepassIsOpen()) battlepassShow(false); });
   addEventListener('keydown', storeTrapFocus);
+  addEventListener('keydown', bpTrapFocus);
   /* The sign-in popup posts the token back here and closes itself. */
   addEventListener('message', storeOnAuthMessage);
 
@@ -2060,11 +2088,21 @@ function initStore() {
      in a window of its own and this page never goes anywhere. */
   if (storeSessionRead(STORE_RETURN_KEY)) {
     storeSessionErase(STORE_RETURN_KEY);
-    storeShow(true);
-  } else if (ACCOUNT.token) {
-    /* Entitlements are wanted on every load whether or not the panel is
-       opened, because they are what decides what EQUIPPED may hold. */
-    storeRefreshMe();
+    /* A checkout that was started from the pass screen lands back on the
+       pass screen, which is where the purchase shows up; any other checkout
+       lands on the store, the way it always did. */
+    if (bpReturnPending()) battlepassShow(true);
+    else storeShow(true);
+  } else {
+    /* This load is not a checkout return, so a leftover pass marker — a
+       checkout that failed to open, say — is spent here rather than waiting
+       to hijack a later, unrelated return. */
+    bpReturnPending();
+    if (ACCOUNT.token) {
+      /* Entitlements are wanted on every load whether or not the panel is
+         opened, because they are what decides what EQUIPPED may hold. */
+      storeRefreshMe();
+    }
   }
 
   /* The other shape of the same trip: a checkout that opened in another tab,
@@ -2082,10 +2120,649 @@ function initStore() {
     if (!storeIsOpen() && !ACCOUNT.user) return;
     if (Date.now() - ACCOUNT.lastRefresh < 5000) return;
     ACCOUNT.lastRefresh = Date.now();
-    /* With the panel shut, entitlements are the only part that matters —
-       nothing is drawing prices. */
-    if (storeIsOpen()) storeRefreshAll(); else storeRefreshMe();
+    /* With both panels shut, entitlements are the only part that matters —
+       nothing is drawing prices. The pass screen draws the premium offer,
+       so an open one re-asks the catalog the way an open store does. */
+    if (storeIsOpen() || battlepassIsOpen()) storeRefreshAll(); else storeRefreshMe();
   };
   document.addEventListener('visibilitychange', wake);
   addEventListener('pageshow', wake);
+}
+
+/* =====================================================================
+   SEASON 1 BATTLE PASS
+
+   The screen the locker row's SEASON 1 button opens. It is the store's
+   pattern a second time — a .screen dialog, opened from the title card,
+   closed by CLOSE, by Escape and by the wash — drawn from two inputs:
+
+   The server's: GET /battlepass/me answers with the player's xp, tier,
+   premium flag and claimed rewards. It is asked through storeAPI, a 401
+   is the ordinary signed-out answer, and any other failure leaves the
+   ladder standing read-only instead of breaking the screen.
+
+   The mirror's: the 25-tier ladder below is copied from the server's
+   season1.mjs because the client is not sent it. The mirror is only
+   shape — which rewards sit at which tier — so state (what is reached,
+   what is claimed, whether the pass is owned) is never read out of it.
+   The reward ids carry no art yet and will be remapped when they do, so
+   nothing below branches on an id: nodes are keyed by tier and lane, and
+   an id the mirror does not recognise still draws a card.
+   ===================================================================== */
+
+const BP_PRODUCT_ID = 'battlepass-season-1-premium';
+/* Checkout takes the whole browser, so coming back is a fresh load. This
+   marker says the trip started on the pass screen, and is the same shape
+   as the store's return marker, ten-minute life included: a marker older
+   than that belongs to a checkout nobody is still coming back from. */
+const BP_RETURN_KEY = 'pastel-nuketown-battlepass-open';
+const BP_RETURN_TTL = 600000;
+
+/* Cumulative XP to REACH each tier, tier 1 through tier 25, verbatim from
+   season1.mjs. A relay-confirmed match is 500 XP, so three matches a day
+   for all thirty days is 45,000 XP — exactly the top tier. */
+const BP_XP_THRESHOLDS = [
+  600, 1300, 2100, 3000, 4000,
+  5100, 6300, 7600, 9000, 10500,
+  12100, 13800, 15600, 17500, 19500,
+  21600, 23800, 26100, 28500, 31000,
+  33600, 36300, 39100, 42000, 45000
+];
+
+/* [tier]'s free reward and premium reward, verbatim from season1.mjs. */
+const BP_REWARDS = [
+  { free: 's1-free-spray-first-light',      premium: 's1-premium-smg-first-light' },
+  { free: 's1-free-charm-paper-star',       premium: 's1-premium-fx-dawn-sparks' },
+  { free: 's1-free-banner-pink-horizon',    premium: 's1-premium-char-sunrise-scout' },
+  { free: 's1-free-sticker-cloud-nine',     premium: 's1-premium-shotgun-peach-frost' },
+  { free: 's1-free-fx-soft-confetti',       premium: 's1-premium-rifle-sky-ribbon' },
+  { free: 's1-free-charm-tiny-teapot',      premium: 's1-premium-char-lilac-guard' },
+  { free: 's1-free-banner-bus-stop',        premium: 's1-premium-fx-prism-pop' },
+  { free: 's1-free-sticker-blue-bird',      premium: 's1-premium-smg-candy-grid' },
+  { free: 's1-free-spray-sunny-side',       premium: 's1-premium-shotgun-moon-mallow' },
+  { free: 's1-free-rifle-pastel-stripe',    premium: 's1-premium-char-neon-nap' },
+  { free: 's1-free-charm-glass-drop',       premium: 's1-premium-fx-comet-tail' },
+  { free: 's1-free-banner-nuketown-night',  premium: 's1-premium-smg-berry-static' },
+  { free: 's1-free-sticker-lucky-thirteen', premium: 's1-premium-char-starlight-runner' },
+  { free: 's1-free-spray-garden-wall',      premium: 's1-premium-shotgun-gilded-cloud' },
+  { free: 's1-free-fx-paper-petals',        premium: 's1-premium-rifle-midnight-bloom' },
+  { free: 's1-free-charm-pocket-sun',       premium: 's1-premium-char-cobalt-captain' },
+  { free: 's1-free-banner-sherbet-streak',  premium: 's1-premium-fx-aurora-trail' },
+  { free: 's1-free-sticker-tower-watch',    premium: 's1-premium-smg-prism-check' },
+  { free: 's1-free-spray-house-party',      premium: 's1-premium-shotgun-starlight' },
+  { free: 's1-free-char-cotton-cadet',      premium: 's1-premium-rifle-sunset-glass' },
+  { free: 's1-free-charm-little-rocket',    premium: 's1-premium-fx-crown-burst' },
+  { free: 's1-free-banner-final-lap',      premium: 's1-premium-char-dream-warden' },
+  { free: 's1-free-sticker-golden-ticket',  premium: 's1-premium-smg-royal-sherbet' },
+  { free: 's1-free-spray-almost-there',     premium: 's1-premium-shotgun-aurora-crown' },
+  { free: 's1-free-rifle-season-one',       premium: 's1-premium-char-season-one-legend' }
+];
+
+/* The placeholder a node draws while its reward has no art: the id's kind
+   token picks the glyph and the caption, and an id with no kind token gets
+   the gift box. The ids are remapped in the art phase, so this table is a
+   kindness for today, not a contract. */
+const BP_KINDS = {
+  smg:     { glyph: '🫧', label: 'SMG skin' },
+  shotgun: { glyph: '🍡', label: 'Shotgun skin' },
+  rifle:   { glyph: '🍭', label: 'Rifle skin' },
+  char:    { glyph: '🧸', label: 'Character skin' },
+  fx:      { glyph: '✨', label: 'Shot effect' },
+  spray:   { glyph: '🎨', label: 'Spray' },
+  charm:   { glyph: '🎐', label: 'Charm' },
+  banner:  { glyph: '🚩', label: 'Banner' },
+  sticker: { glyph: '🌟', label: 'Sticker' }
+};
+const BP_KIND_TOKENS = Object.keys(BP_KINDS);
+
+const BATTLEPASS = {
+  me: null,             // last cleaned /battlepass/me answer, or null
+  fetching: false,
+  timer: 0,             // countdown ticker; only runs while the screen is open
+  focusOpener: null,    // where focus goes back when the screen closes
+  pendingScroll: false  // centre the track on the player's tier at next render
+};
+
+/* The server's answer, checked field by field before anything renders from
+   it. A body that does not fit is a null, which the screen draws as a
+   read-only ladder rather than as a crash. */
+function bpCleanMe(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const status = body.status === 'not-yet-active' || body.status === 'active' ||
+    body.status === 'ended' ? body.status : null;
+  if (!status) return null;
+  const int = (v, lo, hi, fallback) => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
+    const n = Math.floor(v);
+    return n < lo ? lo : (n > hi ? hi : n);
+  };
+  const at = v => {
+    const ms = typeof v === 'string' ? Date.parse(v) : NaN;
+    return Number.isFinite(ms) ? ms : null;
+  };
+  const claimed = new Set();
+  if (Array.isArray(body.claimedRewards)) {
+    for (const entry of body.claimedRewards.slice(0, 64)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const tier = int(entry.tier, 1, BP_REWARDS.length, 0);
+      const lane = entry.lane === 'free' || entry.lane === 'premium' ? entry.lane : null;
+      if (tier && lane) claimed.add(tier + ':' + lane);
+    }
+  }
+  return {
+    seasonId: typeof body.seasonId === 'string' ? body.seasonId.slice(0, 60) : '',
+    status: status,
+    startsAt: at(body.startsAt),
+    endsAt: at(body.endsAt),
+    xp: int(body.xp, 0, 1000000000, 0),
+    tier: int(body.tier, 0, BP_REWARDS.length, 0),
+    /* -1 marks a number the server did not send properly; bpXpToNext reads
+       it and falls back to the mirrored thresholds. null is the real
+       tier-25 answer and passes through untouched. */
+    xpToNextTier: body.xpToNextTier === null ? null : int(body.xpToNextTier, 0, 1000000000, -1),
+    premium: body.premium === true,
+    claimed: claimed
+  };
+}
+
+/* Signed out there is no season state — the ladder is a preview — so every
+   renderer asks here instead of reading BATTLEPASS.me directly. */
+function bpMe() { return storeSignedIn() ? BATTLEPASS.me : null; }
+
+function battlepassIsOpen() {
+  const panel = document.getElementById('battlepass');
+  return !!panel && !panel.classList.contains('off');
+}
+
+/* The server's status, corrected by the clock. A tab left open across the
+   season's edge would otherwise keep saying "2d left" or "starts soon"
+   until the next refresh; this only moves the text, and only forward. */
+function bpEffectiveStatus(me, now) {
+  if (me.status === 'not-yet-active' && me.startsAt !== null && now >= me.startsAt) return 'active';
+  if (me.status === 'active' && me.endsAt !== null && now >= me.endsAt) return 'ended';
+  return me.status;
+}
+
+function bpXpToNext(me) {
+  if (me.tier >= BP_REWARDS.length) return null;
+  if (typeof me.xpToNextTier === 'number' && me.xpToNextTier >= 0) return me.xpToNextTier;
+  return Math.max(0, BP_XP_THRESHOLDS[me.tier] - me.xp);
+}
+
+/* ---------------------------------------------------------------------
+   Asking the relay
+   --------------------------------------------------------------------- */
+function battlepassRefresh() {
+  if (!storeSignedIn()) {
+    BATTLEPASS.me = null;
+    battlepassRender();
+    return Promise.resolve(false);
+  }
+  const session = ACCOUNT.session;
+  BATTLEPASS.fetching = true;
+  battlepassRenderProgress();
+  return storeAPI('/battlepass/me', { auth: true }).then(res => {
+    BATTLEPASS.fetching = false;
+    if (storeStale(session)) return false;
+    /* The session the store knows about is gone; storeForgetToken redraws
+       this screen signed-out on its way past. */
+    if (res.status === 401) { storeForgetToken(); return false; }
+    /* Anything but a usable answer — a relay that has not shipped the
+       route yet, a season the relay will not describe, a body that does
+       not fit — leaves the ladder standing read-only. */
+    BATTLEPASS.me = res.ok ? bpCleanMe(res.body) : null;
+    battlepassRender();
+    return !!BATTLEPASS.me;
+  }, () => {
+    BATTLEPASS.fetching = false;
+    if (storeStale(session)) return false;
+    BATTLEPASS.me = null;
+    battlepassRender();
+    return false;
+  });
+}
+
+/* ---------------------------------------------------------------------
+   The offer row
+   --------------------------------------------------------------------- */
+function bpCatalogProduct() {
+  if (!ACCOUNT.items) return null;
+  for (const item of ACCOUNT.items)
+    if (item.id === BP_PRODUCT_ID) return item;
+  return null;
+}
+
+function bpReturnMark() {
+  storeSessionWrite(BP_RETURN_KEY, JSON.stringify({ at: Date.now() }));
+}
+
+/* Reads and spends the marker in one move, so a call is also the cleanup
+   for a marker whose checkout never left the page. */
+function bpReturnPending() {
+  const raw = storeSessionRead(BP_RETURN_KEY);
+  storeSessionErase(BP_RETURN_KEY);
+  if (!raw) return false;
+  let mark = null;
+  try { mark = JSON.parse(raw); } catch (e) { return false; }
+  const at = mark && typeof mark.at === 'number' && Number.isFinite(mark.at) ? mark.at : 0;
+  return !!at && Date.now() - at <= BP_RETURN_TTL;
+}
+
+function battlepassBuy() {
+  if (!storeSignedIn() || ACCOUNT.checkingOut) return;
+  /* The button is only offered when the catalog lists the product, but the
+     catalog can change under an open screen; a product that left is not a
+     checkout that should start. */
+  if (!bpCatalogProduct()) return;
+  bpReturnMark();
+  storeBuy(BP_PRODUCT_ID);
+  /* storeBuy set ACCOUNT.checkingOut before returning, so this redraw is
+     what puts the button on WAIT… until the checkout chain's finally
+     redraws it back. */
+  battlepassRenderCta();
+}
+
+/* ---------------------------------------------------------------------
+   Small drawing helpers
+   --------------------------------------------------------------------- */
+function bpText(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  el.textContent = text;
+  return el;
+}
+
+function bpButton(label, onClick) {
+  const btn = document.createElement('button');
+  btn.className = 'mini-btn';
+  btn.type = 'button';
+  btn.textContent = label;
+  if (onClick) btn.addEventListener('click', onClick);
+  return btn;
+}
+
+function bpCtaText(big, small) {
+  const wrap = bpText('div', 'bp-cta-text', big);
+  if (small) wrap.appendChild(bpText('small', '', small));
+  return wrap;
+}
+
+function bpNum(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '0';
+  try { return Math.floor(n).toLocaleString('en-US'); } catch (e) { return String(Math.floor(n)); }
+}
+
+function bpRewardKind(id) {
+  if (typeof id !== 'string' || !id) return null;
+  for (const token of BP_KIND_TOKENS)
+    if (id.indexOf('-' + token + '-') >= 0) return token;
+  return null;
+}
+
+/* The words after the kind token, title-cased: s1-premium-char-season-one-legend
+   reads "Season One Legend". An id with nothing left reads "Reward". */
+function bpRewardName(id) {
+  if (typeof id !== 'string' || !id) return 'Reward';
+  const kind = bpRewardKind(id);
+  let tail = kind
+    ? id.slice(id.indexOf('-' + kind + '-') + kind.length + 2)
+    : id.replace(/^s1-(free|premium)-/, '');
+  const words = tail.split('-');
+  const out = [];
+  for (const w of words) if (w) out.push(w.charAt(0).toUpperCase() + w.slice(1));
+  const name = out.join(' ');
+  return name ? name.slice(0, 40) : 'Reward';
+}
+
+const BP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function bpDateText(ms) {
+  const d = new Date(ms);
+  return BP_MONTHS[d.getUTCMonth()] + ' ' + d.getUTCDate();
+}
+
+/* "26d 4h", then "5h 12m", then "40m" as the moment gets close. */
+function bpSpanText(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return 'under a minute';
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return Math.max(1, m) + 'm';
+}
+
+/* ---------------------------------------------------------------------
+   Drawing the screen
+   --------------------------------------------------------------------- */
+function battlepassRender() {
+  battlepassRenderSeason();
+  battlepassRenderProgress();
+  battlepassRenderCta();
+  battlepassRenderLadder();
+  bpRetick();
+}
+
+function battlepassRenderSeason() {
+  const el = document.getElementById('bpSeason');
+  if (!el) return;
+  const me = bpMe();
+  if (!me) {
+    el.textContent = storeSignedIn()
+      ? '25 tiers · a free lane and a premium lane'
+      : '25 tiers · sign in to track yours';
+    return;
+  }
+  const now = Date.now();
+  const status = bpEffectiveStatus(me, now);
+  if (status === 'not-yet-active') {
+    el.textContent = me.startsAt !== null
+      ? 'Starts in ' + bpSpanText(me.startsAt - now) + ' · ' + bpDateText(me.startsAt)
+      : 'Starts soon';
+  } else if (status === 'active') {
+    el.textContent = me.endsAt !== null
+      ? bpSpanText(me.endsAt - now) + ' left · ends ' + bpDateText(me.endsAt)
+      : 'Season active';
+  } else {
+    el.textContent = 'Season ended' + (me.endsAt !== null ? ' · ' + bpDateText(me.endsAt) : '') +
+      (me.tier >= 1 ? ' · finished at tier ' + me.tier : '');
+  }
+}
+
+function battlepassRenderProgress() {
+  const box = document.getElementById('bpProgress');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!storeSignedIn()) {
+    box.appendChild(bpText('div', 'bp-progress-line', 'Sign in to track your tier, XP and rewards.'));
+    return;
+  }
+  const me = bpMe();
+  if (!me) {
+    box.appendChild(bpText('div', 'bp-progress-line',
+      BATTLEPASS.fetching ? 'Loading your season…' : 'Season progress will appear here.'));
+    return;
+  }
+
+  const badge = bpText('div', 'bp-tier-badge' + (me.tier >= BP_REWARDS.length ? ' done' : ''), '');
+  badge.appendChild(bpText('small', '', 'TIER'));
+  badge.appendChild(bpText('b', '', me.tier >= 1 ? String(me.tier) : '—'));
+  box.appendChild(badge);
+
+  const body = document.createElement('div');
+  body.className = 'bp-progress-body';
+  if (me.tier >= BP_REWARDS.length) {
+    /* xpToNextTier is null here; the sentence replaces the bar rather than
+       a number going into it. */
+    const line = document.createElement('div');
+    line.className = 'bp-xp-line';
+    line.appendChild(bpText('span', '', 'PASS COMPLETE'));
+    line.appendChild(bpText('small', '', bpNum(me.xp) + ' XP EARNED'));
+    body.appendChild(line);
+    body.appendChild(bpText('div', 'bp-progress-note',
+      'Tier 25 reached — that is the whole ladder.'));
+  } else {
+    const base = me.tier > 0 ? BP_XP_THRESHOLDS[me.tier - 1] : 0;
+    const next = BP_XP_THRESHOLDS[me.tier];
+    const span = next - base;
+    const into = Math.max(0, Math.min(span, me.xp - base));
+    const pct = span > 0 ? (into / span) * 100 : 0;
+    const line = document.createElement('div');
+    line.className = 'bp-xp-line';
+    line.appendChild(bpText('span', '', bpNum(me.xp) + ' XP'));
+    line.appendChild(bpText('small', '', bpNum(bpXpToNext(me)) + ' XP TO TIER ' + (me.tier + 1)));
+    body.appendChild(line);
+    const bar = document.createElement('div');
+    bar.className = 'bp-bar';
+    const fill = document.createElement('i');
+    fill.style.width = pct + '%';
+    bar.appendChild(fill);
+    body.appendChild(bar);
+    body.appendChild(bpText('div', 'bp-progress-note',
+      me.tier === 0
+        ? 'First tier at ' + bpNum(BP_XP_THRESHOLDS[0]) + ' XP — one match and a bit.'
+        : 'Tier ' + (me.tier + 1) + ' at ' + bpNum(next) + ' XP'));
+  }
+  box.appendChild(body);
+}
+
+function battlepassRenderCta() {
+  const box = document.getElementById('bpCta');
+  if (!box) return;
+  box.innerHTML = '';
+  const me = bpMe();
+
+  /* Signed out there is nothing to buy and no price to show — the row is
+     the sign-in prompt and nothing else. */
+  if (!storeSignedIn()) {
+    box.className = 'bp-cta quiet';
+    box.appendChild(bpCtaText('Sign in to claim rewards and unlock the premium lane.',
+      'The free lane is open to everyone — no sign-in needed.'));
+    box.appendChild(bpButton('SIGN IN WITH GOOGLE', () => storeBeginSignIn()));
+    return;
+  }
+
+  /* Owned is shown instead of the offer, never next to it. */
+  if (me && me.premium) {
+    box.className = 'bp-cta owned';
+    box.appendChild(bpCtaText('PREMIUM PASS OWNED',
+      'Every premium reward on this track is yours to claim.'));
+    return;
+  }
+
+  if (me && bpEffectiveStatus(me, Date.now()) === 'ended') {
+    box.className = 'bp-cta quiet';
+    box.appendChild(bpCtaText('Season 1 has ended.', 'The premium pass is no longer on sale.'));
+    return;
+  }
+
+  const product = bpCatalogProduct();
+  if (!product) {
+    /* The product is withheld from the catalog while this screen ships,
+       and a relay that is simply away answers the same way. Both end as a
+       disabled button with a sentence — never as a button that takes
+       money nowhere. */
+    box.className = 'bp-cta quiet';
+    box.appendChild(bpCtaText(
+      ACCOUNT.items
+        ? 'The premium pass goes on sale with the season — check back soon.'
+        : 'The premium pass is not available right now.',
+      ''));
+    const btn = bpButton('UNLOCK PREMIUM PASS', null);
+    btn.disabled = true;
+    box.appendChild(btn);
+    return;
+  }
+
+  box.className = 'bp-cta';
+  /* storePriceText returns '' for the { unitAmount, currency } shape the
+     catalog sends until the display fix lands, so the price is only
+     appended when there is one to append. */
+  const price = storePriceText(product.price);
+  box.appendChild(bpCtaText('Unlock the premium lane',
+    'All 25 premium rewards — and the tier-25 grand prize.'));
+  const btn = bpButton(
+    ACCOUNT.checkingOut ? 'WAIT…' : 'UNLOCK PREMIUM PASS' + (price ? ' · ' + price : ''),
+    () => battlepassBuy());
+  if (ACCOUNT.checkingOut) btn.disabled = true;
+  box.appendChild(btn);
+}
+
+/* Which of the four states a node is in. Signed out, `me` is null and
+   every node reads locked — the preview promises nothing. */
+function bpNodeState(lane, tierNum, me) {
+  if (!me || me.tier < tierNum) return 'locked';
+  const isClaimed = me.claimed.has(tierNum + ':' + lane);
+  if (lane === 'free') return isClaimed ? 'claimed' : 'ready';
+  return me.premium ? (isClaimed ? 'claimed' : 'ready') : 'premium-locked';
+}
+
+function bpStateText(state, tierNum) {
+  if (state === 'ready') return 'unlocked, not claimed yet';
+  if (state === 'claimed') return 'claimed';
+  if (state === 'premium-locked') return 'premium pass required';
+  return 'locked, reach tier ' + tierNum;
+}
+
+function bpMakeNode(tierNum, lane, rewardId, me) {
+  const state = bpNodeState(lane, tierNum, me);
+  const kind = bpRewardKind(rewardId);
+  const info = kind ? BP_KINDS[kind] : null;
+  const name = bpRewardName(rewardId);
+  const grand = lane === 'premium' && tierNum === BP_REWARDS.length;
+
+  const node = document.createElement('div');
+  node.className = 'bp-node bp-' + lane + ' n-' + state + (grand ? ' grand' : '');
+  node.setAttribute('role', 'img');
+  node.setAttribute('aria-label', 'Tier ' + tierNum + ' ' + lane + ' reward: ' + name +
+    (info ? ' (' + info.label + ')' : '') + ' — ' + bpStateText(state, tierNum));
+  node.appendChild(bpText('div', 'bp-glyph', info ? info.glyph : '🎁'));
+  node.appendChild(bpText('div', 'bp-name', name));
+
+  if (state === 'claimed') node.appendChild(bpText('div', 'bp-badge', '✓'));
+  else if (state === 'locked' || state === 'premium-locked') node.appendChild(bpText('div', 'bp-badge', '🔒'));
+  else if (state === 'ready') node.appendChild(bpText('div', 'bp-ready', 'READY'));
+  return node;
+}
+
+function battlepassRenderLadder() {
+  const ladder = document.getElementById('bpLadder');
+  if (!ladder) return;
+  const keep = typeof ladder.scrollLeft === 'number' ? ladder.scrollLeft : 0;
+  ladder.innerHTML = '';
+  const me = bpMe();
+
+  /* The lane labels are the track's first child and stay pinned left
+     while the tiers scroll under them. */
+  const lanes = document.createElement('div');
+  lanes.className = 'bp-lanes';
+  lanes.setAttribute('aria-hidden', 'true');
+  lanes.appendChild(bpText('div', 'bp-lane-spacer', '\u00a0'));
+  lanes.appendChild(bpText('div', 'bp-lane-label bp-lane-free', 'FREE'));
+  lanes.appendChild(bpText('div', 'bp-lane-label bp-lane-premium', 'PREMIUM'));
+  ladder.appendChild(lanes);
+
+  for (let t = 1; t <= BP_REWARDS.length; t++) {
+    const pair = BP_REWARDS[t - 1];
+    const col = document.createElement('div');
+    col.className = 'bp-tier' +
+      (me && me.tier >= t ? ' reached' : '') +
+      (t === BP_REWARDS.length ? ' final' : '');
+    col.appendChild(bpText('div', 'bp-tier-num', t === BP_REWARDS.length ? '👑 ' + t : String(t)));
+    col.appendChild(bpMakeNode(t, 'free', pair.free, me));
+    col.appendChild(bpMakeNode(t, 'premium', pair.premium, me));
+    ladder.appendChild(col);
+  }
+
+  /* First render after the screen opens centres the player's tier; every
+     render after that puts the scroll back where the player left it. */
+  if (BATTLEPASS.pendingScroll && me) {
+    BATTLEPASS.pendingScroll = false;
+    bpScrollToTier(ladder, Math.max(1, me.tier));
+  } else {
+    try { ladder.scrollLeft = keep; } catch (e) {}
+  }
+}
+
+function bpScrollToTier(ladder, tierNum) {
+  /* children[0] is the lane-label column, so children[tierNum] is that tier. */
+  const el = ladder.children[tierNum];
+  if (!el || typeof el.getBoundingClientRect !== 'function' ||
+      typeof ladder.getBoundingClientRect !== 'function') return;
+  try {
+    const lr = ladder.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    ladder.scrollLeft = ladder.scrollLeft + (er.left - lr.left) -
+      (ladder.clientWidth - el.clientWidth) / 2;
+  } catch (e) {}
+}
+
+/* ---------------------------------------------------------------------
+   The countdown ticker
+   --------------------------------------------------------------------- */
+function bpStopTicker() {
+  if (BATTLEPASS.timer) { clearInterval(BATTLEPASS.timer); BATTLEPASS.timer = 0; }
+}
+
+/* Runs only while the screen is open and the season is still moving; the
+   callback re-renders the whole screen the moment the countdown runs out,
+   which is also when the offer row has to change. */
+function bpRetick() {
+  bpStopTicker();
+  const me = bpMe();
+  if (!battlepassIsOpen() || !me) return;
+  if (bpEffectiveStatus(me, Date.now()) === 'ended') return;
+  BATTLEPASS.timer = setInterval(() => {
+    const current = bpMe();
+    if (!battlepassIsOpen() || !current) { bpStopTicker(); return; }
+    battlepassRenderSeason();
+    if (bpEffectiveStatus(current, Date.now()) === 'ended') {
+      bpStopTicker();
+      battlepassRender();
+    }
+  }, 1000);
+}
+
+/* ---------------------------------------------------------------------
+   Opening and closing
+   --------------------------------------------------------------------- */
+function bpFocusables() {
+  const panel = document.getElementById('battlepass');
+  if (!panel || typeof panel.querySelectorAll !== 'function') return [];
+  const found = [];
+  for (const el of panel.querySelectorAll('button,a[href],input,select,textarea,[tabindex]')) {
+    if (el.disabled || el.hidden) continue;
+    if (el.getAttribute && el.getAttribute('tabindex') === '-1') continue;
+    found.push(el);
+  }
+  return found;
+}
+
+function bpTrapFocus(e) {
+  if (e.code !== 'Tab' || !battlepassIsOpen()) return;
+  const panel = document.getElementById('battlepass');
+  const items = bpFocusables();
+  if (!panel || !items.length) return;
+  e.preventDefault();
+  const active = document.activeElement;
+  const at = items.indexOf(active);
+  const next = at < 0
+    ? (e.shiftKey ? items.length - 1 : 0)
+    : (at + (e.shiftKey ? items.length - 1 : 1)) % items.length;
+  items[next].focus();
+}
+
+function battlepassShow(open) {
+  const panel = document.getElementById('battlepass');
+  if (!panel) return;
+  const wasOpen = battlepassIsOpen();
+  panel.classList.toggle('off', !open);
+  storeSetTitleInert(!!open);
+
+  if (!open) {
+    bpStopTicker();
+    if (wasOpen) {
+      const opener = BATTLEPASS.focusOpener;
+      BATTLEPASS.focusOpener = null;
+      if (opener && typeof opener.focus === 'function') { try { opener.focus(); } catch (e) {} }
+    }
+    return;
+  }
+
+  if (!wasOpen) {
+    BATTLEPASS.focusOpener = document.activeElement || null;
+    BATTLEPASS.pendingScroll = true;
+    const card = panel.querySelector ? panel.querySelector('.bp-card') : null;
+    const target = card || bpFocusables()[0];
+    if (target && typeof target.focus === 'function') { try { target.focus(); } catch (e) {} }
+  }
+  if (typeof SFX === 'object' && SFX) SFX.ui();
+  const note = document.getElementById('bpNote');
+  if (note) { note.textContent = ''; note.dataset.kind = ''; }
+  battlepassRender();
+  battlepassRefresh();
+  /* The offer row draws its price out of the catalog, which is only
+     re-asked when somebody is paying attention to it. */
+  if (storeSignedIn()) storeRefreshCatalog();
 }
