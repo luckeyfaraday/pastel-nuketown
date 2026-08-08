@@ -482,6 +482,14 @@ body.touch .sens{display:none}
    renderer nothing and keeps the case looking the same on a browser whose
    context has just gone away.
    --------------------------------------------------------------------- */
+/* Case above shelf, which is what it looks like everywhere except a phone on
+   its side. `min-height:0` on both this and the grid inside it is what lets
+   the pair be shorter than their content wants; without it a flex child
+   refuses to shrink and the bottom of the card walks off the screen. */
+.store-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:11px}
+/* Content-sized and immovable, which is right wherever there is height to
+   spare: the grid beside it takes the leftover and scrolls. The short-screen
+   rules below are where it learns to give ground instead. */
 .store-stage{flex:none;display:flex;flex-direction:column;gap:8px}
 .store-stage[hidden]{display:none}
 /* Tall on purpose. A character is 1.8m of mostly vertical detail and the
@@ -603,21 +611,72 @@ body.touch .sens{display:none}
   .store-card{max-height:calc(100vh - 14px);padding:10px 12px 12px;gap:8px}
   .store-head h2{font-size:19px}
   .store-sub{font-size:10px}
-  #storeGrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:7px}
-  .swatch{height:54px}
-  .sitem{gap:4px;padding:6px 8px 7px}
   .sname{font-size:13px}
   .skind{font-size:8px}
-  /* A phone on its side has under 400px of height for the whole card, and
-     everything on it is competing. The case gives ground -- but only down
-     to a floor, because a 1.8m character in a 90px window is a thumbnail
-     with a GPU behind it, and the grid below scrolls where the case
-     cannot. */
-  .stage-case{height:clamp(150px,46vh,214px);border-radius:14px}
+  /* Whatever else gives, the shelf keeps enough room for a row of stock. A
+     locker showing nothing to buy is not a locker, and that is exactly what
+     a fixed-height case above a grid with no floor produced here: the case
+     took its 150px, the head took its 44, and the grid was left with six. */
+  #storeGrid{min-height:104px}
+  /* And here is what pays for it: the case stops being immovable. It is
+     content-sized until the grid's floor asks for the difference, and then
+     it hands it over -- `0 1 auto` rather than `none`, with `min-height:0`
+     on both boxes so the shrink is actually allowed to happen. */
+  .store-stage{flex:0 1 auto;min-height:0}
+  .stage-case{height:clamp(120px,46vh,214px);flex:0 1 auto;min-height:0;border-radius:14px}
+  .store-body{gap:9px}
   .store-stage{gap:6px}
   #stageName{font-size:14px}
   #stageKind{font-size:8px}
   .stage-tags{padding:0 7px 6px;gap:6px}
+
+  /* Wide rows, not tall tiles. A tile spends 176px of height on one item
+     because the picture, the name and the button are stacked; laid across
+     they are 83px and the picture is the only thing that gave anything up.
+     Three items on a screen that could not show one. */
+  /* 6px of padding because the equipped and selected rings are drawn 6px
+     outside the card's border, and a scroll container clips whatever its
+     padding does not reach -- at 3px the ring on the equipped item was cut
+     off down its right-hand edge. */
+  #storeGrid{grid-template-columns:minmax(0,1fr);gap:7px;padding:6px}
+  .sitem{flex-direction:row;align-items:center;gap:9px;padding:6px 8px 7px}
+  /* Picture on the left spanning both text lines, name over kind beside it.
+     A grid rather than another wrapper because the card's markup is flat on
+     purpose -- nothing interactive is nested inside anything. */
+  .spick{flex:1 1 auto;display:grid;grid-template-columns:auto minmax(0,1fr);
+    grid-template-rows:auto auto;column-gap:9px;row-gap:1px;align-items:center}
+  .swatch{grid-row:1/3;width:74px;height:46px;border-radius:9px}
+  /* Price over button, so the widest word in the foot ("EQUIPPED") sets the
+     column on its own. Side by side they set it together and the name is
+     squeezed down to a couple of characters. */
+  .sfoot{flex:none;flex-direction:column;align-items:stretch;
+    margin-top:0;padding-top:0;gap:3px}
+  .sprice{text-align:center;font-size:12px}
+}
+/* The shape a phone in landscape actually is: no height to spare and plenty
+   of width going begging. So stop stacking. The case takes a column on the
+   left at the full height of the card -- taller than it ever got stacked --
+   and the shelf scrolls beside it instead of underneath it.
+
+   560px is the width where a row still fits a picture, a readable name and
+   an EQUIPPED button after the case has taken its 40%. The narrowest phone
+   anyone holds sideways is 568, so every real one lands here; a window too
+   narrow for two columns keeps the stack, with the rows above. */
+@media(max-height:430px) and (min-width:560px){
+  .store-body{flex-direction:row;align-items:stretch;gap:11px}
+  .store-stage{flex:0 0 40%;min-width:0}
+  /* The case is now as tall as the row, which is the whole card under the
+     header -- so no clamp, and no floor left to fight the grid over. */
+  .stage-case{height:auto;flex:1 1 auto}
+  #storeGrid{min-width:0;min-height:0}
+}
+/* Too short to stack and too narrow to split -- no phone is this shape, but a
+   desktop window dragged down to it is. There is no honest size for the case
+   here: shrinking it to fit lands on a four-pixel strip, and a four-pixel
+   strip is worse than no case at all. So give the whole card to the shelf,
+   which is the same state a browser with no WebGL context has always got. */
+@media(max-height:430px) and (max-width:559px){
+  .store-stage{display:none}
 }
 
 /* .screen's wash is tuned for the title and match-over cards, where there is
@@ -974,6 +1033,10 @@ body.touch .touch-keys{display:flex}
       <button class="mini-btn" id="storeClose" type="button">CLOSE</button>
     </div>
     <div id="storeNote" role="status" aria-live="polite"></div>
+    <!-- The case and the shelf, in one box, because on a phone held sideways
+         they stop being one above the other and become one beside the other.
+         Stacked everywhere else, which is what it was before this wrapper. -->
+    <div class="store-body">
     <!-- The display case. One canvas, one WebGL context, whatever is selected
          below turning slowly inside it — and, when there is one to show, the
          default it replaces standing next to it, because the thing being sold
@@ -1001,6 +1064,7 @@ body.touch .touch-keys{display:flex}
       </div>
     </div>
     <div id="storeGrid"></div>
+    </div>
   </div>
 </div>
 
