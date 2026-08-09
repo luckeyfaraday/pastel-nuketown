@@ -1454,8 +1454,10 @@ export function createRelayServer(options = {}) {
        play, so do not turn its duration and participant floors into warnings. */
     if (openingParticipants.size === 0) return false;
     /* A bearer at the opening whistle and a seat at the result are both
-       required. A disconnect that itself forces fallback is part of that
-       forced result, so fallback supplies that account in endingUserIds. */
+       required for that account's award. Anonymous players and bots do not
+       need database identities and do not prevent an end-to-end account from
+       earning. A disconnect that itself forces fallback is part of that forced
+       result, so fallback supplies that account in endingUserIds. */
     const present = new Set(
       Array.from(room.members.values(), (member) => member.userId).filter(Boolean)
     );

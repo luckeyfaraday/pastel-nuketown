@@ -731,7 +731,7 @@ test('a match shorter than the 90-second balance floor awards no XP', async (t) 
   }
 });
 
-test('anonymous rounds are silent while a signed-in refused round still warns', async (t) => {
+test('anonymous rounds are silent while an incomplete signed-in round still warns', async (t) => {
   const { catalog, accounts, server } = await modules();
   const clock = Date.parse(catalog.SEASON_1_START) + 1;
   const warnings = [];
@@ -776,13 +776,16 @@ test('anonymous rounds are silent while a signed-in refused round still warns', 
     });
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /match-warning-2/);
-    assert.match(warnings[0], /participants \(1\/2\)/);
+    assert.match(warnings[0], /duration/);
+    assert.match(warnings[0], /snapshots/);
+    assert.doesNotMatch(warnings[0], /participants/,
+      'one end-to-end account is enough even when the other players are anonymous');
   } finally {
     await relay.close();
   }
 });
 
-test('two authenticated accounts must be present at both match endpoints', async (t) => {
+test('only authenticated accounts present at both match endpoints are paid', async (t) => {
   const { catalog, accounts, server, battlepass } = await modules();
   let clock = Date.parse(catalog.SEASON_1_START) + 1;
   const accountStore = accounts.createAccountStore(makeAccountOptions({ now: () => clock }));
@@ -806,8 +809,15 @@ test('two authenticated accounts must be present at both match endpoints', async
     });
     const room = host.latest('room').room;
     host.message({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
-    relaySnapshots(host, battlepass.BATTLE_PASS_MIN_SNAPSHOTS);
-    clock += battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS;
+    const observationGap = battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS /
+      battlepass.BATTLE_PASS_MIN_SNAPSHOTS;
+    relaySpacedSnapshots(
+      host,
+      battlepass.BATTLE_PASS_MIN_SNAPSHOTS,
+      () => { clock += observationGap; }
+    );
+    clock += battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS -
+      observationGap * (battlepass.BATTLE_PASS_MIN_SNAPSHOTS - 1);
     const late = connectAuthenticatedPeer(relay, accountStore, lateUser, {
       t: 'join', name: 'Late Guest', room
     });
@@ -815,9 +825,64 @@ test('two authenticated accounts must be present at both match endpoints', async
     host.message({
       t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1, round: 1
     });
-    assert.equal(accountStore.battlePass.me(hostUser.id).xp, 0);
+    assert.equal(
+      accountStore.battlePass.me(hostUser.id).xp,
+      catalog.SEASON_1_MATCH_XP,
+      'the end-to-end account earns even though it played the round with bots'
+    );
     assert.equal(accountStore.battlePass.me(lateUser.id).xp, 0,
       'joining only for the result is not participation at both endpoints');
+  } finally {
+    await relay.close();
+  }
+});
+
+test('a signed-in player earns through a qualifying round with anonymous players', async (t) => {
+  const { catalog, accounts, server, battlepass } = await modules();
+  let clock = Date.parse(catalog.SEASON_1_START) + 1;
+  const accountStore = accounts.createAccountStore(makeAccountOptions({ now: () => clock }));
+  t.after(() => accountStore.close());
+  const user = createUser(accountStore.db, 'anonymous-opponents');
+  let peer = 0;
+  const relay = server.createRelayServer({
+    accountStore,
+    now: () => clock,
+    heartbeatMs: 0,
+    idleKickMs: 0,
+    autoStartMs: 0,
+    idFactory: () => `peer-anonymous-opponents-${++peer}`,
+    matchIdFactory: () => 'match-anonymous-opponents',
+    roomRandom: () => 0
+  });
+  try {
+    const host = connectAuthenticatedPeer(relay, accountStore, user, {
+      t: 'create', name: 'Signed Host'
+    });
+    const anonymous = new FakeWebSocket();
+    relay.wss.emit('connection', anonymous, {});
+    anonymous.message({
+      t: 'join',
+      v: Protocol.VERSION,
+      name: 'Anonymous Guest',
+      room: host.latest('room').room
+    });
+    assert.ok(anonymous.latest('room'));
+
+    host.message({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
+    const observationGap = battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS /
+      battlepass.BATTLE_PASS_MIN_SNAPSHOTS;
+    relaySpacedSnapshots(
+      host,
+      battlepass.BATTLE_PASS_MIN_SNAPSHOTS,
+      () => { clock += observationGap; }
+    );
+    clock += battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS -
+      observationGap * (battlepass.BATTLE_PASS_MIN_SNAPSHOTS - 1);
+    host.message({
+      t: 'lobby', v: Protocol.VERSION, authorityEpoch: 1, round: 1
+    });
+
+    assert.equal(accountStore.battlePass.me(user.id).xp, catalog.SEASON_1_MATCH_XP);
   } finally {
     await relay.close();
   }
@@ -1620,7 +1685,7 @@ test('an account is capped at 20 awarded matches in a rolling 24 hours', async (
   const pass = battlepass.createBattlePassService({ db, now: () => clock });
 
   assert.equal(battlepass.BATTLE_PASS_MIN_MATCH_DURATION_MS, 90_000);
-  assert.equal(battlepass.BATTLE_PASS_MIN_PARTICIPANTS, 2);
+  assert.equal(battlepass.BATTLE_PASS_MIN_PARTICIPANTS, 1);
   assert.equal(battlepass.BATTLE_PASS_MIN_SNAPSHOTS, 10);
   assert.equal(battlepass.BATTLE_PASS_MAX_AWARDS_PER_WINDOW, 20);
   assert.equal(battlepass.BATTLE_PASS_AWARD_WINDOW_MS, 24 * 60 * 60 * 1000);
