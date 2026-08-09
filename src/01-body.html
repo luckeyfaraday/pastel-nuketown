@@ -244,12 +244,23 @@
       <button class="mini-btn" id="bpClose" type="button">CLOSE</button>
     </div>
     <div id="bpNote" role="status" aria-live="polite"></div>
-    <div class="bp-progress" id="bpProgress"></div>
-    <div class="bp-cta" id="bpCta"></div>
-    <div class="bp-ladder-wrap">
-      <div class="bp-ladder" id="bpLadder"></div>
+    <!-- Mirrors the mobile locker: status and the primary action form the
+         compact left-hand case, while the reward shelf gets the remaining
+         width and scrolls independently. It stays a vertical stack whenever
+         the viewport has enough height. -->
+    <div class="bp-body">
+      <div class="bp-summary">
+        <div class="bp-progress" id="bpProgress"></div>
+        <div class="bp-cta" id="bpCta"></div>
+        <div class="bp-foot">A confirmed match is 500 XP. Three a day reaches tier 25.</div>
+      </div>
+      <div class="bp-ladder-wrap">
+        <div class="bp-track-head" aria-hidden="true">
+          <span>REWARDS</span><small>SWIPE TO EXPLORE →</small>
+        </div>
+        <div class="bp-ladder" id="bpLadder"></div>
+      </div>
     </div>
-    <div class="bp-foot">A confirmed match is 500 XP — three matches a day for the whole season reaches tier 25.</div>
   </div>
 </div>
 

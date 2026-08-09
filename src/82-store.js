@@ -788,6 +788,11 @@ function storeCleanCatalog(body) {
         entry.type === 'effect'
         ? entry.type : (known ? known.type : ''),
       price: entry.price,
+      /* A product may be intentionally listed while it is off sale. Keep
+         that distinction through the client boundary so the battle-pass
+         offer cannot turn an unavailable Stripe price into an enabled
+         checkout button. */
+      available: entry.available === true,
       owned: entry.owned === true
     });
   }
@@ -2378,10 +2383,14 @@ function battlepassRefresh() {
 /* ---------------------------------------------------------------------
    The offer row
    --------------------------------------------------------------------- */
+/* The offer, or null when there is nothing that can actually be bought.
+   Listed and sellable are different states: the relay lists the pass while
+   its catalog flag is on, but marks it unavailable when the Stripe price is
+   missing or inactive. */
 function bpCatalogProduct() {
   if (!ACCOUNT.items) return null;
   for (const item of ACCOUNT.items)
-    if (item.id === BP_PRODUCT_ID) return item;
+    if (item.id === BP_PRODUCT_ID) return item.available === true ? item : null;
   return null;
 }
 
