@@ -19,7 +19,11 @@ const REWARD_TIERS = new Map(SEASON_1_TIERS.flatMap((entry) => [
 /* These are battle-pass balance values, not physics constants. They define
    what the relay must actually observe before one fixed match award is earned. */
 export const BATTLE_PASS_MIN_MATCH_DURATION_MS = 90_000;
-export const BATTLE_PASS_MIN_PARTICIPANTS = 2;
+/* XP belongs to each authenticated account that played the round from its
+   opening whistle to its result. The rest of the lobby may be anonymous, and
+   bots may fill every other combatant slot, so one account is enough to make
+   a completed multiplayer match awardable. */
+export const BATTLE_PASS_MIN_PARTICIPANTS = 1;
 export const BATTLE_PASS_MIN_SNAPSHOTS = 10;
 export const BATTLE_PASS_MAX_AWARDS_PER_WINDOW = 20;
 export const BATTLE_PASS_AWARD_WINDOW_MS = 24 * 60 * 60 * 1000;
