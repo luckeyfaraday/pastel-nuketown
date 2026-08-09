@@ -10,8 +10,13 @@ import { COSMETICS_BY_ID } from './cosmetics.mjs';
    all 30 days produce 45,000 XP, exactly the tier-25 threshold; the curve is
    deliberately stated below as product data rather than hidden in a formula. */
 export const SEASON_1_ID = 'season-1';
-export const SEASON_1_START = '2026-09-01T00:00:00.000Z';
-export const SEASON_1_END = '2026-10-01T00:00:00.000Z';
+/* Season 1 runs from the day the pass went live, so the ladder is climbable
+   the moment a player can see it. The start is deliberately behind the deploy
+   rather than ahead of it: a start in the future would put the pass on sale
+   into a season nobody can earn in, because the window gates XP and not the
+   sale. Thirty days from here keeps the three-matches-a-day curve honest. */
+export const SEASON_1_START = '2026-08-09T00:00:00.000Z';
+export const SEASON_1_END = '2026-09-08T00:00:00.000Z';
 export const SEASON_1_MATCH_XP = 500;
 
 export const SEASON_1_XP_CURVE = Object.freeze([

@@ -1985,7 +1985,7 @@ test('deployment and relay structure retain the production battle-pass safeguard
   assert.equal(
     (provision.match(/BATTLEPASS_CATALOG_ENABLED/g) || []).length,
     3,
-    'the default-off catalog flag is allowed, defaulted, and written through the shared allowlist'
+    'the catalog flag is allowed, defaulted, and written through the shared allowlist'
   );
   const relaySource = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
   assert.doesNotMatch(relaySource, /function hasClientProgressField/);
