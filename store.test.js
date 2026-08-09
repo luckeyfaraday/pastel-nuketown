@@ -737,6 +737,24 @@ test('a claimed battle-pass card offers the equip action', () => {
   assert.ok(made.some((node) => node.textContent === 'EQUIP'));
 });
 
+test('the premium pass offer only opens checkout for an available catalog item', () => {
+  const ctx = makeStore();
+  const catalog = available => ({ items: [{
+    id: 'battlepass-season-1-premium',
+    displayName: 'Season 1 Premium Pass',
+    type: 'battlepass',
+    available: available,
+    price: available ? { unitAmount: 999, currency: 'usd' } : null
+  }] });
+
+  ctx.__get(`ACCOUNT.items = storeCleanCatalog(${JSON.stringify(catalog(false))})`);
+  assert.equal(ctx.bpCatalogProduct(), null,
+    'a listed but unavailable pass must not produce a checkout offer');
+
+  ctx.__get(`ACCOUNT.items = storeCleanCatalog(${JSON.stringify(catalog(true))})`);
+  assert.equal(ctx.__get('bpCatalogProduct().available'), true);
+});
+
 test('editing localStorage alone cannot present an unowned item as equipped', () => {
   const ctx = makeStore();
   ctx.localStorage.setItem('pastel-nuketown-equipped', JSON.stringify({
@@ -2078,4 +2096,28 @@ test('a short screen puts the case beside the shelf and keeps a row of stock on 
   const wide = mediaBlock(header[0]);
   assert.ok(/\.store-body\{[^}]*flex-direction:row/.test(wide),
     'the landscape block does not put the case beside the shelf');
+});
+
+test('the battle pass mirrors the mobile store split without clipping a reward lane', () => {
+  const open = BODY_HTML.indexOf('<div class="bp-body">');
+  assert.ok(open > 0, 'no .bp-body wrapper — the pass cannot split like the store');
+  const summary = BODY_HTML.indexOf('class="bp-summary"', open);
+  const ladder = BODY_HTML.indexOf('class="bp-ladder-wrap"', open);
+  assert.ok(summary > open && ladder > summary,
+    'the battle-pass summary and reward shelf are not ordered inside .bp-body');
+
+  const landscape = mediaBlock('@media(max-height:430px){', '.bp-body');
+  assert.ok(landscape, 'the landscape battle-pass rules are gone');
+  assert.ok(/\.bp-body\{[^}]*flex-direction:row/.test(landscape),
+    'the battle pass does not split into summary and rewards in landscape');
+  assert.ok(/\.bp-ladder-wrap\{[^}]*min-width:0/.test(landscape),
+    'the reward shelf cannot shrink inside the landscape row');
+
+  const short = mediaBlock('@media(max-height:330px) and (min-width:560px){');
+  assert.ok(short, 'the screenshot-height battle-pass rules are gone');
+  assert.ok(/\.bp-progress\{[^}]*flex-direction:row/.test(short),
+    'the progress card remains too tall on the shortest landscape phones');
+  const node = short.match(/\.bp-node,\.bp-lane-label\{[^}]*height:(\d+)px/);
+  assert.ok(node && Number(node[1]) <= 60,
+    'both reward lanes no longer fit at the screenshot-height breakpoint');
 });
