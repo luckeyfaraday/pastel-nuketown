@@ -249,6 +249,7 @@ function boot() {
   initFX();        set(82);
   initInput();
   initTouch();     set(88);
+  initReportButton();
   initAI();        set(96);
   initNetworkUI();
   /* Nobody has to sign in to play, so nothing the store does may be able to

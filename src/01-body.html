@@ -195,6 +195,10 @@
       <button class="mini-btn" id="storeClose" type="button">CLOSE</button>
     </div>
     <div id="storeNote" role="status" aria-live="polite"></div>
+    <!-- The case and the shelf, in one box, because on a phone held sideways
+         they stop being one above the other and become one beside the other.
+         Stacked everywhere else, which is what it was before this wrapper. -->
+    <div class="store-body">
     <!-- The display case. One canvas, one WebGL context, whatever is selected
          below turning slowly inside it — and, when there is one to show, the
          default it replaces standing next to it, because the thing being sold
@@ -222,6 +226,7 @@
       </div>
     </div>
     <div id="storeGrid"></div>
+    </div>
   </div>
 </div>
 
@@ -252,6 +257,7 @@
   <div class="big">DOWN!</div>
   <div class="by" id="deadBy"></div>
   <div class="cd" id="deadCd">3</div>
+  <button class="report off" id="deadReport" type="button"><span id="deadReportLabel">REPORT AIM</span><span class="k">F</span></button>
 </div>
 
 <div class="screen off" id="over">

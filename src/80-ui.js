@@ -234,10 +234,63 @@ function showDeadScreen(from) {
   $('deadBy').textContent = from && from !== G.player ? ('taken out by ' + from.name) : 'you went down';
   $('dead').classList.remove('off');
   killcamBegin(from);
+  updateReportButton();
 }
-function hideDeadScreen() { $('dead').classList.add('off'); killcamEnd(); if (!G.over) restoreBoard(); }
+function hideDeadScreen() {
+  $('dead').classList.add('off'); killcamEnd(); updateReportButton();
+  if (!G.over) restoreBoard();
+}
+
+/* ---- report ----
+   The button reports the killer, not whoever the camera happens to be on. The
+   two are the same for all but a moment: killcamActor drops the view when the
+   killer dies or leaves, and a target that vanished for the three seconds
+   their own respawn takes would be a button that flickered away under the
+   thumb reaching for it.
+
+   Everything about whether it can be pressed lives in netReportableId, so the
+   answer is the same one the relay will give — a bot, a solo match, a player
+   who already left, and yourself all come back null and the button is simply
+   not there. */
+function reportTarget() {
+  if (!G.player || G.player.alive || G.over) return null;
+  return netReportableId(KILLCAM.killer);
+}
+
+function updateReportButton() {
+  const el = $('deadReport');
+  if (!el) return;
+  const target = reportTarget();
+  el.classList.toggle('off', !target);
+  if (!target) return;
+  const sent = netHasReported(target);
+  el.disabled = sent || NET.reportSending === target;
+  const label = $('deadReportLabel');
+  if (label) label.textContent = sent ? 'REPORTED' : 'REPORT AIM';
+}
+
+function initReportButton() {
+  const el = $('deadReport');
+  if (!el) return;
+  el.addEventListener('click', () => { sendReport(); });
+}
+
+/* Two ways in, because on desktop the pointer is locked to the canvas for the
+   whole death and a click never reaches the button at all. The key is the real
+   control there; the button is what says the key exists. On touch there is no
+   lock and the tap is the only way in. */
+function sendReport() {
+  const target = reportTarget();
+  if (!target || netHasReported(target) || NET.reportSending) return;
+  netReportPlayer(target);
+  updateReportButton();
+}
 function updateDeadScreen() {
   if (G.player && !G.player.alive) $('deadCd').textContent = String(Math.max(1, Math.ceil(G.player.respawnT)));
+  /* Every frame the card is up, because the roster can move under it: a killer
+     who quits mid-respawn has to take the button with them rather than leave
+     one that the relay would only refuse. */
+  updateReportButton();
 }
 function showOverScreen(winner) {
   const rows = G.actors.slice().sort((a, b) => uiScore(b) - uiScore(a) || b.kills - a.kills);

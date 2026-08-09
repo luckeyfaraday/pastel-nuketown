@@ -514,6 +514,37 @@ test('every script the built page fetches off a CDN is pinned to its bytes', () 
 });
 
 /* ---------------------------------------------------------------------
+   …and that both halves agree on what they are saying
+
+   The store shipped unable to sell anything: the page posted `itemId` and
+   the relay read `body.cosmeticId`, so every BUY came back "unknown
+   cosmetic". Two full test suites had nothing to say about it, because
+   neither crosses the boundary — the relay's tests write the request body
+   themselves, and the tests above answer with a relay that agrees with
+   whatever this file sends. Each half was internally consistent and blind.
+
+   So read both sources and compare the one name they have to share. A
+   regex over source is a poor substitute for an integration test and is
+   used here on purpose: the client is a browser global soup that cannot
+   import account-store.mjs, and a test that cannot fail on the real defect
+   is worth less than an ugly one that can.
+   --------------------------------------------------------------------- */
+test('the checkout field the page sends is the field the relay reads', () => {
+  const client = fs.readFileSync(path.join(__dirname, 'src', '82-store.js'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, 'account-store.mjs'), 'utf8');
+
+  const sent = /storeAPI\(\s*'\/shop\/checkout'[\s\S]{0,300}?body:\s*\{\s*([A-Za-z_$][\w$]*)\s*:/.exec(client);
+  assert.ok(sent, 'no /shop/checkout request body found in src/82-store.js — has the call moved?');
+
+  const read = /shop\.checkout\(\s*[^,]+,\s*body\.([A-Za-z_$][\w$]*)\s*\)/.exec(server);
+  assert.ok(read, 'no /shop/checkout route argument found in account-store.mjs — has the route moved?');
+
+  assert.equal(sent[1], read[1],
+    `the page sends { ${sent[1]}: … } and the relay reads body.${read[1]}, ` +
+    'so every purchase fails as an unknown cosmetic');
+});
+
+/* ---------------------------------------------------------------------
    Where the token is allowed to go
    --------------------------------------------------------------------- */
 
@@ -1905,4 +1936,146 @@ test('a card whose picture cannot be taken keeps the gradient it always had', ()
   assert.deepEqual(ctx.__json('EQUIPPED'), {
     character: null, effect: null, weapons: { smg: null, shotgun: null, rifle: null }
   });
+});
+
+/* =====================================================================
+   THE PRICE ON THE CARD
+
+   /shop/catalog answers { unitAmount, currency } — Stripe's smallest unit
+   with a name on it — and the card used to hand that object to a formatter
+   that only read strings and numbers, so every shelf in the store showed a
+   blank where the price belongs. These pin the shape the relay actually
+   sends, and the two older shapes the formatter has always understood.
+   ===================================================================== */
+
+test('a price is read in the shape the relay sends it', () => {
+  const ctx = makeStore();
+  assert.equal(ctx.storePriceText({ unitAmount: 499, currency: 'usd' }), '$4.99');
+  assert.equal(ctx.storePriceText({ unitAmount: 425, currency: 'eur' }), '€4.25');
+  assert.equal(ctx.storePriceText({ unitAmount: 350, currency: 'gbp' }), '£3.50');
+  /* Stripe counts a yen whole, so the unit is not divided away. */
+  assert.equal(ctx.storePriceText({ unitAmount: 1200, currency: 'jpy' }), '¥1200');
+  /* A currency with no symbol in the table keeps its code. */
+  assert.equal(ctx.storePriceText({ unitAmount: 500, currency: 'sek' }), 'SEK 5.00');
+  /* The two older shapes keep working. */
+  assert.equal(ctx.storePriceText(499), '$4.99');
+  assert.equal(ctx.storePriceText('4.99 kr'), '4.99 kr');
+  /* Anything unreadable leaves the space empty rather than lying. */
+  assert.equal(ctx.storePriceText(null), '');
+  assert.equal(ctx.storePriceText({}), '');
+  assert.equal(ctx.storePriceText({ unitAmount: -5, currency: 'usd' }), '');
+  assert.equal(ctx.storePriceText({ unitAmount: '499', currency: 'usd' }), '');
+});
+
+test('the cards show the prices the catalog sends', async () => {
+  /* The body is the envelope account-store.mjs answers with, and each item
+     is the shape shop.mjs builds — displayName, available, and a price
+     object, exactly as a signed-out page load receives them. */
+  const ctx = makeCase({
+    reply: url => /\/shop\/catalog/.test(url)
+      ? { status: 200, body: { items: [
+            { id: 'smg-cottoncloud', displayName: 'Folded Paper Crane', type: 'weapon',
+              slot: 'smg', productKind: 'cosmetic', available: true,
+              price: { unitAmount: 499, currency: 'usd' } },
+            { id: 'char-midnight', displayName: 'Midnight', type: 'character',
+              slot: null, productKind: 'cosmetic', available: true,
+              price: { unitAmount: 425, currency: 'eur' } },
+            { id: 'fx-starfall', displayName: 'Starfall', type: 'effect',
+              slot: null, productKind: 'cosmetic', available: true,
+              price: { unitAmount: 1200, currency: 'jpy' } }
+          ] } }
+      : { status: 404, body: null }
+  });
+  ctx.storeShow(true);
+  await settle();
+
+  const prices = ctx.__dom.storeGrid.querySelectorAll('.sprice')
+    .map(el => el.textContent);
+  assert.deepEqual(prices, ['$4.99', '€4.25', '¥1200']);
+});
+
+/* ---------------------------------------------------------------------
+   THE PANEL ON A PHONE HELD SIDEWAYS
+
+   This game is played in landscape, which is about 640x296 of layout
+   viewport once Android has taken its bars. Everything on the card is a
+   fixed height there — a 44px CLOSE, a 44px compare button, a case with a
+   floor under it — and stacked they came to more than the card, so the
+   grid was squeezed to six pixels and the bottom of the panel walked off
+   the screen. Nine items for sale and not one of them reachable.
+
+   Neither half of the fix is visible to a unit test: it is CSS, and the
+   fake DOM these tests run against does not do layout. What is testable is
+   that the two pieces the fix is made of are both still there — the
+   wrapper the case and the shelf share, and the rule that turns that
+   wrapper sideways — because either one going missing on its own puts the
+   panel straight back to unusable with every other test in this file
+   still green.
+   --------------------------------------------------------------------- */
+const BODY_HTML = fs.readFileSync(path.join(__dirname, 'src', '01-body.html'), 'utf8');
+
+test('the case and the shelf are in one box, so they can sit side by side', () => {
+  const open = BODY_HTML.indexOf('<div class="store-body">');
+  assert.ok(open > 0, 'no .store-body wrapper — the landscape rules have nothing to flip');
+
+  /* Both of them inside it, and the grid last, so the row reads case then
+     shelf in source order as well as on screen. */
+  const stage = BODY_HTML.indexOf('id="storeStage"', open);
+  const grid = BODY_HTML.indexOf('id="storeGrid"', open);
+  assert.ok(stage > open, 'the display case is outside .store-body');
+  assert.ok(grid > stage, 'the grid is outside .store-body, or above the case in it');
+
+  /* And the wrapper closes after the grid rather than between the two. */
+  const card = BODY_HTML.indexOf('class="store-card', 0);
+  assert.ok(card > 0 && card < open, '.store-body is not inside the card');
+});
+
+/* The body of one @media block, brace-counted rather than matched to the
+   next `}` — the rules inside have braces of their own, and more than one
+   block in this stylesheet opens with the same query. `mentioning` is which
+   of those is wanted; the short-screen query is shared with the title
+   card's rules, which are not these. */
+function mediaBlock(query, mentioning) {
+  for (let at = HEAD.indexOf(query); at >= 0; at = HEAD.indexOf(query, at + 1)) {
+    let depth = 0, i = HEAD.indexOf('{', at);
+    const from = i + 1;
+    for (; i < HEAD.length; i++) {
+      if (HEAD[i] === '{') depth++;
+      else if (HEAD[i] === '}' && --depth === 0) break;
+    }
+    const body = HEAD.slice(from, i);
+    if (!mentioning || body.includes(mentioning)) return body;
+  }
+  return null;
+}
+
+test('a short screen puts the case beside the shelf and keeps a row of stock on it', () => {
+  const short = mediaBlock('@media(max-height:430px){', '#storeGrid');
+  assert.ok(short, 'the short-screen store rules are gone from src/00-head.html');
+
+  /* The floor under the grid. Without it the case takes what it wants and
+     the shelf gets the remainder, which is what six pixels was. */
+  const floor = short.match(/#storeGrid\{[^}]*min-height:(\d+)px/);
+  assert.ok(floor, 'the grid has no min-height on a short screen');
+  assert.ok(Number(floor[1]) >= 80,
+    `a ${floor[1]}px floor is not a row of stock`);
+
+  /* And what pays for it: the case has to be able to give the difference
+     up. `flex:none` is what it is everywhere else and what made the panel
+     overflow here. */
+  assert.ok(/\.store-stage\{[^}]*flex:0 1 auto/.test(short),
+    'the case is still unshrinkable on a short screen');
+  assert.ok(/\.stage-case\{[^}]*min-height:0/.test(short),
+    'the case cannot shrink past its own content without min-height:0');
+
+  /* The landscape rule itself: wide enough for two columns, so stop
+     stacking. The width it turns on has to be under the narrowest phone
+     anybody holds sideways, which is 568. */
+  const header = HEAD.match(/@media\(max-height:430px\) and \(min-width:(\d+)px\)\{/);
+  assert.ok(header, 'nothing turns the panel sideways on a landscape phone');
+  assert.ok(Number(header[1]) <= 568,
+    `a ${header[1]}px threshold leaves the smallest landscape phone stacked`);
+  const wide = mediaBlock(header[0]);
+  assert.ok(/\.store-body\{[^}]*flex-direction:row/.test(wide),
+    'the landscape block does not put the case beside the shelf');
 });

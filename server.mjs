@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from 'node:crypto';
+import { randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
@@ -15,6 +15,8 @@ import {
   BATTLE_PASS_MIN_SNAPSHOTS
 } from './battlepass.mjs';
 import { COSMETICS_BY_ID } from './cosmetics.mjs';
+import { HttpError, readJsonBody, sendJson } from './http-utils.mjs';
+import { clientAddressFromRequest, createBanRegistry } from './moderation.mjs';
 import Protocol from './net-protocol.js';
 
 const ROOT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -242,6 +244,11 @@ export function createRelayServer(options = {}) {
     ? options.statsPath
     : null;
   const statsFlushMs = positiveInteger(options.statsFlushMs, 10_000);
+  const adminToken = typeof options.adminToken === 'string' ? options.adminToken : '';
+  if (adminToken && (adminToken.length < 32 || adminToken.length > 512 ||
+      !/^[\x21-\x7e]+$/.test(adminToken))) {
+    throw new Error('adminToken must be 32-512 visible ASCII characters.');
+  }
 
   const rooms = new Map();
   const peers = new Map();
@@ -249,6 +256,11 @@ export function createRelayServer(options = {}) {
   let droppedUnrecordedBattlePassMatches = 0;
   let battlePassRetryTimer = null;
   let battlePassRetryAt = null;
+  const bans = options.banRegistry || createBanRegistry({
+    path: typeof options.banPath === 'string' && options.banPath ? options.banPath : null,
+    now: relayNow,
+    idFactory: options.banIdFactory
+  });
 
   /* Lifetime matches played, for the title screen. This counts entries into a
      room, not people: there are no accounts, so the only thing that could tell
@@ -459,8 +471,10 @@ export function createRelayServer(options = {}) {
   /* A browser WebSocket cannot attach an Authorization header, so the same
      bearer credential used by the account HTTP API travels once in the room
      handshake. It is optional and a bad or expired value is signed-out state,
-     not a failed game connection. Paid entitlements and active earned claims
-     remain separate records; ownedCosmeticIds unions them only for this gate. */
+     not a failed game connection. Most importantly, the returned set comes
+     from the database rather than from either cosmetic claim. Paid
+     entitlements and active earned claims remain separate records;
+     ownedCosmeticIds unions them only for this gate. */
   function approvedIdentity(message) {
     const declared = Protocol.sanitizeCosmetics(
       message && message.cosmetics,
@@ -517,6 +531,159 @@ export function createRelayServer(options = {}) {
     return { ...message, actors };
   }
 
+  function adminAuthorized(request) {
+    const value = request && request.headers && request.headers.authorization;
+    if (typeof value !== 'string' || !value.startsWith('Bearer ')) return false;
+    const supplied = Buffer.from(value.slice(7), 'utf8');
+    const expected = Buffer.from(adminToken, 'utf8');
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  }
+
+  function publicPeer(peer) {
+    return {
+      id: peer.id,
+      name: peer.name,
+      room: peer.room.code,
+      role: peer.role,
+      slot: peer.slot,
+      signedIn: !!peer.userId,
+      network: bans.networkFingerprint(peer.address)
+    };
+  }
+
+  function onlinePeers() {
+    return Array.from(peers.values())
+      .filter((peer) => peer.room)
+      .sort((a, b) => a.room.code.localeCompare(b.room.code) ||
+        a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  function selectPeer(selector) {
+    const wanted = typeof selector === 'string' ? selector.trim() : '';
+    if (!wanted || wanted.length > 100)
+      throw new HttpError(400, 'invalid_selector', 'Provide a player name or peer id.');
+    const players = onlinePeers();
+    const exactId = players.filter((peer) => peer.id === wanted);
+    if (exactId.length === 1) return exactId[0];
+    const folded = wanted.toLocaleLowerCase('en-US');
+    const exactName = players.filter((peer) =>
+      peer.name.toLocaleLowerCase('en-US') === folded
+    );
+    if (exactName.length === 1) return exactName[0];
+    if (exactName.length > 1) {
+      const error = new HttpError(409, 'ambiguous_player',
+        'More than one online player has that name; use the peer id.');
+      error.candidates = exactName.map(publicPeer);
+      throw error;
+    }
+    const byPrefix = wanted.length >= 4
+      ? players.filter((peer) => peer.id.startsWith(wanted))
+      : [];
+    if (byPrefix.length === 1) return byPrefix[0];
+    if (byPrefix.length > 1) {
+      const error = new HttpError(409, 'ambiguous_player',
+        'That peer-id prefix matches more than one player; use more characters.');
+      error.candidates = byPrefix.map(publicPeer);
+      throw error;
+    }
+    throw new HttpError(404, 'player_not_found', 'No matching player is online.');
+  }
+
+  function disconnectByOperator(peer, action, reason) {
+    const description = describePeer(peer);
+    const roomCode = peer.room && peer.room.code;
+    peer.moderated = true;
+    const message = action === 'banned'
+      ? 'Banned by the server operator.'
+      : 'Removed by the server operator.';
+    sendError(peer, action, message);
+    console.warn(`Admin ${action}: ${description} from room ${roomCode}` +
+      (reason ? ` (${reason})` : ''));
+    try { peer.ws.close(1008, action); }
+    catch (error) { peer.ws.terminate(); }
+  }
+
+  async function handleAdminHttp(request, response, pathname) {
+    if (pathname !== '/admin' && !pathname.startsWith('/admin/')) return false;
+    if (!adminToken) {
+      sendJson(response, 404, { error: 'not_found', message: 'Not found.' });
+      return true;
+    }
+    if (!adminAuthorized(request)) {
+      sendJson(response, 401, { error: 'unauthorized', message: 'Invalid admin token.' }, {
+        'www-authenticate': 'Bearer'
+      });
+      return true;
+    }
+
+    try {
+      if (request.method === 'GET' && pathname === '/admin/players') {
+        sendJson(response, 200, { players: onlinePeers().map(publicPeer) });
+        return true;
+      }
+      if (request.method === 'GET' && pathname === '/admin/bans') {
+        sendJson(response, 200, { bans: bans.list() });
+        return true;
+      }
+      if (request.method === 'POST' &&
+          (pathname === '/admin/kick' || pathname === '/admin/ban')) {
+        const body = await readJsonBody(request, 4096);
+        const peer = selectPeer(body.selector);
+        const reason = typeof body.reason === 'string'
+          ? body.reason.trim().replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200)
+          : '';
+        const player = publicPeer(peer);
+        let result = null;
+        if (pathname === '/admin/ban') {
+          try {
+            result = bans.add(peer, reason);
+          } catch (error) {
+            throw new HttpError(500, 'ban_store_failed',
+              `The ban was not saved: ${error.message}`);
+          }
+        }
+        sendJson(response, 200, {
+          player,
+          ...(result ? { ban: result.ban, created: result.created } : {})
+        });
+        disconnectByOperator(peer, pathname === '/admin/ban' ? 'banned' : 'kicked', reason);
+        return true;
+      }
+      if (request.method === 'POST' && pathname === '/admin/unban') {
+        const body = await readJsonBody(request, 4096);
+        let result;
+        try {
+          result = bans.remove(body.selector);
+        } catch (error) {
+          throw new HttpError(500, 'ban_store_failed',
+            `The ban was not removed: ${error.message}`);
+        }
+        if (result.status === 'missing')
+          throw new HttpError(404, 'ban_not_found', 'No matching ban exists.');
+        if (result.status === 'ambiguous') {
+          const error = new HttpError(409, 'ambiguous_ban',
+            'That ban-id prefix matches more than one ban; use more characters.');
+          error.matches = result.matches;
+          throw error;
+        }
+        sendJson(response, 200, { ban: result.ban });
+        console.warn(`Admin unbanned: ${result.ban.name || result.ban.id} (${result.ban.id})`);
+        return true;
+      }
+      sendJson(response, 404, { error: 'not_found', message: 'Admin route not found.' });
+      return true;
+    } catch (error) {
+      const status = error instanceof HttpError ? error.status : 500;
+      sendJson(response, status, {
+        error: error instanceof HttpError ? error.code : 'internal_error',
+        message: error instanceof HttpError ? error.message : 'Internal server error.',
+        ...(Array.isArray(error.candidates) ? { candidates: error.candidates } : {}),
+        ...(Array.isArray(error.matches) ? { matches: error.matches } : {})
+      });
+      return true;
+    }
+  }
+
   async function handleHttp(request, response) {
     let requestUrl;
     let pathname;
@@ -528,6 +695,8 @@ export function createRelayServer(options = {}) {
       response.end('Bad request\n');
       return;
     }
+
+    if (await handleAdminHttp(request, response, pathname)) return;
 
     if (accountStore && await accountStore.handleHttp(request, response, requestUrl))
       return;
@@ -840,6 +1009,17 @@ export function createRelayServer(options = {}) {
     countMatchPlayed();
   }
 
+  function rejectBannedIdentity(peer, name, identity) {
+    const ban = bans.match({ userId: identity.userId, address: peer.address });
+    if (!ban) return false;
+    peer.moderated = true;
+    sendError(peer, 'banned', 'Banned by the server operator.');
+    console.warn(`Rejected banned player "${name}" (${peer.id.slice(0, 8)})`);
+    try { peer.ws.close(1008, 'banned'); }
+    catch (error) { peer.ws.terminate(); }
+    return true;
+  }
+
   /* The round is part of the handshake, not just of `start`. A player who
      joins a room that has already run a round starts from that room's round,
      so the next `start` they see is the expected step forward. Without this a
@@ -871,6 +1051,8 @@ export function createRelayServer(options = {}) {
       sendError(peer, 'invalid-name', 'Choose a player name.');
       return;
     }
+    const identity = approvedIdentity(message);
+    if (rejectBannedIdentity(peer, name, identity)) return;
     if (rooms.size >= maxRooms) {
       sendError(peer, 'server-full', 'The room server is full.');
       return;
@@ -908,7 +1090,7 @@ export function createRelayServer(options = {}) {
       listed: message.listed !== false
     };
     rooms.set(code, room);
-    enterRoom(peer, room, 'host', name, approvedIdentity(message));
+    enterRoom(peer, room, 'host', name, identity);
     roomReply(peer);
     broadcastMembers(room);
   }
@@ -919,6 +1101,8 @@ export function createRelayServer(options = {}) {
       sendError(peer, 'invalid-name', 'Choose a player name.');
       return;
     }
+    const identity = approvedIdentity(message);
+    if (rejectBannedIdentity(peer, name, identity)) return;
 
     const code = Protocol.normalizeRoomCode(message.room);
     const room = rooms.get(code);
@@ -940,7 +1124,7 @@ export function createRelayServer(options = {}) {
       return;
     }
 
-    enterRoom(peer, room, 'guest', name, approvedIdentity(message));
+    enterRoom(peer, room, 'guest', name, identity);
     /* Before either reply: the arrival is the second body that starts the
        clock, and both messages are meant to carry the clock's answer. */
     scheduleAutoStart(room);
@@ -1058,6 +1242,55 @@ export function createRelayServer(options = {}) {
       ...sanitized.value,
       from: peer.id,
       rttMs: peer.rttMs
+    });
+  }
+
+  /* REPORT: a player naming somebody they think is cheating.
+
+     The relay writes it to the log and does nothing else — no kick, no
+     notification, not even a hint to the room that it happened. That is the
+     whole design and not a first step that stopped early. A report is one
+     player's opinion, it costs nothing to file, and the obvious way to abuse
+     any consequence attached to it is to lose a gunfight and press the button.
+     What the line in the journal is worth is the count across rooms: the same
+     jersey flagged by strangers who never met is a signal, and one flagged by
+     the person they just killed is Tuesday.
+
+     The accused is never told, for the same reason the aim-rate warning is not
+     broadcast: a cheater who knows which of their matches drew attention
+     learns what to hide, and a falsely accused player is handed a grudge over
+     something that had no effect on them. */
+  function handleReport(peer, message) {
+    const checked = Protocol.sanitizeReport(message);
+    if (!checked.ok) {
+      sendError(peer, 'invalid-report', checked.error);
+      return;
+    }
+
+    const target = peer.room.members.get(checked.value.target);
+    /* Bots are not in members, so "reported a bot" lands here rather than
+       needing a rule of its own. Reporting yourself is refused because it can
+       only be a client bug or somebody poking at the wire. */
+    if (!target || target === peer) {
+      sendError(peer, 'no-such-player', 'That player is not in this room.');
+      return;
+    }
+
+    /* Acknowledged either way. Silently dropping the repeat would leave the
+       button that sent it looking broken, and the reporter is not owed a
+       different answer for pressing twice than for pressing once. */
+    if (!peer.reported.has(target.id)) {
+      peer.reported.add(target.id);
+      target.reporters.add(peer.id);
+      console.warn(`Report: ${describePeer(peer)} reported ${describePeer(target)} ` +
+        `in room ${peer.room.code} (${target.reporters.size} ` +
+        `${target.reporters.size === 1 ? 'reporter' : 'reporters'} this session)`);
+    }
+
+    send(peer, {
+      t: 'reported',
+      v: Protocol.VERSION,
+      target: target.id
     });
   }
 
@@ -1347,6 +1580,15 @@ export function createRelayServer(options = {}) {
       return;
     }
 
+    /* Above the role gates below on purpose: anyone in the room can report,
+       host and guest alike. The host is the one peer the aim-rate check never
+       sees, so shutting hosts out here would leave the only player nothing
+       watches also unreportable. */
+    if (message.t === 'report') {
+      handleReport(peer, message);
+      return;
+    }
+
     if (message.t === 'input') {
       if (peer.role !== 'guest') {
         sendError(peer, 'guest-only', 'Only guests send input to the host.');
@@ -1501,6 +1743,7 @@ export function createRelayServer(options = {}) {
   }
 
   function handleMessage(peer, raw) {
+    if (peer.moderated) return;
     if (!consumeRateToken(peer)) {
       sendError(peer, 'rate-limit', 'Too many messages.');
       peer.ws.close(1008, 'rate limit exceeded');
@@ -1814,12 +2057,13 @@ export function createRelayServer(options = {}) {
     leaveRoom(peer);
   }
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, request) => {
     const peer = {
       ws,
       id: String(makeId()),
       name: '',
       userId: null,
+      address: clientAddressFromRequest(request),
       role: null,
       room: null,
       slot: -1,
@@ -1827,6 +2071,7 @@ export function createRelayServer(options = {}) {
       lastSeq: -1,
       alive: true,
       cleanedUp: false,
+      moderated: false,
       rateTokens: rateBurst,
       rateUpdatedAt: Date.now(),
       joinTimer: null,
@@ -1839,6 +2084,11 @@ export function createRelayServer(options = {}) {
       aimSeq: -1,
       aimTravel: 0,
       aimStrikes: 0,
+      /* Who this peer has reported, and who has reported it, both scoped to
+         the connection. A reconnect is a new peer and starts empty, which is
+         the honest reading: the second sitting is a second opinion. */
+      reported: new Set(),
+      reporters: new Set(),
       pingAt: 0,
       rttMs: 0
     };
@@ -1870,6 +2120,13 @@ export function createRelayServer(options = {}) {
     ws.on('error', () => {
       cleanupPeer(peer);
     });
+    const networkBan = bans.match(peer);
+    if (networkBan) {
+      peer.moderated = true;
+      sendError(peer, 'banned', 'Banned by the server operator.');
+      console.warn(`Rejected banned network ${bans.networkFingerprint(peer.address)}`);
+      try { ws.close(1008, 'banned'); } catch (error) { ws.terminate(); }
+    }
   });
 
   server.on('upgrade', (request, socket, head) => {
@@ -2004,6 +2261,12 @@ function statsPathFromEnvironment(env) {
   return stateDir ? resolve(stateDir, 'stats.json') : null;
 }
 
+export function banPathFromEnvironment(env) {
+  if (env.BAN_PATH) return resolve(env.BAN_PATH);
+  const stateDir = (env.STATE_DIRECTORY || '').split(':')[0];
+  return stateDir ? resolve(stateDir, 'bans.json') : null;
+}
+
 export function accountStoreForEnvironment(env, options = {}) {
   /* Production remains strict by default. Local and LAN relays can opt out
      explicitly without inventing OAuth and Stripe credentials; this removes
@@ -2025,6 +2288,8 @@ if (isMain) {
   const relay = createRelayServer({
     allowedOrigins: configuredOrigins,
     accountStore,
+    adminToken: process.env.ADMIN_TOKEN || '',
+    banPath: banPathFromEnvironment(process.env),
     statsPath: statsPathFromEnvironment(process.env),
     /* Both halves of the aim limit are a decision made after reading the logs,
        so both are a restart rather than a code change. Unset leaves the

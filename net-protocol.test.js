@@ -2246,3 +2246,105 @@ test('changing host does not replay the room as new matches', async (t) => {
 
   guest.ws.terminate();
 });
+
+test('a report carries a peer id and nothing else', () => {
+  const valid = Protocol.sanitizeReport({
+    t: 'report',
+    v: Protocol.VERSION,
+    target: 'peer-0002'
+  });
+  assert.equal(valid.ok, true);
+  assert.deepEqual(valid.value, { t: 'report', v: Protocol.VERSION, target: 'peer-0002' });
+
+  const extra = Protocol.sanitizeReport({
+    t: 'report',
+    v: Protocol.VERSION,
+    target: 'peer-0002',
+    reason: 'aimbot',
+    kick: true
+  });
+  assert.equal(extra.ok, true);
+  assert.deepEqual(
+    Object.keys(extra.value).sort(),
+    ['t', 'target', 'v'],
+    'free text and anything asking for an action are dropped at the wire'
+  );
+
+  for (const bad of [
+    { t: 'report', v: Protocol.VERSION },
+    { t: 'report', v: Protocol.VERSION, target: '' },
+    { t: 'report', v: Protocol.VERSION, target: 7 },
+    { t: 'report', v: Protocol.VERSION, target: 'x'.repeat(81) },
+    { t: 'report', v: Protocol.VERSION - 1, target: 'peer-0002' },
+    { t: 'input', v: Protocol.VERSION, target: 'peer-0002' },
+    null,
+    []
+  ]) {
+    assert.equal(Protocol.sanitizeReport(bad).ok, false, JSON.stringify(bad));
+  }
+});
+
+test('the relay logs a report once per reporter and tells nobody else', async (t) => {
+  const { port } = await startRelay(t, { roomRandom: () => 0 });
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args.join(' ')); };
+  t.after(() => { console.warn = realWarn; });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await guest.opened;
+  guest.send({ t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest' });
+  const joined = await guest.next('room');
+  await host.next('members');
+
+  const hostId = joined.members.find((member) => member.role === 'host').id;
+  guest.send({ t: 'report', v: Protocol.VERSION, target: hostId });
+  const ack = await guest.next('reported');
+  assert.equal(ack.target, hostId);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^Report: "Guest" \(.+, seat 1\) reported "Host" \(.+, seat 0\)/);
+  assert.match(warnings[0], /in room .+ \(1 reporter this session\)/);
+
+  /* Pressing again is acknowledged the same way and counted once: the button
+     must not look broken, and one player is one opinion however many times
+     they press it. */
+  guest.send({ t: 'report', v: Protocol.VERSION, target: hostId });
+  assert.equal((await guest.next('reported')).target, hostId);
+  assert.equal(warnings.length, 1, 'the repeat is not a second report');
+
+  /* The accused learns nothing. Nothing is broadcast, so the only way to say
+     so is that the next thing the host hears is an unrelated message. */
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: joined.authorityEpoch });
+  const nextForHost = await host.next(() => true);
+  assert.equal(nextForHost.t, 'start');
+
+  host.ws.terminate();
+  guest.ws.terminate();
+});
+
+test('a report only names somebody in the room', async (t) => {
+  const { port } = await startRelay(t, { roomRandom: () => 0 });
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await host.opened;
+  host.send({ t: 'create', v: Protocol.VERSION, name: 'Host' });
+  const room = await host.next('room');
+  await host.next('members');
+  const hostId = room.members[0].id;
+
+  host.send({ t: 'report', v: Protocol.VERSION, target: hostId });
+  assert.equal((await host.next('error')).code, 'no-such-player', 'not yourself');
+
+  host.send({ t: 'report', v: Protocol.VERSION, target: 'bot-3' });
+  assert.equal((await host.next('error')).code, 'no-such-player', 'not a bot');
+
+  host.send({ t: 'report', v: Protocol.VERSION, target: 42 });
+  assert.equal((await host.next('error')).code, 'invalid-report');
+
+  host.ws.terminate();
+});

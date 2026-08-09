@@ -796,12 +796,33 @@ function storeCleanCatalog(body) {
 
 /* Stripe counts in the currency's smallest unit, so a whole number is cents
    and 499 is $4.99. A string is passed through exactly as the relay wrote
-   it, which is the escape hatch the moment a price is not dollars. */
+   it, which is the escape hatch the moment a price is not dollars. The
+   relay's own answer is those same two facts with names on them —
+   { unitAmount, currency } — and until this reads that shape the card has
+   nothing to put between the name and the BUY button. A currency Stripe
+   counts whole rather than in hundredths keeps its unit as it is: a
+   thousand yen is a thousand yen, not ten. */
+const STORE_PRICE_SYMBOLS = { usd: '$', eur: '€', gbp: '£', jpy: '¥', cad: 'C$', aud: 'A$' };
+const STORE_PRICE_WHOLE_UNITS = {
+  bif: 1, clp: 1, djf: 1, gnf: 1, jpy: 1, kmf: 1, krw: 1, mga: 1,
+  pyg: 1, rwf: 1, ugx: 1, vnd: 1, vuv: 1, xaf: 1, xof: 1, xpf: 1
+};
 function storePriceText(price) {
   if (typeof price === 'string' && price.trim()) return price.trim().slice(0, 16);
-  if (typeof price === 'number' && Number.isFinite(price) && price >= 0)
-    return '$' + (Math.round(price) / 100).toFixed(2);
-  return '';
+  let amount = null;
+  let currency = 'usd';
+  if (typeof price === 'number') amount = price;
+  else if (price && typeof price === 'object' && typeof price.unitAmount === 'number') {
+    amount = price.unitAmount;
+    if (typeof price.currency === 'string' && price.currency.trim())
+      currency = price.currency.trim().toLowerCase();
+  }
+  if (amount === null || !Number.isFinite(amount) || amount < 0) return '';
+  const symbol = STORE_PRICE_SYMBOLS[currency] || (currency.toUpperCase() + ' ');
+  const text = STORE_PRICE_WHOLE_UNITS[currency]
+    ? String(Math.round(amount))
+    : (Math.round(amount) / 100).toFixed(2);
+  return symbol + text;
 }
 
 function storeRefreshCatalog() {
@@ -890,12 +911,16 @@ function storeBuy(id) {
   storeNote('Opening the checkout…');
   storeRenderGrid();
 
-  /* The contract fixes the path and the reply but not the request field.
-     The item is the only thing this endpoint can need, and `itemId` is the
-     name it goes out under — if the relay chose another one, this line is
-     the whole change. */
+  /* `cosmeticId`, because that is the field account-store.mjs reads off the
+     body — not a name this side gets to pick. It went out as `itemId` for the
+     whole of the first release and the relay read `undefined` every time, so
+     every BUY answered "unknown cosmetic" and the store could not sell
+     anything at all. Nothing caught it: the relay's tests post the body
+     themselves, this file's tests answer with a fake relay, and each half was
+     internally consistent and unable to see the other. store.test.js now reads
+     both sources and fails if these two names stop matching. */
   const session = ACCOUNT.session;
-  storeAPI('/shop/checkout', { method: 'POST', auth: true, body: { itemId: id } })
+  storeAPI('/shop/checkout', { method: 'POST', auth: true, body: { cosmeticId: id } })
     .then(res => {
       /* A checkout that answers after the player has signed out is a
          redirect to a Stripe page belonging to an account that is no longer
