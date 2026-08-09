@@ -936,6 +936,98 @@ const SHOT_EFFECTS = {
     wake:   { sys: 'bead', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
     muzzle: { count: 3, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
     burst:  { sys: 'bead', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50] }
+  },
+
+  /* Season 1 battle-pass shot effects. Same particle budgets and pool
+     systems as the shop three — new pastels only, so fairness bounds still
+     hold. */
+  's1-free-fx-paper-star': {
+    name: 'Paper Star',
+    muzzleTint: C(0xffd0a0),
+    colors: [0xd0a080, 0xe0b090, 0xc89870],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
+  },
+  's1-free-fx-soft-confetti': {
+    name: 'Soft Confetti',
+    muzzleTint: C(0xffd0e0),
+    colors: [0xe090b0, 0x90d0b0, 0xe0c080, 0xa0b8e0, 0xd0a0d0],
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  's1-free-fx-glass-drop': {
+    name: 'Glass Drop',
+    muzzleTint: C(0xb0e8f0),
+    colors: [0x60b0b8, 0x70b8c0, 0x80c0c8],
+    wake:   { sys: 'bead', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
+    muzzle: { count: 3, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
+    burst:  { sys: 'bead', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50] }
+  },
+  's1-free-fx-lucky-thirteen': {
+    name: 'Lucky Thirteen',
+    muzzleTint: C(0xd0f0a0),
+    colors: [0x88b868, 0x98c878, 0x78a858],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
+  },
+  's1-free-fx-paper-petals': {
+    name: 'Paper Petals',
+    muzzleTint: C(0xffc0d0),
+    colors: [0xd08098, 0xe090a8, 0xc07088, 0xe0a0b0],
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  's1-free-fx-house-party': {
+    name: 'House Party',
+    muzzleTint: C(0xffe0a0),
+    colors: [0xe09880, 0xd0a870, 0xc08098, 0x80b8a0, 0xa090c8],
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  's1-premium-fx-dawn-sparks': {
+    name: 'Dawn Sparks',
+    muzzleTint: C(0xffc890),
+    colors: [0xd0a070, 0xe0b080, 0xc09860],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
+  },
+  's1-premium-fx-prism-pop': {
+    name: 'Prism Pop',
+    muzzleTint: C(0xd0b0ff),
+    colors: [0xa088d0, 0x80c0d0, 0xd088b0, 0xd0b878],
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  's1-premium-fx-comet-tail': {
+    name: 'Comet Tail',
+    muzzleTint: C(0xb0d0ff),
+    colors: [0x7090c8, 0x80a0d0, 0x90b0d8],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
+  },
+  's1-premium-fx-aurora-trail': {
+    name: 'Aurora Trail',
+    muzzleTint: C(0xa0f0d0),
+    colors: [0x50b0a0, 0x60b8a8, 0x70c0b0],
+    wake:   { sys: 'bead', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
+    muzzle: { count: 3, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
+    burst:  { sys: 'bead', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50] }
+  },
+  's1-premium-fx-crown-burst': {
+    name: 'Crown Burst',
+    muzzleTint: C(0xffe090),
+    colors: [0xd0b070, 0xe0c080, 0xc0a060, 0xe8c890],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
   }
 };
 

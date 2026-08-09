@@ -7,6 +7,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { WebSocket, WebSocketServer } from 'ws';
 import { createAccountStoreFromEnvironment } from './account-store.mjs';
+import {
+  BATTLE_PASS_MAX_RETRY_DELAY_MS,
+  BATTLE_PASS_MAX_RETRY_ATTEMPTS,
+  BATTLE_PASS_MIN_MATCH_DURATION_MS,
+  BATTLE_PASS_MIN_PARTICIPANTS,
+  BATTLE_PASS_MIN_SNAPSHOTS
+} from './battlepass.mjs';
 import { COSMETICS_BY_ID } from './cosmetics.mjs';
 import { HttpError, readJsonBody, sendJson } from './http-utils.mjs';
 import { clientAddressFromRequest, createBanRegistry } from './moderation.mjs';
@@ -20,6 +27,20 @@ const RELAY_TYPES = new Set(['snapshot', 'checkpoint', 'event']);
 const CHECKPOINT_CONTROLLERS = new Set(['local', 'remote', 'bot']);
 const CHECKPOINT_SKILLS = new Set(['easy', 'normal', 'hard']);
 const EVENT_KINDS = new Set(['shot', 'shield', 'damage', 'kill', 'respawn', 'match-over']);
+/* Progress does not exist on the wire. Rejecting these names explicitly makes
+   an attempted shortcut visible to the sender and prevents a future relay
+   message from accidentally reusing one as a trusted input. */
+const CLIENT_PROGRESS_FIELDS = new Set([
+  'xp',
+  'tier',
+  'reward',
+  'rewardId',
+  'rewardUnlock',
+  'claimedRewards'
+]);
+const MESSAGE_SHAPE_SAFE = 0;
+const MESSAGE_SHAPE_INVALID = 1;
+const MESSAGE_SHAPE_FORBIDDEN_PROGRESS = 2;
 /* Mirrors FIXED in src/90-main.js. A guest sends one input per simulated tick,
    so the gap between two `seq` values is how much simulated time separates the
    two aim samples in them -- which is what an angular rate needs, and is not
@@ -201,6 +222,18 @@ export function createRelayServer(options = {}) {
   const makeId = typeof options.idFactory === 'function'
     ? options.idFactory
     : randomUUID;
+  const makeMatchId = typeof options.matchIdFactory === 'function'
+    ? options.matchIdFactory
+    : randomUUID;
+  const battlePassRetryMs = positiveInteger(options.battlePassRetryMs, 1_000);
+  const battlePassMaxRetryAttempts = positiveInteger(
+    options.battlePassMaxRetryAttempts,
+    BATTLE_PASS_MAX_RETRY_ATTEMPTS
+  );
+  const maxUnrecordedBattlePassMatches = positiveInteger(
+    options.maxUnrecordedBattlePassMatches,
+    100
+  );
   const roomRandom = typeof options.roomRandom === 'function'
     ? options.roomRandom
     : secureRandom;
@@ -219,6 +252,10 @@ export function createRelayServer(options = {}) {
 
   const rooms = new Map();
   const peers = new Map();
+  const unrecordedBattlePassMatches = new Map();
+  let droppedUnrecordedBattlePassMatches = 0;
+  let battlePassRetryTimer = null;
+  let battlePassRetryAt = null;
   const bans = options.banRegistry || createBanRegistry({
     path: typeof options.banPath === 'string' && options.banPath ? options.banPath : null,
     now: relayNow,
@@ -297,28 +334,34 @@ export function createRelayServer(options = {}) {
   /* JSON.parse accepts extremely deep values. Walk iteratively so hostile
      payloads cannot turn a later String()/JSON.stringify() into stack
      exhaustion, and keep relay messages cheap enough to fan out safely. */
-  function isSafeMessageShape(root) {
+  function inspectMessageShape(root) {
     const stack = [{ value: root, depth: 0 }];
     let nodes = 0;
+    let hasForbiddenProgress = false;
     while (stack.length) {
       const { value, depth } = stack.pop();
-      if (++nodes > 4096 || depth > 8) return false;
+      if (++nodes > 4096 || depth > 8) return MESSAGE_SHAPE_INVALID;
       if (value === null || typeof value === 'boolean' || typeof value === 'number') continue;
       if (typeof value === 'string') {
-        if (value.length > 2048) return false;
+        if (value.length > 2048) return MESSAGE_SHAPE_INVALID;
         continue;
       }
       if (Array.isArray(value)) {
-        if (value.length > 512) return false;
+        if (value.length > 512) return MESSAGE_SHAPE_INVALID;
         for (const item of value) stack.push({ value: item, depth: depth + 1 });
         continue;
       }
-      if (typeof value !== 'object') return false;
+      if (typeof value !== 'object') return MESSAGE_SHAPE_INVALID;
       const keys = Object.keys(value);
-      if (keys.length > 64) return false;
-      for (const key of keys) stack.push({ value: value[key], depth: depth + 1 });
+      if (keys.length > 64) return MESSAGE_SHAPE_INVALID;
+      for (const key of keys) {
+        if (CLIENT_PROGRESS_FIELDS.has(key)) hasForbiddenProgress = true;
+        stack.push({ value: value[key], depth: depth + 1 });
+      }
     }
-    return true;
+    return hasForbiddenProgress
+      ? MESSAGE_SHAPE_FORBIDDEN_PROGRESS
+      : MESSAGE_SHAPE_SAFE;
   }
 
   function encode(message) {
@@ -428,15 +471,17 @@ export function createRelayServer(options = {}) {
   /* A browser WebSocket cannot attach an Authorization header, so the same
      bearer credential used by the account HTTP API travels once in the room
      handshake. It is optional and a bad or expired value is signed-out state,
-     not a failed game connection. Most importantly, the returned entitlement
-     set comes from the database rather than from either cosmetic claim. */
+     not a failed game connection. Most importantly, the returned set comes
+     from the database rather than from either cosmetic claim. Paid
+     entitlements and active earned claims remain separate records;
+     ownedCosmeticIds unions them only for this gate. */
   function approvedIdentity(message) {
     const declared = Protocol.sanitizeCosmetics(
       message && message.cosmetics,
       catalogAcceptsCosmetic
     );
     const token = message && message.authToken;
-    let entitlements = [];
+    let ownedCosmetics = [];
     let userId = null;
     if (accountStore && accountStore.auth &&
         typeof accountStore.auth.authenticate === 'function' &&
@@ -446,15 +491,17 @@ export function createRelayServer(options = {}) {
           authorization: `Bearer ${token}`
         }, false);
         if (account && Array.isArray(account.entitlements)) {
-          entitlements = account.entitlements;
           userId = account.userId;
+          ownedCosmetics = typeof accountStore.ownedCosmeticIds === 'function'
+            ? accountStore.ownedCosmeticIds(account)
+            : account.entitlements;
         }
       } catch (error) {
         /* Authentication is deliberately fail-closed for appearance and
            fail-open for play: the peer keeps its seat, wearing the default. */
       }
     }
-    const owned = new Set(entitlements);
+    const owned = new Set(ownedCosmetics);
     return {
       userId,
       cosmetics: Protocol.sanitizeCosmetics(
@@ -861,6 +908,13 @@ export function createRelayServer(options = {}) {
     room.latestCheckpoint = null;
     room.snapshotAt = 0;
     room.snapshotIntervalMs = 0;
+    room.matchId = String(makeMatchId());
+    room.battlePassStartedAt = relayNow();
+    room.battlePassSnapshotCount = 0;
+    room.battlePassLastCountedSnapshotBucket = -1;
+    room.battlePassParticipants = new Set(
+      Array.from(room.members.values(), (member) => member.userId).filter(Boolean)
+    );
     armSnapshotStall(room, room.host, authorityGraceMs);
     /* A round starting is a fresh slate for everyone: time spent waiting in
        the lobby is not time spent away from a match. */
@@ -1019,6 +1073,11 @@ export function createRelayServer(options = {}) {
       authorityEpoch: 1,
       latestSnapshot: null,
       latestCheckpoint: null,
+      matchId: null,
+      battlePassStartedAt: 0,
+      battlePassSnapshotCount: 0,
+      battlePassLastCountedSnapshotBucket: -1,
+      battlePassParticipants: new Set(),
       migrating: null,
       snapshotAt: 0,
       snapshotIntervalMs: 0,
@@ -1241,6 +1300,248 @@ export function createRelayServer(options = {}) {
     return false;
   }
 
+  function logBattlePassFailure(matchId, error) {
+    console.error(
+      `Unable to award battle-pass XP for match ${matchId}: ` +
+      `${error && error.stack || error}`
+    );
+  }
+
+  function logBattlePassGiveUp(matchId, attemptCount, error) {
+    console.error(
+      `Battle-pass XP for match ${matchId} needs operator attention after ` +
+      `${attemptCount} attempts: ${error && error.stack || error}`
+    );
+  }
+
+  function battlePassFallbackState() {
+    let operator = 0;
+    for (const queued of unrecordedBattlePassMatches.values())
+      if (queued.operator) operator++;
+    return {
+      queued: unrecordedBattlePassMatches.size,
+      operator,
+      dropped: droppedUnrecordedBattlePassMatches
+    };
+  }
+
+  /* This queue exists only when SQLite could not even accept the durable
+     pending row. Keep a bounded, operator-countable last resort instead of
+     retaining participant arrays without limit. If it fills, terminal entries
+     are discarded first and every discarded result remains visible in the
+     cumulative counter and error log. */
+  function queueUnrecordedBattlePassMatch(matchId, result) {
+    if (!unrecordedBattlePassMatches.has(matchId) &&
+        unrecordedBattlePassMatches.size >= maxUnrecordedBattlePassMatches) {
+      let discard = null;
+      for (const [candidateId, candidate] of unrecordedBattlePassMatches) {
+        if (candidate.operator) { discard = candidateId; break; }
+        if (discard === null) discard = candidateId;
+      }
+      if (discard !== null) {
+        unrecordedBattlePassMatches.delete(discard);
+        droppedUnrecordedBattlePassMatches++;
+        console.error(
+          `Battle-pass in-memory fallback is capped at ` +
+          `${maxUnrecordedBattlePassMatches}; discarded match ${discard}.`
+        );
+      }
+    }
+    unrecordedBattlePassMatches.set(matchId, result);
+  }
+
+  function scheduleBattlePassRetry(nextRetryAt = Date.now() + battlePassRetryMs) {
+    if (battlePassRetryTimer && battlePassRetryAt <= nextRetryAt) return;
+    if (battlePassRetryTimer) clearTimeout(battlePassRetryTimer);
+    battlePassRetryAt = nextRetryAt;
+    battlePassRetryTimer = setTimeout(() => {
+      battlePassRetryTimer = null;
+      battlePassRetryAt = null;
+      retryBattlePassAwards();
+    }, Math.max(1, nextRetryAt - Date.now()));
+    if (typeof battlePassRetryTimer.unref === 'function')
+      battlePassRetryTimer.unref();
+  }
+
+  function retryBattlePassAwards() {
+    const battlePass = accountStore && accountStore.battlePass;
+    if (!battlePass || typeof battlePass.retryPendingMatches !== 'function')
+      return { awarded: [], failures: [], deadLetters: [], nextRetryAt: null };
+    const retryOptions = {
+      retryBaseMs: battlePassRetryMs,
+      maxAttempts: battlePassMaxRetryAttempts
+    };
+    const combined = {
+      awarded: [],
+      failures: [],
+      deadLetters: [],
+      nextRetryAt: null
+    };
+    const mergeOutcome = (outcome) => {
+      combined.awarded.push(...(outcome.awarded || []));
+      combined.failures.push(...(outcome.failures || []));
+      combined.deadLetters.push(...(outcome.deadLetters || []));
+      if (Number.isFinite(outcome.nextRetryAt)) {
+        combined.nextRetryAt = combined.nextRetryAt === null
+          ? outcome.nextRetryAt
+          : Math.min(combined.nextRetryAt, outcome.nextRetryAt);
+      }
+    };
+    const retryAt = Date.now();
+    for (const [matchId, queued] of unrecordedBattlePassMatches) {
+      if (queued.operator) continue;
+      if (queued.nextAttemptAt > retryAt) {
+        combined.nextRetryAt = combined.nextRetryAt === null
+          ? queued.nextAttemptAt
+          : Math.min(combined.nextRetryAt, queued.nextAttemptAt);
+        continue;
+      }
+      try {
+        mergeOutcome(battlePass.recordMatchResult(
+          queued.matchId,
+          queued.participants,
+          queued.evidence,
+          queued.awardedAt,
+          retryOptions
+        ));
+        unrecordedBattlePassMatches.delete(matchId);
+      } catch (error) {
+        queued.attemptCount++;
+        if (queued.attemptCount >= battlePassMaxRetryAttempts) {
+          queued.operator = true;
+          logBattlePassGiveUp(matchId, queued.attemptCount, error);
+        } else {
+          const delay = Math.min(
+            BATTLE_PASS_MAX_RETRY_DELAY_MS,
+            battlePassRetryMs * (2 ** (queued.attemptCount - 1))
+          );
+          queued.nextAttemptAt = retryAt + delay;
+          combined.nextRetryAt = combined.nextRetryAt === null
+            ? queued.nextAttemptAt
+            : Math.min(combined.nextRetryAt, queued.nextAttemptAt);
+          logBattlePassFailure(matchId, error);
+        }
+      }
+    }
+    try {
+      mergeOutcome(battlePass.retryPendingMatches(retryOptions));
+    } catch (error) {
+      combined.failures.push({ matchId: '<pending>', error });
+      combined.nextRetryAt = combined.nextRetryAt === null
+        ? retryAt + battlePassRetryMs
+        : Math.min(combined.nextRetryAt, retryAt + battlePassRetryMs);
+    }
+    for (const failure of combined.failures)
+      logBattlePassFailure(failure.matchId, failure.error);
+    for (const deadLetter of combined.deadLetters) {
+      logBattlePassGiveUp(
+        deadLetter.matchId,
+        deadLetter.attemptCount,
+        deadLetter.error
+      );
+    }
+    if (combined.nextRetryAt !== null)
+      scheduleBattlePassRetry(combined.nextRetryAt);
+    return combined;
+  }
+
+  function awardBattlePassForRoom(room, endingUserIds = []) {
+    const battlePass = accountStore && accountStore.battlePass;
+    if (!room.matchId || !battlePass ||
+        typeof battlePass.recordMatchResult !== 'function') return false;
+    const openingParticipants = room.battlePassParticipants || new Set();
+    /* An all-anonymous match has no account award to miss. It is ordinary
+       play, so do not turn its duration and participant floors into warnings. */
+    if (openingParticipants.size === 0) return false;
+    /* A bearer at the opening whistle and a seat at the result are both
+       required. A disconnect that itself forces fallback is part of that
+       forced result, so fallback supplies that account in endingUserIds. */
+    const present = new Set(
+      Array.from(room.members.values(), (member) => member.userId).filter(Boolean)
+    );
+    for (const userId of endingUserIds)
+      if (typeof userId === 'string' && userId) present.add(userId);
+    const participants = Array.from(openingParticipants)
+      .filter((userId) => present.has(userId));
+    const awardedAt = relayNow();
+    const durationMs = awardedAt - room.battlePassStartedAt;
+    const missedFloors = [];
+    if (durationMs < BATTLE_PASS_MIN_MATCH_DURATION_MS) {
+      missedFloors.push(
+        `duration (${durationMs}ms/${BATTLE_PASS_MIN_MATCH_DURATION_MS}ms)`
+      );
+    }
+    if (participants.length < BATTLE_PASS_MIN_PARTICIPANTS) {
+      missedFloors.push(
+        `participants (${participants.length}/${BATTLE_PASS_MIN_PARTICIPANTS})`
+      );
+    }
+    if (room.battlePassSnapshotCount < BATTLE_PASS_MIN_SNAPSHOTS) {
+      missedFloors.push(
+        `snapshots (${room.battlePassSnapshotCount}/${BATTLE_PASS_MIN_SNAPSHOTS})`
+      );
+    }
+    if (missedFloors.length > 0) {
+      console.warn(
+        `Battle-pass XP refused for match ${room.matchId}; missed ` +
+        `${missedFloors.join(', ')}.`
+      );
+      return false;
+    }
+    const result = {
+      matchId: room.matchId,
+      participants,
+      awardedAt,
+      evidence: {
+        durationMs,
+        participantCount: participants.length,
+        snapshotCount: room.battlePassSnapshotCount
+      }
+    };
+    try {
+      const outcome = battlePass.recordMatchResult(
+        result.matchId,
+        result.participants,
+        result.evidence,
+        result.awardedAt,
+        {
+          retryBaseMs: battlePassRetryMs,
+          maxAttempts: battlePassMaxRetryAttempts
+        }
+      );
+      for (const failure of outcome.failures)
+        logBattlePassFailure(failure.matchId, failure.error);
+      for (const deadLetter of outcome.deadLetters) {
+        logBattlePassGiveUp(
+          deadLetter.matchId,
+          deadLetter.attemptCount,
+          deadLetter.error
+        );
+      }
+      if (outcome.nextRetryAt !== null)
+        scheduleBattlePassRetry(outcome.nextRetryAt);
+      return outcome.failures.some((failure) => failure.matchId === result.matchId) ||
+        outcome.deadLetters.some((failure) => failure.matchId === result.matchId);
+    } catch (error) {
+      /* If even the durable insert is temporarily unavailable, retain the full
+         relay-authored result in memory and apply the same bounded retry policy
+         after ending play. */
+      queueUnrecordedBattlePassMatch(result.matchId, {
+        ...result,
+        attemptCount: 1,
+        nextAttemptAt: Date.now() + battlePassRetryMs,
+        operator: battlePassMaxRetryAttempts <= 1
+      });
+      if (battlePassMaxRetryAttempts <= 1) {
+        logBattlePassGiveUp(result.matchId, 1, error);
+      } else {
+        logBattlePassFailure(result.matchId, error);
+        scheduleBattlePassRetry(Date.now() + battlePassRetryMs);
+      }
+      return true;
+    }
+  }
+
   function handleRoomMessage(peer, message) {
     if (message.t === 'create' || message.t === 'join') {
       sendError(peer, 'already-in-room', 'Leave this room before joining another.');
@@ -1340,7 +1641,13 @@ export function createRelayServer(options = {}) {
       }
       if (!hasCurrentAuthority(peer, message)) return;
       if (!peer.room.started || message.round !== peer.room.round) return;
+      const awardPending = awardBattlePassForRoom(peer.room);
       peer.room.started = false;
+      peer.room.matchId = null;
+      peer.room.battlePassStartedAt = 0;
+      peer.room.battlePassSnapshotCount = 0;
+      peer.room.battlePassLastCountedSnapshotBucket = -1;
+      peer.room.battlePassParticipants = new Set();
       clearSnapshotStall(peer.room);
       peer.room.snapshotAt = 0;
       peer.room.snapshotIntervalMs = 0;
@@ -1358,6 +1665,13 @@ export function createRelayServer(options = {}) {
          client only knows where to show it once the message above has told it
          the round is over. */
       broadcastMembers(peer.room);
+      if (awardPending) {
+        sendError(
+          peer,
+          'battlepass-award-pending',
+          'The round ended normally; battle-pass XP is queued for retry.'
+        );
+      }
       return;
     }
 
@@ -1392,7 +1706,29 @@ export function createRelayServer(options = {}) {
         relayed = snapshotWithApprovedCosmetics(peer.room, message);
         if (peer.room.latestSnapshot &&
             relayed.tick < peer.room.latestSnapshot.tick) return;
+        const advancesMatch = !peer.room.latestSnapshot ||
+          relayed.tick > peer.room.latestSnapshot.tick;
         peer.room.latestSnapshot = relayed;
+        if (advancesMatch &&
+            peer.room.battlePassSnapshotCount < BATTLE_PASS_MIN_SNAPSHOTS) {
+          /* A tick is host-authored, so ten increasing ticks in one packet burst
+             are not ten independent relay observations. The relay counts at
+             most one in each match-time bucket, anchored to startRound, while
+             the separate duration check still requires the full 90 seconds.
+             A delayed first snapshot therefore does not extend that floor. */
+          const observedAt = relayNow();
+          const minimumObservationGap = BATTLE_PASS_MIN_MATCH_DURATION_MS /
+            BATTLE_PASS_MIN_SNAPSHOTS;
+          const observationBucket = Math.floor(
+            Math.max(0, observedAt - peer.room.battlePassStartedAt) /
+            minimumObservationGap
+          );
+          if (observationBucket >
+              peer.room.battlePassLastCountedSnapshotBucket) {
+            peer.room.battlePassSnapshotCount++;
+            peer.room.battlePassLastCountedSnapshotBucket = observationBucket;
+          }
+        }
         observeSnapshot(peer.room, peer);
       } else if (message.t === 'checkpoint') {
         if (peer.room.latestCheckpoint &&
@@ -1421,7 +1757,8 @@ export function createRelayServer(options = {}) {
     }
 
     const message = parsed.value;
-    if (!isSafeMessageShape(message)) {
+    const messageShape = inspectMessageShape(message);
+    if (messageShape === MESSAGE_SHAPE_INVALID) {
       sendError(peer, 'invalid-shape', 'Message nesting or collection size is invalid.');
       return;
     }
@@ -1431,6 +1768,14 @@ export function createRelayServer(options = {}) {
          the protocol tells them nothing they can act on; "reload" is the whole
          remedy, so say that instead. */
       sendError(peer, 'version', 'This game is out of date. Reload the page to keep playing.');
+      return;
+    }
+    if (messageShape === MESSAGE_SHAPE_FORBIDDEN_PROGRESS) {
+      sendError(
+        peer,
+        'client-progress-forbidden',
+        'Battle-pass progress is awarded only from relay match results.'
+      );
       return;
     }
 
@@ -1525,7 +1870,16 @@ export function createRelayServer(options = {}) {
     return null;
   }
 
-  function fallbackRestart(room) {
+  function fallbackRestart(room, additionalEndingUserIds = []) {
+    const migrationDepartures = room.migrating
+      ? room.migrating.departedUserIds
+      : [];
+    if (room.started) {
+      awardBattlePassForRoom(room, [
+        ...migrationDepartures,
+        ...additionalEndingUserIds
+      ]);
+    }
     if (room.migrating && room.migrating.timer) clearTimeout(room.migrating.timer);
     room.migrating = null;
     clearSnapshotStall(room);
@@ -1545,6 +1899,11 @@ export function createRelayServer(options = {}) {
     room.authorityEpoch++;
     room.latestSnapshot = null;
     room.latestCheckpoint = null;
+    room.matchId = null;
+    room.battlePassStartedAt = 0;
+    room.battlePassSnapshotCount = 0;
+    room.battlePassLastCountedSnapshotBucket = -1;
+    room.battlePassParticipants = new Set();
     for (const member of room.members.values()) {
       member.lastSeq = -1;
       member.activeAt = Date.now();
@@ -1604,6 +1963,7 @@ export function createRelayServer(options = {}) {
   function beginMigration(room, failedHost, removeHost) {
     clearSnapshotStall(room);
     clearAutoStart(room);
+    const failedUserId = failedHost.userId;
     if (removeHost) {
       room.members.delete(failedHost.id);
       clearRoomMembership(failedHost);
@@ -1611,15 +1971,13 @@ export function createRelayServer(options = {}) {
       failedHost.role = 'guest';
     }
     if (!room.members.size) {
-      rooms.delete(room.code);
-      room.host = null;
-      room.started = false;
+      fallbackRestart(room, failedUserId ? [failedUserId] : []);
       return;
     }
     if (!room.started || !canMigrateSeamlessly(room)) {
       /* fallbackRestart puts the room back in a lobby, which is a lobby that
          needs its clock re-armed — it does that itself. */
-      fallbackRestart(room);
+      fallbackRestart(room, failedUserId ? [failedUserId] : []);
       return;
     }
     room.migrating = {
@@ -1628,6 +1986,10 @@ export function createRelayServer(options = {}) {
       expected: new Set(),
       snapshot: room.latestSnapshot,
       checkpoint: room.latestCheckpoint,
+      /* If every promotion fails, the disconnects themselves become the
+         forced result. Remember those account ids so fallback can treat them
+         as present at that endpoint after their room memberships are cleared. */
+      departedUserIds: new Set(failedUserId ? [failedUserId] : []),
       timer: null
     };
     attemptPromotion(room);
@@ -1635,7 +1997,8 @@ export function createRelayServer(options = {}) {
 
   function finishMigration(room) {
     if (!room.migrating) return;
-    if (room.migrating.timer) clearTimeout(room.migrating.timer);
+    const migration = room.migrating;
+    if (migration.timer) clearTimeout(migration.timer);
     room.migrating = null;
     for (const member of room.members.values()) {
       member.lastSeq = -1;
@@ -1655,6 +2018,8 @@ export function createRelayServer(options = {}) {
 
   function migrateHostedRoom(room, departedHost) {
     if (room.migrating) {
+      if (departedHost.userId)
+        room.migrating.departedUserIds.add(departedHost.userId);
       room.members.delete(departedHost.id);
       clearRoomMembership(departedHost);
       attemptPromotion(room);
@@ -1823,14 +2188,34 @@ export function createRelayServer(options = {}) {
     : null;
   if (heartbeat && typeof heartbeat.unref === 'function') heartbeat.unref();
 
+  retryBattlePassAwards();
+
   async function close() {
     if (heartbeat) clearInterval(heartbeat);
     if (idleSweep) clearInterval(idleSweep);
+    /* A planned shutdown is also a match result for every room still in play.
+       Record those relay-authored results while memberships and the account
+       database are still available, then give any fallback queue one final
+       chance to reach the durable pending table. */
+    for (const room of rooms.values())
+      if (room.started) awardBattlePassForRoom(room);
+    retryBattlePassAwards();
+    if (battlePassRetryTimer) clearTimeout(battlePassRetryTimer);
+    battlePassRetryTimer = null;
+    battlePassRetryAt = null;
     /* A planned shutdown is a deploy, and a deploy that quietly dropped the
        last few minutes of the count would be the common case, not the rare one. */
     if (statsTimer) clearTimeout(statsTimer);
     statsTimer = null;
     flushStats();
+    const fallback = battlePassFallbackState();
+    if (fallback.queued > 0) {
+      console.error(
+        `Relay closing with ${fallback.queued} unrecorded battle-pass ` +
+        `matches (${fallback.operator} awaiting operator attention, ` +
+        `${fallback.dropped} previously discarded).`
+      );
+    }
     for (const room of rooms.values()) {
       clearSnapshotStall(room);
       clearAutoStart(room);
@@ -1853,6 +2238,8 @@ export function createRelayServer(options = {}) {
     server,
     wss,
     rooms,
+    retryBattlePassAwards,
+    battlePassFallbackState,
     listen: (...args) => server.listen(...args),
     address: () => server.address(),
     close

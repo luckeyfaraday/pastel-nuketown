@@ -679,6 +679,180 @@ body.touch .sens{display:none}
   .store-stage{display:none}
 }
 
+/* =====================================================================
+   SEASON 1 BATTLE PASS
+   Built out of the same parts as the locker — a .screen dialog, a .panel
+   card, the 2.5px ink outline and the 3px drop — with one shape of its
+   own: the track. Twenty-five tier columns scroll sideways under two lane
+   labels that stay pinned to the left, which is how a 360px phone gets the
+   whole ladder without the card ever growing wider than the window.
+   ===================================================================== */
+/* The title-screen entry, butter-yellow the way the store button is lilac. */
+.locker-pass{flex:0 0 auto;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+#battlepass{z-index:37}                /* over #store (36); the two never open together by design */
+.bp-card{width:min(720px,calc(100vw - 16px));max-height:calc(100vh - 30px);padding:15px 17px 17px;
+  display:flex;flex-direction:column;gap:10px;pointer-events:auto;overflow-y:auto}
+.bp-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.bp-head-text{min-width:0}
+.bp-head h2{font-family:var(--disp);font-size:24px;font-weight:800;letter-spacing:.09em;line-height:1;
+  overflow-wrap:anywhere}
+.bp-head h2 em{font-style:normal;color:#d4638f}
+.bp-sub{margin-top:4px;font-family:var(--disp);font-size:11px;font-weight:600;letter-spacing:.05em;
+  color:var(--ink-soft);overflow-wrap:anywhere}
+#bpClose{flex:none;min-height:44px}
+#bpNote{font-family:var(--disp);font-size:12px;font-weight:600;letter-spacing:.035em;
+  color:#4f7389;text-align:center}
+#bpNote[data-kind="error"]{color:#b8406a}
+#bpNote:empty{display:none}
+
+/* ---- progress header ---- */
+.bp-progress{flex:none;display:flex;align-items:center;gap:12px;padding:10px 13px;
+  border:2.5px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.66);
+  box-shadow:0 3px 0 var(--ink)}
+.bp-progress-line{font-family:var(--disp);font-size:12px;font-weight:700;letter-spacing:.05em;color:var(--ink-soft)}
+.bp-tier-badge{flex:none;width:56px;height:56px;border-radius:50%;border:3px solid var(--ink);
+  background:linear-gradient(180deg,#fff2c9,#ffe08a);box-shadow:0 3px 0 var(--ink);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:.9}
+.bp-tier-badge small{font-family:var(--disp);font-size:8px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft)}
+.bp-tier-badge b{font-family:var(--disp);font-size:22px;font-weight:800;color:var(--ink)}
+.bp-tier-badge.done{background:linear-gradient(180deg,#d9f7e6,#b8f2d8)}
+.bp-progress-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.bp-xp-line{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  font-family:var(--disp);font-size:13px;font-weight:800;letter-spacing:.04em;color:var(--ink)}
+.bp-xp-line small{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink-soft);text-align:right}
+.bp-bar{height:16px;border:2.5px solid var(--ink);border-radius:9px;background:#efe3f2;overflow:hidden}
+.bp-bar i{display:block;height:100%;border-radius:6px;
+  background:linear-gradient(90deg,#ffd3b6,#ffb7c5,#d4c5f9);transition:width .3s ease-out}
+.bp-progress-note{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink-soft)}
+
+/* ---- the offer / owned / sign-in row ---- */
+.bp-cta{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  padding:10px 14px;border:2.5px solid var(--ink);border-radius:14px;
+  background:linear-gradient(120deg,#f3e9ff,#ffe6f0 55%,#fff6d6);box-shadow:0 3px 0 var(--ink)}
+.bp-cta.owned{background:linear-gradient(120deg,#e2fbe9,#c8ffe4 60%,#fff6d6)}
+.bp-cta.quiet{background:rgba(255,255,255,.6)}
+.bp-cta-text{min-width:0;flex:1 1 auto;font-family:var(--disp);font-size:13px;font-weight:800;
+  letter-spacing:.04em;line-height:1.25;color:var(--ink)}
+.bp-cta-text small{display:block;margin-top:2px;font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink-soft)}
+.bp-cta .mini-btn{flex:none;min-height:44px;font-size:12px;background:linear-gradient(180deg,#fff2c9,#ffe08a)}
+
+/* ---- the track ---- */
+/* Scrolls inside the card rather than growing it: the labels are the first
+   child and stay pinned while the tiers slide under them. */
+.bp-ladder-wrap{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.bp-ladder{display:flex;gap:8px;overflow-x:auto;padding:8px 2px 10px;
+  -webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+.bp-lanes{flex:none;position:sticky;left:0;z-index:2;display:flex;flex-direction:column;gap:6px;
+  padding:2px 10px 2px 2px;
+  background:linear-gradient(90deg,rgba(255,248,240,.96) 72%,rgba(255,248,240,0))}
+.bp-lane-spacer{height:26px}
+.bp-lane-label{height:84px;display:flex;align-items:center;justify-content:center;
+  writing-mode:vertical-rl;transform:rotate(180deg);
+  font-family:var(--disp);font-size:9px;font-weight:800;letter-spacing:.22em}
+.bp-lane-free{color:#4f9d7a}
+.bp-lane-premium{color:#b0568e}
+.bp-tier{flex:none;width:88px;display:flex;flex-direction:column;gap:6px;scroll-snap-align:start}
+.bp-tier.final{width:104px}
+.bp-tier-num{height:26px;display:flex;align-items:center;justify-content:center;gap:3px;
+  border:2.5px solid transparent;border-radius:10px;
+  font-family:var(--disp);font-size:13px;font-weight:800;letter-spacing:.05em;color:var(--ink-soft)}
+.bp-tier.reached .bp-tier-num{color:var(--ink);background:rgba(255,255,255,.85);
+  border-color:var(--ink);box-shadow:0 2px 0 var(--ink)}
+.bp-tier.final .bp-tier-num{color:var(--ink);background:linear-gradient(180deg,#fff2c9,#ffe08a);
+  border-color:var(--ink);box-shadow:0 2px 0 var(--ink)}
+.bp-node{position:relative;height:84px;padding:7px 6px 8px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:3px;text-align:center;
+  border:2.5px solid var(--ink);border-radius:12px;background:rgba(255,255,255,.62);
+  box-shadow:0 3px 0 var(--ink)}
+.bp-node.bp-premium{background:linear-gradient(160deg,rgba(243,233,255,.92),rgba(255,230,240,.92))}
+.bp-glyph{font-size:20px;line-height:1}
+.bp-name{font-family:var(--disp);font-size:9px;font-weight:700;letter-spacing:.03em;line-height:1.18;
+  color:var(--ink);max-width:100%;max-height:2.36em;overflow:hidden;overflow-wrap:anywhere}
+.bp-badge{position:absolute;top:-7px;right:-7px;width:21px;height:21px;border-radius:50%;
+  border:2px solid var(--ink);display:flex;align-items:center;justify-content:center;
+  font-family:var(--disp);font-size:10px;font-weight:800;line-height:1;background:#fff;
+  box-shadow:0 2px 0 rgba(74,63,92,.4)}
+.bp-ready{position:absolute;left:0;right:0;bottom:0;padding:2px 0 3px;
+  border-radius:0 0 9px 9px;border-top:2px solid var(--ink);background:#7fe6b4;
+  font-family:var(--disp);font-size:7px;font-weight:800;letter-spacing:.16em;text-align:center;color:var(--ink)}
+/* locked: the tier is not reached yet — dimmed, padlock in the corner. */
+.bp-node.n-locked{background:rgba(255,255,255,.4)}
+.bp-node.n-locked .bp-glyph,.bp-node.n-locked .bp-name{opacity:.45;filter:saturate(.35)}
+.bp-node.n-locked .bp-badge{background:#e7ddf0}
+/* unlocked and waiting to be claimed: bright, ringed, with a READY strip. */
+.bp-node.n-ready{background:linear-gradient(180deg,#fffbe6,#ffefa8);
+  box-shadow:0 3px 0 var(--ink),0 0 0 3px rgba(127,230,180,.9)}
+.bp-node.bp-premium.n-ready{background:linear-gradient(160deg,#f3e9ff,#ffd9ec)}
+/* Claimed rewards are wearable inventory. The tick marks ownership and the
+   bottom strip makes the card's equip action explicit. */
+.bp-node.n-claimed{background:linear-gradient(180deg,#e2fbe9,#c8ffe4)}
+.bp-node.n-claimed .bp-glyph,.bp-node.n-claimed .bp-name{opacity:.72}
+.bp-node.n-claimed .bp-badge{background:#7fe6b4}
+.bp-node.can-equip{cursor:pointer;font:inherit;color:inherit}
+.bp-node.can-equip:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+/* premium-locked: the tier is reached but the pass is not owned. The reward
+   stays fully visible and gets a shimmer, because this node is the advert. */
+.bp-node.n-premium-locked{overflow:hidden;background:linear-gradient(160deg,#efe2ff,#ffd9ec)}
+.bp-node.n-premium-locked::after{content:'';position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(115deg,transparent 32%,rgba(255,255,255,.55) 47%,transparent 62%);
+  animation:bpShimmer 2.6s ease-in-out infinite}
+.bp-node.n-premium-locked .bp-badge{background:#ffe08a}
+@keyframes bpShimmer{0%,100%{transform:translateX(-75%)}50%{transform:translateX(75%)}}
+/* Tier 25 premium is the season's headline prize. */
+.bp-node.grand{background:linear-gradient(160deg,#fff2c9,#ffd3b6 55%,#ffb7c5);
+  box-shadow:0 3px 0 var(--ink),0 0 0 3px rgba(255,224,138,.95),0 0 18px rgba(255,180,120,.55)}
+.bp-node.grand .bp-glyph{font-size:26px}
+.bp-node.grand .bp-name{font-weight:800}
+.bp-foot{flex:none;text-align:center;font-family:var(--disp);font-size:10px;font-weight:700;
+  letter-spacing:.06em;color:var(--ink-soft)}
+/* The dialog takes focus when it opens; it should say so quietly rather than
+   draw a ring around the whole card. */
+.bp-card:focus{outline:none}
+.bp-card:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+#battlepass .mini-btn:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+
+/* A phone in portrait: the tiers narrow down, and the labels narrow with
+   them so the rows still line up. */
+@media(max-width:430px){
+  .bp-card{padding:12px 12px 14px}
+  .bp-tier{width:76px}
+  .bp-tier.final{width:90px}
+  .bp-node,.bp-lane-label{height:80px}
+  .bp-glyph{font-size:18px}
+  .bp-progress{gap:9px;padding:8px 10px}
+  .bp-tier-badge{width:48px;height:48px}
+  .bp-tier-badge b{font-size:19px}
+  .bp-cta-text{font-size:12px}
+}
+/* A phone held sideways: the card is over budget on height, so everything
+   shrinks its decoration and the card scrolls inside itself if it must. */
+@media(max-height:430px){
+  .bp-card{max-height:calc(100vh - 14px);padding:10px 12px 12px;gap:7px}
+  .bp-head h2{font-size:19px}
+  .bp-sub{font-size:10px}
+  .bp-progress{gap:9px;padding:6px 10px}
+  .bp-tier-badge{width:42px;height:42px}
+  .bp-tier-badge b{font-size:17px}
+  .bp-tier-badge small{font-size:7px}
+  .bp-xp-line{font-size:11px}
+  .bp-xp-line small{font-size:9px}
+  .bp-bar{height:12px}
+  .bp-cta{padding:7px 11px}
+  .bp-cta-text{font-size:11px}
+  .bp-cta-text small{font-size:9px}
+  .bp-tier{width:72px}
+  .bp-tier.final{width:86px}
+  .bp-tier-num{height:22px;font-size:11px}
+  .bp-lane-spacer{height:22px}
+  .bp-node,.bp-lane-label{height:64px}
+  .bp-node{padding:5px 5px 6px;border-radius:10px}
+  .bp-glyph{font-size:15px}
+  .bp-name{font-size:8px}
+  .bp-node.grand .bp-glyph{font-size:19px}
+  .bp-ladder{gap:6px;padding-top:6px}
+  .bp-lanes{gap:6px}
+}
+
 /* .screen's wash is tuned for the title and match-over cards, where there is
    nothing behind it worth reading. A killcam you cannot see through is not a
    killcam, so pull it back to a vignette for as long as one is running. The
@@ -931,6 +1105,9 @@ body.touch .touch-keys{display:flex}
       <button class="mini-btn locker-btn locker-store" id="storeOpen" type="button">
         <span aria-hidden="true">🧁</span><span>STORE</span>
       </button>
+      <button class="mini-btn locker-btn locker-pass" id="battlepassOpen" type="button">
+        <span aria-hidden="true">🎫</span><span>SEASON&nbsp;1</span>
+      </button>
       <div id="lockerNote" role="status" aria-live="polite"></div>
     </div>
     <label class="sens" for="sensRange">
@@ -1065,6 +1242,29 @@ body.touch .touch-keys{display:flex}
     </div>
     <div id="storeGrid"></div>
     </div>
+  </div>
+</div>
+
+<!-- Season 1 battle pass. A .screen dialog in the store's pattern: opened
+     from the locker row, closed by CLOSE, by Escape and by the wash, with
+     the title card made inert underneath. Everything below the header is
+     drawn by 82-store.js from /battlepass/me and the mirrored ladder. -->
+<div class="screen off" id="battlepass" role="dialog" aria-modal="true" aria-labelledby="bpTitle">
+  <div class="bp-card panel" tabindex="-1">
+    <div class="bp-head">
+      <div class="bp-head-text">
+        <h2 id="bpTitle">SEASON 1 <em>FIRST LIGHT</em></h2>
+        <div class="bp-sub" id="bpSeason"></div>
+      </div>
+      <button class="mini-btn" id="bpClose" type="button">CLOSE</button>
+    </div>
+    <div id="bpNote" role="status" aria-live="polite"></div>
+    <div class="bp-progress" id="bpProgress"></div>
+    <div class="bp-cta" id="bpCta"></div>
+    <div class="bp-ladder-wrap">
+      <div class="bp-ladder" id="bpLadder"></div>
+    </div>
+    <div class="bp-foot">A confirmed match is 500 XP — three matches a day for the whole season reaches tier 25.</div>
   </div>
 </div>
 
@@ -5457,6 +5657,146 @@ const WEAPON_SKINS = {
         gradient: { axis: 'y', from: Cx(c.grip, 0.86), to: Cx(c.body, 1.10) }
       });                                                                    // shoulder end
     }
+  },
+
+  /* Season 1 battle-pass weapon skins. Palette-only recolors of the default
+     silhouettes — same toy shapes, town pastels, no custom geometry. Each
+     entry still carries weapon / name / col / flash / tracer so weaponForSkin
+     and the viewmodel dress them the same way as the shop skins. */
+  's1-free-smg-first-light': {
+    weapon: 'smg', name: 'First Light Blush',
+    col: { body: 0xf4a8b8, accent: 0xffe29a, metal: 0xf0e6d8, grip: 0x7a6a8e },
+    flash: 0xffe8b0, tracer: 0xffc0d0
+  },
+  's1-free-smg-bus-stop': {
+    weapon: 'smg', name: 'Bus Stop',
+    col: { body: 0x7ec8e8, accent: 0xffc478, metal: 0xe8e0f0, grip: 0x5a6a7a },
+    flash: 0xffd8a0, tracer: 0x90d0f0
+  },
+  's1-free-smg-garden-wall': {
+    weapon: 'smg', name: 'Garden Wall',
+    col: { body: 0x4ec878, accent: 0xf060a0, metal: 0xe8f0e0, grip: 0x5a7060 },
+    flash: 0xd0f0c0, tracer: 0xa0e0b8
+  },
+  's1-free-smg-pocket-sun': {
+    weapon: 'smg', name: 'Pocket Sun',
+    col: { body: 0xffc86a, accent: 0xff8a9a, metal: 0xfff0d0, grip: 0x8a6a50 },
+    flash: 0xffe090, tracer: 0xffd070
+  },
+  's1-free-smg-little-rocket': {
+    weapon: 'smg', name: 'Little Rocket',
+    col: { body: 0xd090e8, accent: 0x90e0f0, metal: 0xf0e8ff, grip: 0x605078 },
+    flash: 0xe8c0ff, tracer: 0xc8a0f0
+  },
+  's1-premium-smg-first-light': {
+    weapon: 'smg', name: 'First Light Gold',
+    col: { body: 0xf090a8, accent: 0xffd070, metal: 0xfff4e0, grip: 0x6a5080 },
+    flash: 0xffe8a0, tracer: 0xffa0b8
+  },
+  's1-premium-smg-candy-grid': {
+    weapon: 'smg', name: 'Candy Grid',
+    col: { body: 0xff8ab0, accent: 0x70e0d0, metal: 0xffe8f0, grip: 0x704060 },
+    flash: 0xffb0d0, tracer: 0xff90b8
+  },
+  's1-premium-smg-berry-static': {
+    weapon: 'smg', name: 'Berry Static',
+    col: { body: 0xc060a0, accent: 0x90d0ff, metal: 0xe8d0f0, grip: 0x503858 },
+    flash: 0xe090c8, tracer: 0xd070b0
+  },
+  's1-premium-smg-prism-check': {
+    weapon: 'smg', name: 'Prism Check',
+    col: { body: 0xa090e8, accent: 0xffb070, metal: 0xf0e8ff, grip: 0x504870 },
+    flash: 0xd0c0ff, tracer: 0xb0a0f0
+  },
+  's1-premium-smg-royal-sherbet': {
+    weapon: 'smg', name: 'Royal Sherbet',
+    col: { body: 0xff90a0, accent: 0xffd060, metal: 0xffe8d0, grip: 0x784858 },
+    flash: 0xffc080, tracer: 0xffa888
+  },
+  's1-free-shotgun-cloud-nine': {
+    weapon: 'shotgun', name: 'Cloud Nine',
+    col: { body: 0x70b0f0, accent: 0xff6088, metal: 0xf0f4ff, grip: 0x7080a0 },
+    flash: 0xffd0d8, tracer: 0xb0d0f0
+  },
+  's1-free-shotgun-tiny-teapot': {
+    weapon: 'shotgun', name: 'Tiny Teapot',
+    col: { body: 0x90a0e0, accent: 0xf0c070, metal: 0xe8e0f8, grip: 0x7a6048 },
+    flash: 0xffd890, tracer: 0xa0b0f0
+  },
+  's1-free-shotgun-sherbet-streak': {
+    weapon: 'shotgun', name: 'Sherbet Streak',
+    col: { body: 0xffb070, accent: 0xff90b0, metal: 0xfff0d8, grip: 0x886050 },
+    flash: 0xffd090, tracer: 0xffb888
+  },
+  's1-free-shotgun-almost-there': {
+    weapon: 'shotgun', name: 'Almost There',
+    col: { body: 0x50d088, accent: 0xe050b0, metal: 0xe8f8f0, grip: 0x587068 },
+    flash: 0xd0f0d8, tracer: 0xa0d8b0
+  },
+  's1-premium-shotgun-peach-frost': {
+    weapon: 'shotgun', name: 'Peach Frost',
+    col: { body: 0xffb090, accent: 0xa0d8f0, metal: 0xfff0e8, grip: 0x806058 },
+    flash: 0xffd0b0, tracer: 0xffb8a0
+  },
+  's1-premium-shotgun-moon-mallow': {
+    weapon: 'shotgun', name: 'Moon Mallow',
+    col: { body: 0x9080e0, accent: 0xf0a050, metal: 0xf8f0ff, grip: 0x686080 },
+    flash: 0xffe0c0, tracer: 0xc8c0e8
+  },
+  's1-premium-shotgun-gilded-cloud': {
+    weapon: 'shotgun', name: 'Gilded Cloud',
+    col: { body: 0xe8d090, accent: 0x90c0e8, metal: 0xfff8e0, grip: 0x786848 },
+    flash: 0xffe8a0, tracer: 0xe0d080
+  },
+  's1-premium-shotgun-starlight': {
+    weapon: 'shotgun', name: 'Starlight',
+    col: { body: 0xb0a0e0, accent: 0xffe090, metal: 0xf0e8ff, grip: 0x585070 },
+    flash: 0xfff0b0, tracer: 0xc0b0f0
+  },
+  's1-premium-shotgun-aurora-crown': {
+    weapon: 'shotgun', name: 'Aurora Crown',
+    col: { body: 0x70d0b8, accent: 0xd090e0, metal: 0xe0f8f0, grip: 0x406860 },
+    flash: 0xa0f0d8, tracer: 0x80e0c8
+  },
+  's1-free-rifle-sunny-side': {
+    weapon: 'rifle', name: 'Sunny Side',
+    col: { body: 0xffc070, accent: 0x80d0e8, metal: 0xfff0d8, grip: 0x786050 },
+    flash: 0xffe0a0, tracer: 0xffd080
+  },
+  's1-free-rifle-pastel-stripe': {
+    weapon: 'rifle', name: 'Pastel Stripe',
+    col: { body: 0xb060e0, accent: 0x40d090, metal: 0xf0e8f8, grip: 0x685878 },
+    flash: 0xe0c0f0, tracer: 0xc8a0e0
+  },
+  's1-free-rifle-tower-watch': {
+    weapon: 'rifle', name: 'Tower Watch',
+    col: { body: 0x80b0d0, accent: 0xffb080, metal: 0xe0e8f0, grip: 0x485868 },
+    flash: 0xb0d0e8, tracer: 0x90c0d8
+  },
+  's1-free-rifle-final-lap': {
+    weapon: 'rifle', name: 'Final Lap',
+    col: { body: 0xf08090, accent: 0x80e0c0, metal: 0xffe8e8, grip: 0x704850 },
+    flash: 0xffb0b8, tracer: 0xf090a0
+  },
+  's1-free-rifle-season-one': {
+    weapon: 'rifle', name: 'Season One',
+    col: { body: 0xb090d8, accent: 0xf0c070, metal: 0xf0e8ff, grip: 0x584870 },
+    flash: 0xd8c0f0, tracer: 0xc0a0e0
+  },
+  's1-premium-rifle-sky-ribbon': {
+    weapon: 'rifle', name: 'Sky Ribbon',
+    col: { body: 0x70c0e8, accent: 0xff90b0, metal: 0xe0f0ff, grip: 0x406070 },
+    flash: 0xa0d8f0, tracer: 0x80c8e8
+  },
+  's1-premium-rifle-midnight-bloom': {
+    weapon: 'rifle', name: 'Midnight Bloom',
+    col: { body: 0x5840c0, accent: 0xf040a0, metal: 0xd0c8e8, grip: 0x403858 },
+    flash: 0xb0a0e0, tracer: 0x9080c8
+  },
+  's1-premium-rifle-sunset-glass': {
+    weapon: 'rifle', name: 'Sunset Glass',
+    col: { body: 0xe07080, accent: 0xf0b060, metal: 0xffe0d8, grip: 0x684048 },
+    flash: 0xffa090, tracer: 0xf08090
   }
 };
 
@@ -5880,6 +6220,70 @@ const CHARACTER_SKINS = {
     name: 'Cloud Knight',
     col: { plate: 0xf7fbff, shade: 0xc6dcf0, gold: 0xffd9a8,
            visor: 0x40395a, glow: 0xa9ecff }
+  },
+
+  /* Season 1 battle-pass characters. Each reuses one of the three shop
+     creature geometries (fox / knight / robot) with a new pastel colourway
+     so the mesh still fills the hit envelope and jersey share rules. */
+  's1-free-char-pink-horizon': {
+    name: 'Pink Horizon',
+    col: { fur: 0xf090a8, deep: 0xd07088, cream: 0xffe8f0,
+           nose: 0x5a4060, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
+  },
+  's1-free-char-blue-bird': {
+    name: 'Blue Bird',
+    col: { shell: 0x7ab0e0, deep: 0x5080b0, dark: 0x3a4868,
+           glow: 0xa0f0e8, lens: 0x2a3050 }
+  },
+  's1-free-char-nuketown-night': {
+    name: 'Nuketown Night',
+    col: { plate: 0xd0d8f0, shade: 0x90a0c8, gold: 0xc0a0e8,
+           visor: 0x303050, glow: 0xb0c0ff }
+  },
+  's1-free-char-cotton-cadet': {
+    name: 'Cotton Cadet',
+    col: { shell: 0xe8d0e8, deep: 0xb0a0c0, dark: 0x584868,
+           glow: 0xffd0e0, lens: 0x3a3050 }
+  },
+  's1-free-char-golden-ticket': {
+    name: 'Golden Ticket',
+    col: { fur: 0xf0c070, deep: 0xd09840, cream: 0xfff4d8,
+           nose: 0x5a4850, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
+  },
+  's1-premium-char-sunrise-scout': {
+    name: 'Sunrise Scout',
+    col: { fur: 0xffa070, deep: 0xe07848, cream: 0xfff0d8,
+           nose: 0x5a4050, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
+  },
+  's1-premium-char-lilac-guard': {
+    name: 'Lilac Guard',
+    col: { plate: 0xe8d8f8, shade: 0xb0a0d0, gold: 0xffd0a0,
+           visor: 0x403860, glow: 0xd0b0ff }
+  },
+  's1-premium-char-neon-nap': {
+    name: 'Neon Nap',
+    col: { shell: 0x70e0c0, deep: 0x40b090, dark: 0x305850,
+           glow: 0xff90c0, lens: 0x2a4040 }
+  },
+  's1-premium-char-starlight-runner': {
+    name: 'Starlight Runner',
+    col: { plate: 0xf0f0ff, shade: 0xc0c8f0, gold: 0xffe090,
+           visor: 0x383050, glow: 0xfff0b0 }
+  },
+  's1-premium-char-cobalt-captain': {
+    name: 'Cobalt Captain',
+    col: { shell: 0x5080d0, deep: 0x3050a0, dark: 0x283050,
+           glow: 0x70e0ff, lens: 0x1a2040 }
+  },
+  's1-premium-char-dream-warden': {
+    name: 'Dream Warden',
+    col: { plate: 0xe0d0f0, shade: 0xa090c8, gold: 0xffb0d0,
+           visor: 0x403858, glow: 0xe0b0ff }
+  },
+  's1-premium-char-season-one-legend': {
+    name: 'Season One Legend',
+    col: { fur: 0xe080c0, deep: 0xb05090, cream: 0xffe8f8,
+           nose: 0x503858, eye: 0xfffdf8, pupil: 0x4a3f5c, mouth: 0xe8a0a8 }
   }
 };
 
@@ -6146,7 +6550,20 @@ const ROBOT_PARTS = {
 const SKIN_PARTS = {
   'char-midnight': ROBOT_PARTS,
   'char-sherbetfox': FOX_PARTS,
-  'char-cloudknight': KNIGHT_PARTS
+  'char-cloudknight': KNIGHT_PARTS,
+  /* Season 1 recolors: fox / robot / knight geometries, not new silhouettes. */
+  's1-free-char-pink-horizon': FOX_PARTS,
+  's1-free-char-blue-bird': ROBOT_PARTS,
+  's1-free-char-nuketown-night': KNIGHT_PARTS,
+  's1-free-char-cotton-cadet': ROBOT_PARTS,
+  's1-free-char-golden-ticket': FOX_PARTS,
+  's1-premium-char-sunrise-scout': FOX_PARTS,
+  's1-premium-char-lilac-guard': KNIGHT_PARTS,
+  's1-premium-char-neon-nap': ROBOT_PARTS,
+  's1-premium-char-starlight-runner': KNIGHT_PARTS,
+  's1-premium-char-cobalt-captain': ROBOT_PARTS,
+  's1-premium-char-dream-warden': KNIGHT_PARTS,
+  's1-premium-char-season-one-legend': FOX_PARTS
 };
 
 function partMesh(build, withLines) {
@@ -7390,6 +7807,98 @@ const SHOT_EFFECTS = {
     wake:   { sys: 'bead', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
     muzzle: { count: 3, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
     burst:  { sys: 'bead', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50] }
+  },
+
+  /* Season 1 battle-pass shot effects. Same particle budgets and pool
+     systems as the shop three — new pastels only, so fairness bounds still
+     hold. */
+  's1-free-fx-paper-star': {
+    name: 'Paper Star',
+    muzzleTint: C(0xffd0a0),
+    colors: [0xd0a080, 0xe0b090, 0xc89870],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
+  },
+  's1-free-fx-soft-confetti': {
+    name: 'Soft Confetti',
+    muzzleTint: C(0xffd0e0),
+    colors: [0xe090b0, 0x90d0b0, 0xe0c080, 0xa0b8e0, 0xd0a0d0],
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  's1-free-fx-glass-drop': {
+    name: 'Glass Drop',
+    muzzleTint: C(0xb0e8f0),
+    colors: [0x60b0b8, 0x70b8c0, 0x80c0c8],
+    wake:   { sys: 'bead', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
+    muzzle: { count: 3, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
+    burst:  { sys: 'bead', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50] }
+  },
+  's1-free-fx-lucky-thirteen': {
+    name: 'Lucky Thirteen',
+    muzzleTint: C(0xd0f0a0),
+    colors: [0x88b868, 0x98c878, 0x78a858],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
+  },
+  's1-free-fx-paper-petals': {
+    name: 'Paper Petals',
+    muzzleTint: C(0xffc0d0),
+    colors: [0xd08098, 0xe090a8, 0xc07088, 0xe0a0b0],
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  's1-free-fx-house-party': {
+    name: 'House Party',
+    muzzleTint: C(0xffe0a0),
+    colors: [0xe09880, 0xd0a870, 0xc08098, 0x80b8a0, 0xa090c8],
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  's1-premium-fx-dawn-sparks': {
+    name: 'Dawn Sparks',
+    muzzleTint: C(0xffc890),
+    colors: [0xd0a070, 0xe0b080, 0xc09860],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
+  },
+  's1-premium-fx-prism-pop': {
+    name: 'Prism Pop',
+    muzzleTint: C(0xd0b0ff),
+    colors: [0xa088d0, 0x80c0d0, 0xd088b0, 0xd0b878],
+    wake:   { sys: 'conf', count: 4, jitter: 0.10, sway: 1.5, rise: [0.4, 2.0], life: [0.22, 0.34] },
+    muzzle: { count: 6, out: [1.2, 2.8], sway: 1.8, rise: [1.0, 2.6], life: [0.26, 0.40] },
+    burst:  { sys: 'conf', count: 10, push: [2.6, 5.4], lift: [2.0, 4.2], life: [0.40, 0.62] }
+  },
+  's1-premium-fx-comet-tail': {
+    name: 'Comet Tail',
+    muzzleTint: C(0xb0d0ff),
+    colors: [0x7090c8, 0x80a0d0, 0x90b0d8],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
+  },
+  's1-premium-fx-aurora-trail': {
+    name: 'Aurora Trail',
+    muzzleTint: C(0xa0f0d0),
+    colors: [0x50b0a0, 0x60b8a8, 0x70c0b0],
+    wake:   { sys: 'bead', count: 4, jitter: 0.05, sway: 0.30, rise: [0.5, 1.2], life: [0.30, 0.44] },
+    muzzle: { count: 3, out: [0.4, 1.2], sway: 0.6, rise: [0.8, 1.8], life: [0.30, 0.44] },
+    burst:  { sys: 'bead', count: 4, push: [1.2, 2.8], lift: [1.0, 2.4], life: [0.34, 0.50] }
+  },
+  's1-premium-fx-crown-burst': {
+    name: 'Crown Burst',
+    muzzleTint: C(0xffe090),
+    colors: [0xd0b070, 0xe0c080, 0xc0a060, 0xe8c890],
+    wake:   { sys: 'star', count: 5, jitter: 0.045, sway: 0.5, rise: [1.4, 2.9], life: [0.26, 0.40] },
+    muzzle: { count: 4, out: [0.6, 1.6], sway: 1.0, rise: [1.2, 2.4], life: [0.22, 0.34] },
+    burst:  { sys: 'star', count: 8, push: [2.0, 4.4], lift: [2.2, 4.0], life: [0.40, 0.62] }
   }
 };
 
@@ -13553,7 +14062,9 @@ const ACCOUNT = {
   tokenOrigin: null,    // the relay that issued it; it is never shown to another
   expiresAt: 0,         // 0 when the relay did not say
   user: null,           // { userId, email, displayName } once /auth/me confirms it
-  owned: new Set(),     // entitlement ids, only ever straight from the relay
+  entitlements: new Set(), // paid product ids, straight from the relay
+  earned: new Set(),    // active battle-pass claim ids, straight from the relay
+  owned: new Set(),     // the equip answer: paid entitlements plus active claims
   items: null,          // last /shop/catalog answer, or null if we have never had one
   checkingOut: false,
   lastRefresh: 0,
@@ -13898,10 +14409,13 @@ function storeForgetToken() {
    in and the look comes back; it was never the thing being owned. */
 function storeSetSignedOut() {
   ACCOUNT.user = null;
+  ACCOUNT.entitlements = new Set();
+  ACCOUNT.earned = new Set();
   ACCOUNT.owned = new Set();
   storeApplyEquipped();
   storeRenderAccount();
   storeRenderGrid();
+  battlepassRender();
 }
 
 function storeCleanEntitlements(value) {
@@ -13910,6 +14424,10 @@ function storeCleanEntitlements(value) {
   for (const id of value.slice(0, 64))
     if (typeof id === 'string' && id && id.length <= 120) owned.add(id);
   return owned;
+}
+
+function storeRebuildOwned() {
+  ACCOUNT.owned = new Set([...ACCOUNT.entitlements, ...ACCOUNT.earned]);
 }
 
 /* The cached token is a guess; this is the answer, and it is asked again on
@@ -13937,10 +14455,15 @@ function storeRefreshMe() {
         ? body.displayName.trim().slice(0, 40)
         : (typeof body.email === 'string' ? body.email.split('@')[0].slice(0, 40) : 'PLAYER')
     };
-    ACCOUNT.owned = storeCleanEntitlements(body.entitlements);
+    ACCOUNT.entitlements = storeCleanEntitlements(body.entitlements);
+    ACCOUNT.earned = storeCleanEntitlements(body.earnedRewards);
+    storeRebuildOwned();
     storeApplyEquipped();
     storeRenderAccount();
     storeRenderGrid();
+    /* A sign-in that lands while the pass screen is up has to show up there
+       too — it is the difference between the signed-out ladder and a tier. */
+    if (battlepassIsOpen()) battlepassRefresh();
     return true;
   }, () => {
     if (storeStale(session)) return false;
@@ -14121,16 +14644,28 @@ function storeSignOut() {
    WHAT IS EQUIPPED
    ===================================================================== */
 
-/* Which slot an id can go in. The nine are known here, and anything the relay
-   adds later still works as long as a weapon id starts with the gun it is
-   for — which is the shape the whole catalog is already in. */
+/* Which slot an id can go in. Shop ids come from STORE_BY_ID. Earned ids are
+   accepted only when they occur in the mirrored battle-pass ladder, then their
+   explicit kind token supplies the character/effect/weapon slot. */
 function storeSlotOf(id, type) {
   const known = STORE_BY_ID.get(id);
-  const kind = known ? known.type : type;
+  let rewardKind = null;
+  if (!known && typeof id === 'string') {
+    for (const pair of BP_REWARDS) {
+      if (pair.free === id || pair.premium === id) {
+        rewardKind = bpRewardKind(id);
+        break;
+      }
+    }
+  }
+  const kind = known ? known.type
+    : (rewardKind === 'char' ? 'character'
+      : (rewardKind === 'fx' ? 'effect'
+        : (STORE_SLOTS.indexOf(rewardKind) >= 0 ? 'weapon' : type)));
   if (kind === 'character') return { kind: 'character' };
   if (kind === 'effect') return { kind: 'effect' };
   if (kind !== 'weapon' || typeof id !== 'string') return null;
-  const slot = id.split('-')[0];
+  const slot = rewardKind || id.split('-')[0];
   return STORE_SLOTS.indexOf(slot) >= 0 ? { kind: 'weapon', slot: slot } : null;
 }
 
@@ -14154,8 +14689,9 @@ function storeReadEquipPrefs() {
 
 /* Equipped is a preference and lives in localStorage; owning the thing is
    not, and lives on the server. So the stored choice is filtered through
-   whatever entitlements the relay just handed us, and anything that is not
-   on that list drops out of the live selection without a word. It stays in
+   the paid entitlements and active earned claims the relay just handed us,
+   and anything that is not in their union drops out of the live selection.
+   It stays in
    storage though — a player who signs out, or who loads the page while the
    relay is down, gets their look back the moment the server confirms it
    again, rather than silently losing a setting to a bad minute. */
@@ -14291,9 +14827,10 @@ function storeRefreshCatalog() {
        as "you own nothing" for ids the catalog did not mention. */
     if (storeSignedIn()) {
       for (const item of items) {
-        if (item.owned) ACCOUNT.owned.add(item.id);
-        else ACCOUNT.owned.delete(item.id);
+        if (item.owned) ACCOUNT.entitlements.add(item.id);
+        else ACCOUNT.entitlements.delete(item.id);
       }
+      storeRebuildOwned();
       storeApplyEquipped();
     }
     storeRenderGrid();
@@ -15251,9 +15788,18 @@ function storeLockerNote(text) {
 
 function storeNote(text, kind) {
   const el = document.getElementById('storeNote');
-  if (!el) return;
-  el.textContent = text || '';
-  el.dataset.kind = kind || '';
+  if (el) {
+    el.textContent = text || '';
+    el.dataset.kind = kind || '';
+  }
+  /* While the battle pass screen is the one on top, store messages — the
+     checkout ones above all — land on its own note line instead of on a
+     store panel the player is not looking at. */
+  const bp = document.getElementById('bpNote');
+  if (bp && battlepassIsOpen()) {
+    bp.textContent = text || '';
+    bp.dataset.kind = kind || '';
+  }
 }
 
 function storeRenderAccount() {
@@ -15391,6 +15937,10 @@ function storeRenderGrid() {
      taken once, off the next frame. */
   stageFillThumbs();
   stageThumbsSoon(items);
+
+  /* The pass screen's buy row depends on the same moving parts the grid
+     does — the catalog and the checkout state — so it redraws with them. */
+  if (battlepassIsOpen()) battlepassRenderCta();
 }
 
 /* =====================================================================
@@ -15536,11 +16086,22 @@ function initStore() {
   /* The wash around the card is a way out on a phone, where CLOSE sits at the
      top of a tall panel and a thumb is already at the bottom. */
   if (panel) panel.addEventListener('click', e => { if (e.target === panel) storeShow(false); });
+  /* The battle pass screen is the store's pattern a second time: the same
+     open, the same three ways out, the same trap. */
+  const bpOpen = document.getElementById('battlepassOpen');
+  const bpClose = document.getElementById('bpClose');
+  const bpPanel = document.getElementById('battlepass');
+  if (bpOpen) bpOpen.addEventListener('click', () => battlepassShow(true));
+  if (bpClose) bpClose.addEventListener('click', () => { battlepassShow(false); if (typeof SFX === 'object' && SFX) SFX.ui(); });
+  if (bpPanel) bpPanel.addEventListener('click', e => { if (e.target === bpPanel) battlepassShow(false); });
+
   /* Escape is the other way out. Nothing else claims it here — the store only
-     opens from the title menu, and the pause card's Escape handling is behind
-     a started match. */
+      opens from the title menu, and the pause card's Escape handling is behind
+      a started match. */
   addEventListener('keydown', e => { if (e.code === 'Escape' && storeIsOpen()) storeShow(false); });
+  addEventListener('keydown', e => { if (e.code === 'Escape' && battlepassIsOpen()) battlepassShow(false); });
   addEventListener('keydown', storeTrapFocus);
+  addEventListener('keydown', bpTrapFocus);
   /* The sign-in popup posts the token back here and closes itself. */
   addEventListener('message', storeOnAuthMessage);
 
@@ -15554,11 +16115,21 @@ function initStore() {
      in a window of its own and this page never goes anywhere. */
   if (storeSessionRead(STORE_RETURN_KEY)) {
     storeSessionErase(STORE_RETURN_KEY);
-    storeShow(true);
-  } else if (ACCOUNT.token) {
-    /* Entitlements are wanted on every load whether or not the panel is
-       opened, because they are what decides what EQUIPPED may hold. */
-    storeRefreshMe();
+    /* A checkout that was started from the pass screen lands back on the
+       pass screen, which is where the purchase shows up; any other checkout
+       lands on the store, the way it always did. */
+    if (bpReturnPending()) battlepassShow(true);
+    else storeShow(true);
+  } else {
+    /* This load is not a checkout return, so a leftover pass marker — a
+       checkout that failed to open, say — is spent here rather than waiting
+       to hijack a later, unrelated return. */
+    bpReturnPending();
+    if (ACCOUNT.token) {
+      /* Entitlements are wanted on every load whether or not the panel is
+         opened, because they are what decides what EQUIPPED may hold. */
+      storeRefreshMe();
+    }
   }
 
   /* The other shape of the same trip: a checkout that opened in another tab,
@@ -15576,12 +16147,675 @@ function initStore() {
     if (!storeIsOpen() && !ACCOUNT.user) return;
     if (Date.now() - ACCOUNT.lastRefresh < 5000) return;
     ACCOUNT.lastRefresh = Date.now();
-    /* With the panel shut, entitlements are the only part that matters —
-       nothing is drawing prices. */
-    if (storeIsOpen()) storeRefreshAll(); else storeRefreshMe();
+    /* With both panels shut, entitlements are the only part that matters —
+       nothing is drawing prices. The pass screen draws the premium offer,
+       so an open one re-asks the catalog the way an open store does. */
+    if (storeIsOpen() || battlepassIsOpen()) storeRefreshAll(); else storeRefreshMe();
   };
   document.addEventListener('visibilitychange', wake);
   addEventListener('pageshow', wake);
+}
+
+/* =====================================================================
+   SEASON 1 BATTLE PASS
+
+   The screen the locker row's SEASON 1 button opens. It is the store's
+   pattern a second time — a .screen dialog, opened from the title card,
+   closed by CLOSE, by Escape and by the wash — drawn from two inputs:
+
+   The server's: GET /battlepass/me answers with the player's xp, tier,
+   premium flag and claimed rewards. It is asked through storeAPI, a 401
+   is the ordinary signed-out answer, and any other failure leaves the
+   ladder standing read-only instead of breaking the screen.
+
+   The mirror's: the 25-tier ladder below is copied from the server's
+   season1.mjs because the client is not sent it. The mirror is only
+   shape — which rewards sit at which tier — so state (what is reached,
+   what is claimed, whether the pass is owned) is never read out of it.
+   Reward ids resolve to the engine's existing cosmetic renderers; pass state
+   remains keyed by tier and lane, and an unrecognised id still draws a card.
+   ===================================================================== */
+
+const BP_PRODUCT_ID = 'battlepass-season-1-premium';
+/* Checkout takes the whole browser, so coming back is a fresh load. This
+   marker says the trip started on the pass screen, and is the same shape
+   as the store's return marker, ten-minute life included: a marker older
+   than that belongs to a checkout nobody is still coming back from. */
+const BP_RETURN_KEY = 'pastel-nuketown-battlepass-open';
+const BP_RETURN_TTL = 600000;
+
+/* Cumulative XP to REACH each tier, tier 1 through tier 25, verbatim from
+   season1.mjs. A relay-confirmed match is 500 XP, so three matches a day
+   for all thirty days is 45,000 XP — exactly the top tier. */
+const BP_XP_THRESHOLDS = [
+  600, 1300, 2100, 3000, 4000,
+  5100, 6300, 7600, 9000, 10500,
+  12100, 13800, 15600, 17500, 19500,
+  21600, 23800, 26100, 28500, 31000,
+  33600, 36300, 39100, 42000, 45000
+];
+
+/* [tier]'s free reward and premium reward, verbatim from season1.mjs. */
+const BP_REWARDS = [
+  { free: 's1-free-smg-first-light',       premium: 's1-premium-smg-first-light' },
+  { free: 's1-free-fx-paper-star',         premium: 's1-premium-fx-dawn-sparks' },
+  { free: 's1-free-char-pink-horizon',     premium: 's1-premium-char-sunrise-scout' },
+  { free: 's1-free-shotgun-cloud-nine',    premium: 's1-premium-shotgun-peach-frost' },
+  { free: 's1-free-fx-soft-confetti',      premium: 's1-premium-rifle-sky-ribbon' },
+  { free: 's1-free-shotgun-tiny-teapot',   premium: 's1-premium-char-lilac-guard' },
+  { free: 's1-free-smg-bus-stop',          premium: 's1-premium-fx-prism-pop' },
+  { free: 's1-free-char-blue-bird',        premium: 's1-premium-smg-candy-grid' },
+  { free: 's1-free-rifle-sunny-side',      premium: 's1-premium-shotgun-moon-mallow' },
+  { free: 's1-free-rifle-pastel-stripe',   premium: 's1-premium-char-neon-nap' },
+  { free: 's1-free-fx-glass-drop',         premium: 's1-premium-fx-comet-tail' },
+  { free: 's1-free-char-nuketown-night',   premium: 's1-premium-smg-berry-static' },
+  { free: 's1-free-fx-lucky-thirteen',     premium: 's1-premium-char-starlight-runner' },
+  { free: 's1-free-smg-garden-wall',       premium: 's1-premium-shotgun-gilded-cloud' },
+  { free: 's1-free-fx-paper-petals',       premium: 's1-premium-rifle-midnight-bloom' },
+  { free: 's1-free-smg-pocket-sun',        premium: 's1-premium-char-cobalt-captain' },
+  { free: 's1-free-shotgun-sherbet-streak', premium: 's1-premium-fx-aurora-trail' },
+  { free: 's1-free-rifle-tower-watch',     premium: 's1-premium-smg-prism-check' },
+  { free: 's1-free-fx-house-party',        premium: 's1-premium-shotgun-starlight' },
+  { free: 's1-free-char-cotton-cadet',     premium: 's1-premium-rifle-sunset-glass' },
+  { free: 's1-free-smg-little-rocket',     premium: 's1-premium-fx-crown-burst' },
+  { free: 's1-free-rifle-final-lap',       premium: 's1-premium-char-dream-warden' },
+  { free: 's1-free-char-golden-ticket',    premium: 's1-premium-smg-royal-sherbet' },
+  { free: 's1-free-shotgun-almost-there',  premium: 's1-premium-shotgun-aurora-crown' },
+  { free: 's1-free-rifle-season-one',      premium: 's1-premium-char-season-one-legend' }
+];
+
+/* Kind token → card glyph and caption. Only the five tokens the engine can
+   draw: three weapon slots, characters, and shot effects. */
+const BP_KINDS = {
+  smg:     { glyph: '🫧', label: 'SMG skin' },
+  shotgun: { glyph: '🍡', label: 'Shotgun skin' },
+  rifle:   { glyph: '🍭', label: 'Rifle skin' },
+  char:    { glyph: '🧸', label: 'Character skin' },
+  fx:      { glyph: '✨', label: 'Shot effect' }
+};
+const BP_KIND_TOKENS = Object.keys(BP_KINDS);
+
+const BATTLEPASS = {
+  me: null,             // last cleaned /battlepass/me answer, or null
+  fetching: false,
+  timer: 0,             // countdown ticker; only runs while the screen is open
+  focusOpener: null,    // where focus goes back when the screen closes
+  pendingScroll: false  // centre the track on the player's tier at next render
+};
+
+/* The server's answer, checked field by field before anything renders from
+   it. A body that does not fit is a null, which the screen draws as a
+   read-only ladder rather than as a crash. */
+function bpCleanMe(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const status = body.status === 'not-yet-active' || body.status === 'active' ||
+    body.status === 'ended' ? body.status : null;
+  if (!status) return null;
+  const int = (v, lo, hi, fallback) => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
+    const n = Math.floor(v);
+    return n < lo ? lo : (n > hi ? hi : n);
+  };
+  const at = v => {
+    const ms = typeof v === 'string' ? Date.parse(v) : NaN;
+    return Number.isFinite(ms) ? ms : null;
+  };
+  const claimed = new Set();
+  const earned = new Set();
+  if (Array.isArray(body.claimedRewards)) {
+    for (const entry of body.claimedRewards.slice(0, 64)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const tier = int(entry.tier, 1, BP_REWARDS.length, 0);
+      const lane = entry.lane === 'free' || entry.lane === 'premium' ? entry.lane : null;
+      const expected = tier && lane ? BP_REWARDS[tier - 1][lane] : null;
+      if (tier && lane && entry.rewardId === expected) {
+        claimed.add(tier + ':' + lane);
+        earned.add(expected);
+      }
+    }
+  }
+  return {
+    seasonId: typeof body.seasonId === 'string' ? body.seasonId.slice(0, 60) : '',
+    status: status,
+    startsAt: at(body.startsAt),
+    endsAt: at(body.endsAt),
+    xp: int(body.xp, 0, 1000000000, 0),
+    tier: int(body.tier, 0, BP_REWARDS.length, 0),
+    /* -1 marks a number the server did not send properly; bpXpToNext reads
+       it and falls back to the mirrored thresholds. null is the real
+       tier-25 answer and passes through untouched. */
+    xpToNextTier: body.xpToNextTier === null ? null : int(body.xpToNextTier, 0, 1000000000, -1),
+    premium: body.premium === true,
+    claimed: claimed,
+    earned: earned
+  };
+}
+
+/* Signed out there is no season state — the ladder is a preview — so every
+   renderer asks here instead of reading BATTLEPASS.me directly. */
+function bpMe() { return storeSignedIn() ? BATTLEPASS.me : null; }
+
+function battlepassIsOpen() {
+  const panel = document.getElementById('battlepass');
+  return !!panel && !panel.classList.contains('off');
+}
+
+/* The server's status, corrected by the clock. A tab left open across the
+   season's edge would otherwise keep saying "2d left" or "starts soon"
+   until the next refresh; this only moves the text, and only forward. */
+function bpEffectiveStatus(me, now) {
+  if (me.status === 'not-yet-active' && me.startsAt !== null && now >= me.startsAt) return 'active';
+  if (me.status === 'active' && me.endsAt !== null && now >= me.endsAt) return 'ended';
+  return me.status;
+}
+
+function bpXpToNext(me) {
+  if (me.tier >= BP_REWARDS.length) return null;
+  if (typeof me.xpToNextTier === 'number' && me.xpToNextTier >= 0) return me.xpToNextTier;
+  return Math.max(0, BP_XP_THRESHOLDS[me.tier] - me.xp);
+}
+
+/* ---------------------------------------------------------------------
+   Asking the relay
+   --------------------------------------------------------------------- */
+function battlepassRefresh() {
+  if (!storeSignedIn()) {
+    BATTLEPASS.me = null;
+    battlepassRender();
+    return Promise.resolve(false);
+  }
+  const session = ACCOUNT.session;
+  BATTLEPASS.fetching = true;
+  battlepassRenderProgress();
+  return storeAPI('/battlepass/me', { auth: true }).then(res => {
+    BATTLEPASS.fetching = false;
+    if (storeStale(session)) return false;
+    /* The session the store knows about is gone; storeForgetToken redraws
+       this screen signed-out on its way past. */
+    if (res.status === 401) { storeForgetToken(); return false; }
+    /* Anything but a usable answer — a relay that has not shipped the
+       route yet, a season the relay will not describe, a body that does
+       not fit — leaves the ladder standing read-only. */
+    BATTLEPASS.me = res.ok ? bpCleanMe(res.body) : null;
+    if (BATTLEPASS.me) {
+      ACCOUNT.earned = new Set(BATTLEPASS.me.earned);
+      storeRebuildOwned();
+      storeApplyEquipped();
+    }
+    battlepassRender();
+    return !!BATTLEPASS.me;
+  }, () => {
+    BATTLEPASS.fetching = false;
+    if (storeStale(session)) return false;
+    BATTLEPASS.me = null;
+    battlepassRender();
+    return false;
+  });
+}
+
+/* ---------------------------------------------------------------------
+   The offer row
+   --------------------------------------------------------------------- */
+function bpCatalogProduct() {
+  if (!ACCOUNT.items) return null;
+  for (const item of ACCOUNT.items)
+    if (item.id === BP_PRODUCT_ID) return item;
+  return null;
+}
+
+function bpReturnMark() {
+  storeSessionWrite(BP_RETURN_KEY, JSON.stringify({ at: Date.now() }));
+}
+
+/* Reads and spends the marker in one move, so a call is also the cleanup
+   for a marker whose checkout never left the page. */
+function bpReturnPending() {
+  const raw = storeSessionRead(BP_RETURN_KEY);
+  storeSessionErase(BP_RETURN_KEY);
+  if (!raw) return false;
+  let mark = null;
+  try { mark = JSON.parse(raw); } catch (e) { return false; }
+  const at = mark && typeof mark.at === 'number' && Number.isFinite(mark.at) ? mark.at : 0;
+  return !!at && Date.now() - at <= BP_RETURN_TTL;
+}
+
+function battlepassBuy() {
+  if (!storeSignedIn() || ACCOUNT.checkingOut) return;
+  /* The button is only offered when the catalog lists the product, but the
+     catalog can change under an open screen; a product that left is not a
+     checkout that should start. */
+  if (!bpCatalogProduct()) return;
+  bpReturnMark();
+  storeBuy(BP_PRODUCT_ID);
+  /* storeBuy set ACCOUNT.checkingOut before returning, so this redraw is
+     what puts the button on WAIT… until the checkout chain's finally
+     redraws it back. */
+  battlepassRenderCta();
+}
+
+/* ---------------------------------------------------------------------
+   Small drawing helpers
+   --------------------------------------------------------------------- */
+function bpText(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  el.textContent = text;
+  return el;
+}
+
+function bpButton(label, onClick) {
+  const btn = document.createElement('button');
+  btn.className = 'mini-btn';
+  btn.type = 'button';
+  btn.textContent = label;
+  if (onClick) btn.addEventListener('click', onClick);
+  return btn;
+}
+
+function bpCtaText(big, small) {
+  const wrap = bpText('div', 'bp-cta-text', big);
+  if (small) wrap.appendChild(bpText('small', '', small));
+  return wrap;
+}
+
+function bpNum(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '0';
+  try { return Math.floor(n).toLocaleString('en-US'); } catch (e) { return String(Math.floor(n)); }
+}
+
+function bpRewardKind(id) {
+  if (typeof id !== 'string' || !id) return null;
+  for (const token of BP_KIND_TOKENS)
+    if (id.indexOf('-' + token + '-') >= 0) return token;
+  return null;
+}
+
+/* The words after the kind token, title-cased: s1-premium-char-season-one-legend
+   reads "Season One Legend". An id with nothing left reads "Reward". */
+function bpRewardName(id) {
+  if (typeof id !== 'string' || !id) return 'Reward';
+  if (id === 's1-free-smg-first-light') return 'First Light Blush';
+  if (id === 's1-premium-smg-first-light') return 'First Light Gold';
+  const kind = bpRewardKind(id);
+  let tail = kind
+    ? id.slice(id.indexOf('-' + kind + '-') + kind.length + 2)
+    : id.replace(/^s1-(free|premium)-/, '');
+  const words = tail.split('-');
+  const out = [];
+  for (const w of words) if (w) out.push(w.charAt(0).toUpperCase() + w.slice(1));
+  const name = out.join(' ');
+  return name ? name.slice(0, 40) : 'Reward';
+}
+
+const BP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function bpDateText(ms) {
+  const d = new Date(ms);
+  return BP_MONTHS[d.getUTCMonth()] + ' ' + d.getUTCDate();
+}
+
+/* "26d 4h", then "5h 12m", then "40m" as the moment gets close. */
+function bpSpanText(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return 'under a minute';
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return Math.max(1, m) + 'm';
+}
+
+/* ---------------------------------------------------------------------
+   Drawing the screen
+   --------------------------------------------------------------------- */
+function battlepassRender() {
+  battlepassRenderSeason();
+  battlepassRenderProgress();
+  battlepassRenderCta();
+  battlepassRenderLadder();
+  bpRetick();
+}
+
+function battlepassRenderSeason() {
+  const el = document.getElementById('bpSeason');
+  if (!el) return;
+  const me = bpMe();
+  if (!me) {
+    el.textContent = storeSignedIn()
+      ? '25 tiers · a free lane and a premium lane'
+      : '25 tiers · sign in to track yours';
+    return;
+  }
+  const now = Date.now();
+  const status = bpEffectiveStatus(me, now);
+  if (status === 'not-yet-active') {
+    el.textContent = me.startsAt !== null
+      ? 'Starts in ' + bpSpanText(me.startsAt - now) + ' · ' + bpDateText(me.startsAt)
+      : 'Starts soon';
+  } else if (status === 'active') {
+    el.textContent = me.endsAt !== null
+      ? bpSpanText(me.endsAt - now) + ' left · ends ' + bpDateText(me.endsAt)
+      : 'Season active';
+  } else {
+    el.textContent = 'Season ended' + (me.endsAt !== null ? ' · ' + bpDateText(me.endsAt) : '') +
+      (me.tier >= 1 ? ' · finished at tier ' + me.tier : '');
+  }
+}
+
+function battlepassRenderProgress() {
+  const box = document.getElementById('bpProgress');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!storeSignedIn()) {
+    box.appendChild(bpText('div', 'bp-progress-line', 'Sign in to track your tier, XP and rewards.'));
+    return;
+  }
+  const me = bpMe();
+  if (!me) {
+    box.appendChild(bpText('div', 'bp-progress-line',
+      BATTLEPASS.fetching ? 'Loading your season…' : 'Season progress will appear here.'));
+    return;
+  }
+
+  const badge = bpText('div', 'bp-tier-badge' + (me.tier >= BP_REWARDS.length ? ' done' : ''), '');
+  badge.appendChild(bpText('small', '', 'TIER'));
+  badge.appendChild(bpText('b', '', me.tier >= 1 ? String(me.tier) : '—'));
+  box.appendChild(badge);
+
+  const body = document.createElement('div');
+  body.className = 'bp-progress-body';
+  if (me.tier >= BP_REWARDS.length) {
+    /* xpToNextTier is null here; the sentence replaces the bar rather than
+       a number going into it. */
+    const line = document.createElement('div');
+    line.className = 'bp-xp-line';
+    line.appendChild(bpText('span', '', 'PASS COMPLETE'));
+    line.appendChild(bpText('small', '', bpNum(me.xp) + ' XP EARNED'));
+    body.appendChild(line);
+    body.appendChild(bpText('div', 'bp-progress-note',
+      'Tier 25 reached — that is the whole ladder.'));
+  } else {
+    const base = me.tier > 0 ? BP_XP_THRESHOLDS[me.tier - 1] : 0;
+    const next = BP_XP_THRESHOLDS[me.tier];
+    const span = next - base;
+    const into = Math.max(0, Math.min(span, me.xp - base));
+    const pct = span > 0 ? (into / span) * 100 : 0;
+    const line = document.createElement('div');
+    line.className = 'bp-xp-line';
+    line.appendChild(bpText('span', '', bpNum(me.xp) + ' XP'));
+    line.appendChild(bpText('small', '', bpNum(bpXpToNext(me)) + ' XP TO TIER ' + (me.tier + 1)));
+    body.appendChild(line);
+    const bar = document.createElement('div');
+    bar.className = 'bp-bar';
+    const fill = document.createElement('i');
+    fill.style.width = pct + '%';
+    bar.appendChild(fill);
+    body.appendChild(bar);
+    body.appendChild(bpText('div', 'bp-progress-note',
+      me.tier === 0
+        ? 'First tier at ' + bpNum(BP_XP_THRESHOLDS[0]) + ' XP — one match and a bit.'
+        : 'Tier ' + (me.tier + 1) + ' at ' + bpNum(next) + ' XP'));
+  }
+  box.appendChild(body);
+}
+
+function battlepassRenderCta() {
+  const box = document.getElementById('bpCta');
+  if (!box) return;
+  box.innerHTML = '';
+  const me = bpMe();
+
+  /* Signed out there is nothing to buy and no price to show — the row is
+     the sign-in prompt and nothing else. */
+  if (!storeSignedIn()) {
+    box.className = 'bp-cta quiet';
+    box.appendChild(bpCtaText('Sign in to claim rewards and unlock the premium lane.',
+      'The free lane is open to everyone — no sign-in needed.'));
+    box.appendChild(bpButton('SIGN IN WITH GOOGLE', () => storeBeginSignIn()));
+    return;
+  }
+
+  /* Owned is shown instead of the offer, never next to it. */
+  if (me && me.premium) {
+    box.className = 'bp-cta owned';
+    box.appendChild(bpCtaText('PREMIUM PASS OWNED',
+      'Every premium reward on this track is yours to claim.'));
+    return;
+  }
+
+  if (me && bpEffectiveStatus(me, Date.now()) === 'ended') {
+    box.className = 'bp-cta quiet';
+    box.appendChild(bpCtaText('Season 1 has ended.', 'The premium pass is no longer on sale.'));
+    return;
+  }
+
+  const product = bpCatalogProduct();
+  if (!product) {
+    /* The product is withheld from the catalog while this screen ships,
+       and a relay that is simply away answers the same way. Both end as a
+       disabled button with a sentence — never as a button that takes
+       money nowhere. */
+    box.className = 'bp-cta quiet';
+    box.appendChild(bpCtaText(
+      ACCOUNT.items
+        ? 'The premium pass goes on sale with the season — check back soon.'
+        : 'The premium pass is not available right now.',
+      ''));
+    const btn = bpButton('UNLOCK PREMIUM PASS', null);
+    btn.disabled = true;
+    box.appendChild(btn);
+    return;
+  }
+
+  box.className = 'bp-cta';
+  /* storePriceText returns '' for the { unitAmount, currency } shape the
+     catalog sends until the display fix lands, so the price is only
+     appended when there is one to append. */
+  const price = storePriceText(product.price);
+  box.appendChild(bpCtaText('Unlock the premium lane',
+    'All 25 premium rewards — and the tier-25 grand prize.'));
+  const btn = bpButton(
+    ACCOUNT.checkingOut ? 'WAIT…' : 'UNLOCK PREMIUM PASS' + (price ? ' · ' + price : ''),
+    () => battlepassBuy());
+  if (ACCOUNT.checkingOut) btn.disabled = true;
+  box.appendChild(btn);
+}
+
+/* Which of the four states a node is in. Signed out, `me` is null and
+   every node reads locked — the preview promises nothing. */
+function bpNodeState(lane, tierNum, me) {
+  if (!me || me.tier < tierNum) return 'locked';
+  const isClaimed = me.claimed.has(tierNum + ':' + lane);
+  if (lane === 'free') return isClaimed ? 'claimed' : 'ready';
+  return me.premium ? (isClaimed ? 'claimed' : 'ready') : 'premium-locked';
+}
+
+function bpStateText(state, tierNum) {
+  if (state === 'ready') return 'unlocked, not claimed yet';
+  if (state === 'claimed') return 'claimed';
+  if (state === 'premium-locked') return 'premium pass required';
+  return 'locked, reach tier ' + tierNum;
+}
+
+function bpMakeNode(tierNum, lane, rewardId, me) {
+  const state = bpNodeState(lane, tierNum, me);
+  const kind = bpRewardKind(rewardId);
+  const info = kind ? BP_KINDS[kind] : null;
+  const name = bpRewardName(rewardId);
+  const grand = lane === 'premium' && tierNum === BP_REWARDS.length;
+  const equippable = state === 'claimed' && ACCOUNT.owned.has(rewardId) &&
+    !!storeSlotOf(rewardId);
+  const equipped = equippable && storeIsEquipped(rewardId);
+
+  const node = document.createElement(equippable ? 'button' : 'div');
+  node.className = 'bp-node bp-' + lane + ' n-' + state +
+    (grand ? ' grand' : '') + (equippable ? ' can-equip' : '');
+  if (equippable) {
+    node.type = 'button';
+    node.setAttribute('aria-pressed', String(equipped));
+    node.addEventListener('click', () => {
+      storeEquip(rewardId);
+      battlepassRenderLadder();
+    });
+  } else {
+    node.setAttribute('role', 'img');
+  }
+  node.setAttribute('aria-label', 'Tier ' + tierNum + ' ' + lane + ' reward: ' + name +
+    (info ? ' (' + info.label + ')' : '') + ' — ' + bpStateText(state, tierNum) +
+    (equippable ? (equipped ? '; equipped' : '; equip') : ''));
+  node.appendChild(bpText('div', 'bp-glyph', info ? info.glyph : '🎁'));
+  node.appendChild(bpText('div', 'bp-name', name));
+
+  if (state === 'claimed') {
+    node.appendChild(bpText('div', 'bp-badge', '✓'));
+    if (equippable)
+      node.appendChild(bpText('div', 'bp-ready', equipped ? 'EQUIPPED' : 'EQUIP'));
+  }
+  else if (state === 'locked' || state === 'premium-locked') node.appendChild(bpText('div', 'bp-badge', '🔒'));
+  else if (state === 'ready') node.appendChild(bpText('div', 'bp-ready', 'READY'));
+  return node;
+}
+
+function battlepassRenderLadder() {
+  const ladder = document.getElementById('bpLadder');
+  if (!ladder) return;
+  const keep = typeof ladder.scrollLeft === 'number' ? ladder.scrollLeft : 0;
+  ladder.innerHTML = '';
+  const me = bpMe();
+
+  /* The lane labels are the track's first child and stay pinned left
+     while the tiers scroll under them. */
+  const lanes = document.createElement('div');
+  lanes.className = 'bp-lanes';
+  lanes.setAttribute('aria-hidden', 'true');
+  lanes.appendChild(bpText('div', 'bp-lane-spacer', '\u00a0'));
+  lanes.appendChild(bpText('div', 'bp-lane-label bp-lane-free', 'FREE'));
+  lanes.appendChild(bpText('div', 'bp-lane-label bp-lane-premium', 'PREMIUM'));
+  ladder.appendChild(lanes);
+
+  for (let t = 1; t <= BP_REWARDS.length; t++) {
+    const pair = BP_REWARDS[t - 1];
+    const col = document.createElement('div');
+    col.className = 'bp-tier' +
+      (me && me.tier >= t ? ' reached' : '') +
+      (t === BP_REWARDS.length ? ' final' : '');
+    col.appendChild(bpText('div', 'bp-tier-num', t === BP_REWARDS.length ? '👑 ' + t : String(t)));
+    col.appendChild(bpMakeNode(t, 'free', pair.free, me));
+    col.appendChild(bpMakeNode(t, 'premium', pair.premium, me));
+    ladder.appendChild(col);
+  }
+
+  /* First render after the screen opens centres the player's tier; every
+     render after that puts the scroll back where the player left it. */
+  if (BATTLEPASS.pendingScroll && me) {
+    BATTLEPASS.pendingScroll = false;
+    bpScrollToTier(ladder, Math.max(1, me.tier));
+  } else {
+    try { ladder.scrollLeft = keep; } catch (e) {}
+  }
+}
+
+function bpScrollToTier(ladder, tierNum) {
+  /* children[0] is the lane-label column, so children[tierNum] is that tier. */
+  const el = ladder.children[tierNum];
+  if (!el || typeof el.getBoundingClientRect !== 'function' ||
+      typeof ladder.getBoundingClientRect !== 'function') return;
+  try {
+    const lr = ladder.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    ladder.scrollLeft = ladder.scrollLeft + (er.left - lr.left) -
+      (ladder.clientWidth - el.clientWidth) / 2;
+  } catch (e) {}
+}
+
+/* ---------------------------------------------------------------------
+   The countdown ticker
+   --------------------------------------------------------------------- */
+function bpStopTicker() {
+  if (BATTLEPASS.timer) { clearInterval(BATTLEPASS.timer); BATTLEPASS.timer = 0; }
+}
+
+/* Runs only while the screen is open and the season is still moving; the
+   callback re-renders the whole screen the moment the countdown runs out,
+   which is also when the offer row has to change. */
+function bpRetick() {
+  bpStopTicker();
+  const me = bpMe();
+  if (!battlepassIsOpen() || !me) return;
+  if (bpEffectiveStatus(me, Date.now()) === 'ended') return;
+  BATTLEPASS.timer = setInterval(() => {
+    const current = bpMe();
+    if (!battlepassIsOpen() || !current) { bpStopTicker(); return; }
+    battlepassRenderSeason();
+    if (bpEffectiveStatus(current, Date.now()) === 'ended') {
+      bpStopTicker();
+      battlepassRender();
+    }
+  }, 1000);
+}
+
+/* ---------------------------------------------------------------------
+   Opening and closing
+   --------------------------------------------------------------------- */
+function bpFocusables() {
+  const panel = document.getElementById('battlepass');
+  if (!panel || typeof panel.querySelectorAll !== 'function') return [];
+  const found = [];
+  for (const el of panel.querySelectorAll('button,a[href],input,select,textarea,[tabindex]')) {
+    if (el.disabled || el.hidden) continue;
+    if (el.getAttribute && el.getAttribute('tabindex') === '-1') continue;
+    found.push(el);
+  }
+  return found;
+}
+
+function bpTrapFocus(e) {
+  if (e.code !== 'Tab' || !battlepassIsOpen()) return;
+  const panel = document.getElementById('battlepass');
+  const items = bpFocusables();
+  if (!panel || !items.length) return;
+  e.preventDefault();
+  const active = document.activeElement;
+  const at = items.indexOf(active);
+  const next = at < 0
+    ? (e.shiftKey ? items.length - 1 : 0)
+    : (at + (e.shiftKey ? items.length - 1 : 1)) % items.length;
+  items[next].focus();
+}
+
+function battlepassShow(open) {
+  const panel = document.getElementById('battlepass');
+  if (!panel) return;
+  const wasOpen = battlepassIsOpen();
+  panel.classList.toggle('off', !open);
+  storeSetTitleInert(!!open);
+
+  if (!open) {
+    bpStopTicker();
+    if (wasOpen) {
+      const opener = BATTLEPASS.focusOpener;
+      BATTLEPASS.focusOpener = null;
+      if (opener && typeof opener.focus === 'function') { try { opener.focus(); } catch (e) {} }
+    }
+    return;
+  }
+
+  if (!wasOpen) {
+    BATTLEPASS.focusOpener = document.activeElement || null;
+    BATTLEPASS.pendingScroll = true;
+    const card = panel.querySelector ? panel.querySelector('.bp-card') : null;
+    const target = card || bpFocusables()[0];
+    if (target && typeof target.focus === 'function') { try { target.focus(); } catch (e) {} }
+  }
+  if (typeof SFX === 'object' && SFX) SFX.ui();
+  const note = document.getElementById('bpNote');
+  if (note) { note.textContent = ''; note.dataset.kind = ''; }
+  battlepassRender();
+  battlepassRefresh();
+  /* The offer row draws its price out of the catalog, which is only
+     re-asked when somebody is paying attention to it. */
+  if (storeSignedIn()) storeRefreshCatalog();
 }
 </script>
 <script>/* ===== src/90-main.js ===== */

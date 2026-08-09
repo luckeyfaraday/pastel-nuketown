@@ -677,6 +677,180 @@ body.touch .sens{display:none}
   .store-stage{display:none}
 }
 
+/* =====================================================================
+   SEASON 1 BATTLE PASS
+   Built out of the same parts as the locker — a .screen dialog, a .panel
+   card, the 2.5px ink outline and the 3px drop — with one shape of its
+   own: the track. Twenty-five tier columns scroll sideways under two lane
+   labels that stay pinned to the left, which is how a 360px phone gets the
+   whole ladder without the card ever growing wider than the window.
+   ===================================================================== */
+/* The title-screen entry, butter-yellow the way the store button is lilac. */
+.locker-pass{flex:0 0 auto;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+#battlepass{z-index:37}                /* over #store (36); the two never open together by design */
+.bp-card{width:min(720px,calc(100vw - 16px));max-height:calc(100vh - 30px);padding:15px 17px 17px;
+  display:flex;flex-direction:column;gap:10px;pointer-events:auto;overflow-y:auto}
+.bp-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.bp-head-text{min-width:0}
+.bp-head h2{font-family:var(--disp);font-size:24px;font-weight:800;letter-spacing:.09em;line-height:1;
+  overflow-wrap:anywhere}
+.bp-head h2 em{font-style:normal;color:#d4638f}
+.bp-sub{margin-top:4px;font-family:var(--disp);font-size:11px;font-weight:600;letter-spacing:.05em;
+  color:var(--ink-soft);overflow-wrap:anywhere}
+#bpClose{flex:none;min-height:44px}
+#bpNote{font-family:var(--disp);font-size:12px;font-weight:600;letter-spacing:.035em;
+  color:#4f7389;text-align:center}
+#bpNote[data-kind="error"]{color:#b8406a}
+#bpNote:empty{display:none}
+
+/* ---- progress header ---- */
+.bp-progress{flex:none;display:flex;align-items:center;gap:12px;padding:10px 13px;
+  border:2.5px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.66);
+  box-shadow:0 3px 0 var(--ink)}
+.bp-progress-line{font-family:var(--disp);font-size:12px;font-weight:700;letter-spacing:.05em;color:var(--ink-soft)}
+.bp-tier-badge{flex:none;width:56px;height:56px;border-radius:50%;border:3px solid var(--ink);
+  background:linear-gradient(180deg,#fff2c9,#ffe08a);box-shadow:0 3px 0 var(--ink);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:.9}
+.bp-tier-badge small{font-family:var(--disp);font-size:8px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft)}
+.bp-tier-badge b{font-family:var(--disp);font-size:22px;font-weight:800;color:var(--ink)}
+.bp-tier-badge.done{background:linear-gradient(180deg,#d9f7e6,#b8f2d8)}
+.bp-progress-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.bp-xp-line{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  font-family:var(--disp);font-size:13px;font-weight:800;letter-spacing:.04em;color:var(--ink)}
+.bp-xp-line small{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink-soft);text-align:right}
+.bp-bar{height:16px;border:2.5px solid var(--ink);border-radius:9px;background:#efe3f2;overflow:hidden}
+.bp-bar i{display:block;height:100%;border-radius:6px;
+  background:linear-gradient(90deg,#ffd3b6,#ffb7c5,#d4c5f9);transition:width .3s ease-out}
+.bp-progress-note{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink-soft)}
+
+/* ---- the offer / owned / sign-in row ---- */
+.bp-cta{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  padding:10px 14px;border:2.5px solid var(--ink);border-radius:14px;
+  background:linear-gradient(120deg,#f3e9ff,#ffe6f0 55%,#fff6d6);box-shadow:0 3px 0 var(--ink)}
+.bp-cta.owned{background:linear-gradient(120deg,#e2fbe9,#c8ffe4 60%,#fff6d6)}
+.bp-cta.quiet{background:rgba(255,255,255,.6)}
+.bp-cta-text{min-width:0;flex:1 1 auto;font-family:var(--disp);font-size:13px;font-weight:800;
+  letter-spacing:.04em;line-height:1.25;color:var(--ink)}
+.bp-cta-text small{display:block;margin-top:2px;font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink-soft)}
+.bp-cta .mini-btn{flex:none;min-height:44px;font-size:12px;background:linear-gradient(180deg,#fff2c9,#ffe08a)}
+
+/* ---- the track ---- */
+/* Scrolls inside the card rather than growing it: the labels are the first
+   child and stay pinned while the tiers slide under them. */
+.bp-ladder-wrap{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.bp-ladder{display:flex;gap:8px;overflow-x:auto;padding:8px 2px 10px;
+  -webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+.bp-lanes{flex:none;position:sticky;left:0;z-index:2;display:flex;flex-direction:column;gap:6px;
+  padding:2px 10px 2px 2px;
+  background:linear-gradient(90deg,rgba(255,248,240,.96) 72%,rgba(255,248,240,0))}
+.bp-lane-spacer{height:26px}
+.bp-lane-label{height:84px;display:flex;align-items:center;justify-content:center;
+  writing-mode:vertical-rl;transform:rotate(180deg);
+  font-family:var(--disp);font-size:9px;font-weight:800;letter-spacing:.22em}
+.bp-lane-free{color:#4f9d7a}
+.bp-lane-premium{color:#b0568e}
+.bp-tier{flex:none;width:88px;display:flex;flex-direction:column;gap:6px;scroll-snap-align:start}
+.bp-tier.final{width:104px}
+.bp-tier-num{height:26px;display:flex;align-items:center;justify-content:center;gap:3px;
+  border:2.5px solid transparent;border-radius:10px;
+  font-family:var(--disp);font-size:13px;font-weight:800;letter-spacing:.05em;color:var(--ink-soft)}
+.bp-tier.reached .bp-tier-num{color:var(--ink);background:rgba(255,255,255,.85);
+  border-color:var(--ink);box-shadow:0 2px 0 var(--ink)}
+.bp-tier.final .bp-tier-num{color:var(--ink);background:linear-gradient(180deg,#fff2c9,#ffe08a);
+  border-color:var(--ink);box-shadow:0 2px 0 var(--ink)}
+.bp-node{position:relative;height:84px;padding:7px 6px 8px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:3px;text-align:center;
+  border:2.5px solid var(--ink);border-radius:12px;background:rgba(255,255,255,.62);
+  box-shadow:0 3px 0 var(--ink)}
+.bp-node.bp-premium{background:linear-gradient(160deg,rgba(243,233,255,.92),rgba(255,230,240,.92))}
+.bp-glyph{font-size:20px;line-height:1}
+.bp-name{font-family:var(--disp);font-size:9px;font-weight:700;letter-spacing:.03em;line-height:1.18;
+  color:var(--ink);max-width:100%;max-height:2.36em;overflow:hidden;overflow-wrap:anywhere}
+.bp-badge{position:absolute;top:-7px;right:-7px;width:21px;height:21px;border-radius:50%;
+  border:2px solid var(--ink);display:flex;align-items:center;justify-content:center;
+  font-family:var(--disp);font-size:10px;font-weight:800;line-height:1;background:#fff;
+  box-shadow:0 2px 0 rgba(74,63,92,.4)}
+.bp-ready{position:absolute;left:0;right:0;bottom:0;padding:2px 0 3px;
+  border-radius:0 0 9px 9px;border-top:2px solid var(--ink);background:#7fe6b4;
+  font-family:var(--disp);font-size:7px;font-weight:800;letter-spacing:.16em;text-align:center;color:var(--ink)}
+/* locked: the tier is not reached yet — dimmed, padlock in the corner. */
+.bp-node.n-locked{background:rgba(255,255,255,.4)}
+.bp-node.n-locked .bp-glyph,.bp-node.n-locked .bp-name{opacity:.45;filter:saturate(.35)}
+.bp-node.n-locked .bp-badge{background:#e7ddf0}
+/* unlocked and waiting to be claimed: bright, ringed, with a READY strip. */
+.bp-node.n-ready{background:linear-gradient(180deg,#fffbe6,#ffefa8);
+  box-shadow:0 3px 0 var(--ink),0 0 0 3px rgba(127,230,180,.9)}
+.bp-node.bp-premium.n-ready{background:linear-gradient(160deg,#f3e9ff,#ffd9ec)}
+/* Claimed rewards are wearable inventory. The tick marks ownership and the
+   bottom strip makes the card's equip action explicit. */
+.bp-node.n-claimed{background:linear-gradient(180deg,#e2fbe9,#c8ffe4)}
+.bp-node.n-claimed .bp-glyph,.bp-node.n-claimed .bp-name{opacity:.72}
+.bp-node.n-claimed .bp-badge{background:#7fe6b4}
+.bp-node.can-equip{cursor:pointer;font:inherit;color:inherit}
+.bp-node.can-equip:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+/* premium-locked: the tier is reached but the pass is not owned. The reward
+   stays fully visible and gets a shimmer, because this node is the advert. */
+.bp-node.n-premium-locked{overflow:hidden;background:linear-gradient(160deg,#efe2ff,#ffd9ec)}
+.bp-node.n-premium-locked::after{content:'';position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(115deg,transparent 32%,rgba(255,255,255,.55) 47%,transparent 62%);
+  animation:bpShimmer 2.6s ease-in-out infinite}
+.bp-node.n-premium-locked .bp-badge{background:#ffe08a}
+@keyframes bpShimmer{0%,100%{transform:translateX(-75%)}50%{transform:translateX(75%)}}
+/* Tier 25 premium is the season's headline prize. */
+.bp-node.grand{background:linear-gradient(160deg,#fff2c9,#ffd3b6 55%,#ffb7c5);
+  box-shadow:0 3px 0 var(--ink),0 0 0 3px rgba(255,224,138,.95),0 0 18px rgba(255,180,120,.55)}
+.bp-node.grand .bp-glyph{font-size:26px}
+.bp-node.grand .bp-name{font-weight:800}
+.bp-foot{flex:none;text-align:center;font-family:var(--disp);font-size:10px;font-weight:700;
+  letter-spacing:.06em;color:var(--ink-soft)}
+/* The dialog takes focus when it opens; it should say so quietly rather than
+   draw a ring around the whole card. */
+.bp-card:focus{outline:none}
+.bp-card:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+#battlepass .mini-btn:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+
+/* A phone in portrait: the tiers narrow down, and the labels narrow with
+   them so the rows still line up. */
+@media(max-width:430px){
+  .bp-card{padding:12px 12px 14px}
+  .bp-tier{width:76px}
+  .bp-tier.final{width:90px}
+  .bp-node,.bp-lane-label{height:80px}
+  .bp-glyph{font-size:18px}
+  .bp-progress{gap:9px;padding:8px 10px}
+  .bp-tier-badge{width:48px;height:48px}
+  .bp-tier-badge b{font-size:19px}
+  .bp-cta-text{font-size:12px}
+}
+/* A phone held sideways: the card is over budget on height, so everything
+   shrinks its decoration and the card scrolls inside itself if it must. */
+@media(max-height:430px){
+  .bp-card{max-height:calc(100vh - 14px);padding:10px 12px 12px;gap:7px}
+  .bp-head h2{font-size:19px}
+  .bp-sub{font-size:10px}
+  .bp-progress{gap:9px;padding:6px 10px}
+  .bp-tier-badge{width:42px;height:42px}
+  .bp-tier-badge b{font-size:17px}
+  .bp-tier-badge small{font-size:7px}
+  .bp-xp-line{font-size:11px}
+  .bp-xp-line small{font-size:9px}
+  .bp-bar{height:12px}
+  .bp-cta{padding:7px 11px}
+  .bp-cta-text{font-size:11px}
+  .bp-cta-text small{font-size:9px}
+  .bp-tier{width:72px}
+  .bp-tier.final{width:86px}
+  .bp-tier-num{height:22px;font-size:11px}
+  .bp-lane-spacer{height:22px}
+  .bp-node,.bp-lane-label{height:64px}
+  .bp-node{padding:5px 5px 6px;border-radius:10px}
+  .bp-glyph{font-size:15px}
+  .bp-name{font-size:8px}
+  .bp-node.grand .bp-glyph{font-size:19px}
+  .bp-ladder{gap:6px;padding-top:6px}
+  .bp-lanes{gap:6px}
+}
+
 /* .screen's wash is tuned for the title and match-over cards, where there is
    nothing behind it worth reading. A killcam you cannot see through is not a
    killcam, so pull it back to a vignette for as long as one is running. The

@@ -21,7 +21,8 @@ ACCOUNT_ENV_NAMES=(
   STRIPE_PRICE_RIFLE_BERRYSWIRL STRIPE_PRICE_CHAR_MIDNIGHT
   STRIPE_PRICE_CHAR_SHERBETFOX STRIPE_PRICE_CHAR_CLOUDKNIGHT
   STRIPE_PRICE_FX_STARFALL STRIPE_PRICE_FX_CONFETTIPOP
-  STRIPE_PRICE_FX_BUBBLETRAIL
+  STRIPE_PRICE_FX_BUBBLETRAIL STRIPE_PRICE_BATTLEPASS_SEASON_1_PREMIUM
+  BATTLEPASS_CATALOG_ENABLED
 )
 if [ -r /etc/nuketown.env ]; then
   declare -A INVOCATION_ENV=()
@@ -100,6 +101,12 @@ STRIPE_PRICE_CHAR_CLOUDKNIGHT="${STRIPE_PRICE_CHAR_CLOUDKNIGHT:-}"
 STRIPE_PRICE_FX_STARFALL="${STRIPE_PRICE_FX_STARFALL:-}"
 STRIPE_PRICE_FX_CONFETTIPOP="${STRIPE_PRICE_FX_CONFETTIPOP:-}"
 STRIPE_PRICE_FX_BUBBLETRAIL="${STRIPE_PRICE_FX_BUBBLETRAIL:-}"
+STRIPE_PRICE_BATTLEPASS_SEASON_1_PREMIUM="${STRIPE_PRICE_BATTLEPASS_SEASON_1_PREMIUM:-}"
+# The pass screen has shipped and season 1 opens with it, so the public catalog
+# advertises the premium pass. Listing it is not the same as selling it: with no
+# price id above, the item is listed unavailable rather than sold. Turning this
+# off is how the pass is withdrawn from sale without touching the season.
+BATTLEPASS_CATALOG_ENABLED="${BATTLEPASS_CATALOG_ENABLED:-true}"
 # Generated once and retained in the root-only environment file. It never goes
 # in a command argument, the checkout, or Caddy's public route.
 ADMIN_TOKEN="${ADMIN_TOKEN:-$(openssl rand -hex 32)}"
