@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { createAuthService } from './auth.mjs';
 import { createBattlePassService } from './battlepass.mjs';
 import { STORE_PRODUCTS } from './cosmetics.mjs';
+import { CURRENCY_PACKS } from './currency.mjs';
 import {
   headerValue,
   HttpError,
@@ -20,6 +21,9 @@ const ROUTE_METHODS = new Map([
   ['/auth/logout', 'POST'],
   ['/shop/catalog', 'GET'],
   ['/shop/checkout', 'POST'],
+  ['/shop/wallet', 'GET'],
+  ['/shop/coins/checkout', 'POST'],
+  ['/shop/purchase', 'POST'],
   ['/battlepass/me', 'GET'],
   ['/stripe/webhook', 'POST']
 ]);
@@ -78,6 +82,8 @@ export function createAccountStore(options = {}) {
     stripeWebhookSecret: options.stripeWebhookSecret,
     appOrigin: options.appOrigin,
     priceIds: options.priceIds,
+    currencyPriceIds: options.currencyPriceIds,
+    currencyOnly: options.currencyOnly,
     fetchImpl: options.fetchImpl,
     now: options.now,
     includePremiumPassInCatalog: options.includePremiumPassInCatalog,
@@ -213,6 +219,28 @@ export function createAccountStore(options = {}) {
         return true;
       }
 
+      if (pathname === '/shop/wallet') {
+        const account = auth.authenticate(request.headers, true);
+        sendJson(response, 200, await shop.wallet(account.userId), headers);
+        return true;
+      }
+
+      if (pathname === '/shop/coins/checkout') {
+        const account = auth.authenticate(request.headers, true);
+        const body = await readJsonBody(request);
+        const result = await shop.currencyCheckout(account.userId, body.packId);
+        sendJson(response, 200, result, headers);
+        return true;
+      }
+
+      if (pathname === '/shop/purchase') {
+        const account = auth.authenticate(request.headers, true);
+        const body = await readJsonBody(request);
+        const result = shop.purchaseWithCurrency(account.userId, body.cosmeticId);
+        sendJson(response, 200, result, headers);
+        return true;
+      }
+
       if (pathname === '/battlepass/me') {
         const account = auth.authenticate(request.headers, true);
         sendJson(response, 200, battlePass.me(account.userId), headers);
@@ -273,6 +301,12 @@ export function createAccountStoreFromEnvironment(env, options = {}) {
       ? env[product.priceEnvVar].trim()
       : ''
   ]));
+  const currencyPriceIds = Object.fromEntries(CURRENCY_PACKS.map((pack) => [
+    pack.id,
+    typeof env[pack.priceEnvVar] === 'string'
+      ? env[pack.priceEnvVar].trim()
+      : ''
+  ]));
   return createAccountStore({
     dbPath: storePathFromEnvironment(env),
     allowedOrigins: (env.ALLOWED_ORIGINS || '').split(','),
@@ -283,6 +317,8 @@ export function createAccountStoreFromEnvironment(env, options = {}) {
     stripeSecretKey: env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
     priceIds,
+    currencyPriceIds,
+    currencyOnly: true,
     includePremiumPassInCatalog:
       env.BATTLEPASS_CATALOG_ENABLED === 'true',
     ...options

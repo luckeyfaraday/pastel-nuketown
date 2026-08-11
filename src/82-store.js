@@ -88,6 +88,9 @@ const ACCOUNT = {
   earned: new Set(),    // active battle-pass claim ids, straight from the relay
   owned: new Set(),     // the equip answer: paid entitlements plus active claims
   items: null,          // last /shop/catalog answer, or null if we have never had one
+  balance: 0,           // integer Pastels; the relay is always authoritative
+  currency: { code: 'pastels', displayName: 'Pastels', symbol: '✦' },
+  packs: null,          // real-money offers returned by /shop/wallet
   checkingOut: false,
   lastRefresh: 0,
   /* Bumped every time the session changes — a sign-in, a sign-out, a token
@@ -434,6 +437,8 @@ function storeSetSignedOut() {
   ACCOUNT.entitlements = new Set();
   ACCOUNT.earned = new Set();
   ACCOUNT.owned = new Set();
+  ACCOUNT.balance = 0;
+  ACCOUNT.packs = null;
   storeApplyEquipped();
   storeRenderAccount();
   storeRenderGrid();
@@ -478,10 +483,13 @@ function storeRefreshMe() {
         : (typeof body.email === 'string' ? body.email.split('@')[0].slice(0, 40) : 'PLAYER')
     };
     ACCOUNT.entitlements = storeCleanEntitlements(body.entitlements);
+    if (Number.isSafeInteger(body.currencyBalance))
+      ACCOUNT.balance = body.currencyBalance;
     ACCOUNT.earned = storeCleanEntitlements(body.earnedRewards);
     storeRebuildOwned();
     storeApplyEquipped();
     storeRenderAccount();
+    storeRenderWallet();
     storeRenderGrid();
     /* A sign-in that lands while the pass screen is up has to show up there
        too — it is the difference between the signed-out ladder and a tier. */
@@ -791,6 +799,9 @@ function storeCleanCatalog(body) {
         entry.type === 'effect'
         ? entry.type : (known ? known.type : ''),
       price: entry.price,
+      currencyPrice: Number.isSafeInteger(entry.currencyPrice) && entry.currencyPrice > 0
+        ? entry.currencyPrice : null,
+      currencyAvailable: entry.currencyAvailable === true,
       /* A product may be intentionally listed while it is off sale. Keep
          that distinction through the client boundary so the battle-pass
          offer cannot turn an unavailable Stripe price into an enabled
@@ -875,11 +886,54 @@ function storeRefreshCatalog() {
   });
 }
 
+function storeCleanWallet(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      !Number.isSafeInteger(body.balance) || !Array.isArray(body.packs)) return null;
+  const currency = body.currency && typeof body.currency === 'object' ? body.currency : {};
+  return {
+    balance: body.balance,
+    currency: {
+      code: typeof currency.code === 'string' ? currency.code.slice(0, 24) : 'pastels',
+      displayName: typeof currency.displayName === 'string'
+        ? currency.displayName.slice(0, 24) : 'Pastels',
+      symbol: typeof currency.symbol === 'string' ? currency.symbol.slice(0, 4) : '✦'
+    },
+    packs: body.packs.slice(0, 8).filter(pack =>
+      pack && typeof pack.id === 'string' && Number.isSafeInteger(pack.amount) && pack.amount > 0
+    ).map(pack => ({
+      id: pack.id.slice(0, 80),
+      amount: pack.amount,
+      available: pack.available === true,
+      price: pack.price
+    }))
+  };
+}
+
+function storeRefreshWallet() {
+  if (!storeSignedIn()) { storeRenderWallet(); return Promise.resolve(false); }
+  const session = ACCOUNT.session;
+  return storeAPI('/shop/wallet', { auth: true }).then(res => {
+    if (storeStale(session)) return false;
+    if (res.status === 401) { storeForgetToken(); return false; }
+    const wallet = res.ok ? storeCleanWallet(res.body) : null;
+    if (!wallet) return false;
+    ACCOUNT.balance = wallet.balance;
+    ACCOUNT.currency = wallet.currency;
+    ACCOUNT.packs = wallet.packs;
+    storeRenderWallet();
+    storeRenderGrid();
+    return true;
+  }, () => false);
+}
+
 /* Re-asks both questions in the order that matters: entitlements first,
    because that is what decides whether a card says BUY or EQUIP. */
 function storeRefreshAll() {
   ACCOUNT.lastRefresh = Date.now();
-  return storeRefreshMe().then(() => storeRefreshCatalog());
+  return storeRefreshMe().then(() => Promise.all([
+    storeRefreshCatalog(),
+    storeRefreshWallet()
+  ]));
 }
 
 /* =====================================================================
@@ -972,6 +1026,92 @@ function storeBuy(id) {
        rejection in the middle of a match. Both outcomes have already had
        their say above. */
     .catch(() => {});
+}
+
+function storeBuyCurrency(packId) {
+  if (!storeSignedIn() || ACCOUNT.checkingOut) return;
+  const pack = ACCOUNT.packs && ACCOUNT.packs.find(entry => entry.id === packId);
+  if (!pack || !pack.available) return;
+  ACCOUNT.checkingOut = true;
+  storeNote('Opening the Pastels checkout…');
+  storeRenderWallet();
+  storeRenderGrid();
+  const session = ACCOUNT.session;
+  storeAPI('/shop/coins/checkout', {
+    method: 'POST', auth: true, body: { packId: packId }
+  }).then(res => {
+    if (storeStale(session)) return;
+    if (res.status === 401) {
+      storeForgetToken();
+      storeNote('Your sign-in expired before the checkout opened. Nothing was charged.', 'error');
+      return;
+    }
+    const url = storeCheckoutURL(res.ok && res.body ? res.body.url : '');
+    if (!url) {
+      storeNote('The checkout would not open. Nothing was charged — try again in a moment.', 'error');
+      return;
+    }
+    storeSessionWrite(STORE_RETURN_KEY, '1');
+    try {
+      location.assign(url);
+    } catch (e) {
+      storeSessionErase(STORE_RETURN_KEY);
+      storeNote('The checkout would not open. Nothing was charged — try again in a moment.', 'error');
+    }
+  }, () => {
+    if (!storeStale(session))
+      storeNote('Could not reach the store. Nothing was charged — try again in a moment.', 'error');
+  }).finally(() => {
+    ACCOUNT.checkingOut = false;
+    storeRenderWallet();
+    storeRenderGrid();
+  }).catch(() => {});
+}
+
+function storeSpend(id) {
+  if (!storeSignedIn()) { storeBeginSignIn(); return; }
+  if (ACCOUNT.checkingOut || ACCOUNT.owned.has(id)) return;
+  const item = ACCOUNT.items && ACCOUNT.items.find(entry => entry.id === id);
+  if (!item || !item.currencyAvailable || !Number.isSafeInteger(item.currencyPrice)) return;
+  if (ACCOUNT.balance < item.currencyPrice) {
+    storeNote('Not enough Pastels. Choose a pack above to top up.', 'error');
+    return;
+  }
+  ACCOUNT.checkingOut = true;
+  storeNote('Unlocking ' + item.name + '…');
+  storeRenderWallet();
+  storeRenderGrid();
+  const session = ACCOUNT.session;
+  storeAPI('/shop/purchase', {
+    method: 'POST', auth: true, body: { cosmeticId: id }
+  }).then(res => {
+    if (storeStale(session)) return;
+    if (res.status === 401) { storeForgetToken(); return; }
+    if (!res.ok || !res.body || res.body.purchased !== true ||
+        !Number.isSafeInteger(res.body.balance)) {
+      const short = res.body && res.body.error === 'insufficient_funds'
+        ? 'Not enough Pastels. Choose a pack above to top up.'
+        : 'That item could not be unlocked. Your balance was not changed.';
+      storeNote(short, 'error');
+      return;
+    }
+    ACCOUNT.balance = res.body.balance;
+    ACCOUNT.entitlements.add(id);
+    storeRebuildOwned();
+    storeApplyEquipped();
+    storeRenderAccount();
+    storeRenderWallet();
+    storeNote(item.name + ' unlocked.');
+    if (id === BP_PRODUCT_ID && battlepassIsOpen()) battlepassRefresh();
+  }, () => {
+    if (!storeStale(session))
+      storeNote('Could not reach the store. Your balance was not changed.', 'error');
+  }).finally(() => {
+    ACCOUNT.checkingOut = false;
+    storeRenderWallet();
+    storeRenderGrid();
+    if (battlepassIsOpen()) battlepassRenderCta();
+  }).catch(() => {});
 }
 
 /* =====================================================================
@@ -1856,10 +1996,47 @@ function storeRenderAccount() {
       ? 'Signed in as ' + ACCOUNT.user.displayName
       : 'Skins for your guns and your fighter, and effects for your shots.';
   }
+  storeRenderWallet();
   /* Signing out takes the season with it — the tier plate and the badge over
      the character's head are read out of an account, and there is no longer
      one. */
   menuHudRender();
+}
+
+function storeCurrencyText(amount) {
+  if (!Number.isSafeInteger(amount)) return '';
+  const symbol = ACCOUNT.currency && ACCOUNT.currency.symbol
+    ? ACCOUNT.currency.symbol : '✦';
+  return symbol + ' ' + Math.abs(amount).toLocaleString('en-US');
+}
+
+function storeRenderWallet() {
+  const wallet = document.getElementById('storeWallet');
+  const balance = document.getElementById('storeBalance');
+  const packs = document.getElementById('storePacks');
+  const inside = storeSignedIn();
+  if (wallet) wallet.hidden = !inside;
+  if (!inside) return;
+  if (balance) {
+    balance.textContent = (ACCOUNT.balance < 0 ? '−' : '') + storeCurrencyText(ACCOUNT.balance);
+    balance.title = ACCOUNT.balance < 0
+      ? 'This balance includes currency reversed after a refund or chargeback.' : '';
+  }
+  if (!packs) return;
+  packs.innerHTML = '';
+  for (const pack of ACCOUNT.packs || []) {
+    if (!pack.available) continue;
+    const button = document.createElement('button');
+    button.className = 'mini-btn';
+    button.type = 'button';
+    const money = storePriceText(pack.price);
+    button.textContent = storeCurrencyText(pack.amount) + (money ? ' · ' + money : '');
+    button.disabled = ACCOUNT.checkingOut;
+    button.setAttribute('aria-label', 'Buy ' + pack.amount.toLocaleString('en-US') + ' Pastels' +
+      (money ? ' for ' + money : ''));
+    button.addEventListener('click', () => storeBuyCurrency(pack.id));
+    packs.appendChild(button);
+  }
 }
 
 /* What the panel lists. The relay's catalog when there is one, the six we
@@ -1869,7 +2046,8 @@ function storeRenderAccount() {
 function storeDisplayItems() {
   if (ACCOUNT.items && ACCOUNT.items.length) return ACCOUNT.items;
   return STORE_ITEMS.map(item => ({
-    id: item.id, name: item.name, type: item.type, price: undefined, owned: false
+    id: item.id, name: item.name, type: item.type, price: undefined,
+    currencyPrice: null, currencyAvailable: false, owned: false
   }));
 }
 
@@ -1951,7 +2129,11 @@ function storeRenderGrid() {
     foot.className = 'sfoot';
     const price = document.createElement('span');
     price.className = 'sprice';
-    price.textContent = owned ? 'OWNED' : storePriceText(item.price);
+    price.textContent = owned ? 'OWNED' : (
+      item.currencyPrice !== null && item.currencyPrice !== undefined
+        ? storeCurrencyText(item.currencyPrice)
+        : storePriceText(item.price)
+    );
     foot.appendChild(price);
 
     const act = document.createElement('button');
@@ -1968,9 +2150,9 @@ function storeRenderGrid() {
       act.addEventListener('click', () => storeEquip(item.id, item.type));
     } else {
       act.textContent = ACCOUNT.checkingOut ? 'WAIT…' : 'BUY';
-      act.disabled = ACCOUNT.checkingOut;
+      act.disabled = ACCOUNT.checkingOut || !item.currencyAvailable;
       act.setAttribute('aria-label', 'Buy ' + item.name);
-      act.addEventListener('click', () => storeBuy(item.id));
+      act.addEventListener('click', () => storeSpend(item.id));
     }
     foot.appendChild(act);
     card.appendChild(foot);
@@ -2407,7 +2589,9 @@ function battlepassRefresh() {
 function bpCatalogProduct() {
   if (!ACCOUNT.items) return null;
   for (const item of ACCOUNT.items)
-    if (item.id === BP_PRODUCT_ID) return item.available === true ? item : null;
+    if (item.id === BP_PRODUCT_ID)
+      return item.currencyAvailable === true ||
+        (item.currencyPrice === null && item.available === true) ? item : null;
   return null;
 }
 
@@ -2433,9 +2617,8 @@ function battlepassBuy() {
      catalog can change under an open screen; a product that left is not a
      checkout that should start. */
   if (!bpCatalogProduct()) return;
-  bpReturnMark();
-  storeBuy(BP_PRODUCT_ID);
-  /* storeBuy set ACCOUNT.checkingOut before returning, so this redraw is
+  storeSpend(BP_PRODUCT_ID);
+  /* storeSpend set ACCOUNT.checkingOut before returning, so this redraw is
      what puts the button on WAIT… until the checkout chain's finally
      redraws it back. */
   battlepassRenderCta();
@@ -2663,7 +2846,7 @@ function battlepassRenderCta() {
   /* storePriceText returns '' for the { unitAmount, currency } shape the
      catalog sends until the display fix lands, so the price is only
      appended when there is one to append. */
-  const price = storePriceText(product.price);
+  const price = storeCurrencyText(product.currencyPrice);
   box.appendChild(bpCtaText('Unlock the premium lane',
     'All 25 premium rewards — and the tier-25 grand prize.'));
   const btn = bpButton(

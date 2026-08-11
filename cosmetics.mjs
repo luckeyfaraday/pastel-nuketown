@@ -16,6 +16,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Folded Paper Crane',
     type: 'weapon',
     slot: 'smg',
+    currencyPrice: 500,
     priceEnvVar: 'STRIPE_PRICE_SMG_COTTONCLOUD'
   }),
   Object.freeze({
@@ -23,6 +24,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Cobalt Willow Teapot',
     type: 'weapon',
     slot: 'shotgun',
+    currencyPrice: 500,
     priceEnvVar: 'STRIPE_PRICE_SHOTGUN_TOASTEDMALLOW'
   }),
   Object.freeze({
@@ -30,6 +32,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Twisted Glass Cane',
     type: 'weapon',
     slot: 'rifle',
+    currencyPrice: 500,
     priceEnvVar: 'STRIPE_PRICE_RIFLE_BERRYSWIRL'
   }),
   Object.freeze({
@@ -37,6 +40,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Midnight',
     type: 'character',
     slot: null,
+    currencyPrice: 800,
     priceEnvVar: 'STRIPE_PRICE_CHAR_MIDNIGHT'
   }),
   Object.freeze({
@@ -44,6 +48,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Sherbet Fox',
     type: 'character',
     slot: null,
+    currencyPrice: 800,
     priceEnvVar: 'STRIPE_PRICE_CHAR_SHERBETFOX'
   }),
   Object.freeze({
@@ -51,6 +56,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Cloud Knight',
     type: 'character',
     slot: null,
+    currencyPrice: 800,
     priceEnvVar: 'STRIPE_PRICE_CHAR_CLOUDKNIGHT'
   }),
   /* Shot effects carry `slot: null` for the same reason a character does: a
@@ -66,6 +72,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Starfall',
     type: 'effect',
     slot: null,
+    currencyPrice: 500,
     priceEnvVar: 'STRIPE_PRICE_FX_STARFALL'
   }),
   Object.freeze({
@@ -73,6 +80,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Confetti Pop',
     type: 'effect',
     slot: null,
+    currencyPrice: 500,
     priceEnvVar: 'STRIPE_PRICE_FX_CONFETTIPOP'
   }),
   Object.freeze({
@@ -80,6 +88,7 @@ export const SHOP_COSMETICS = Object.freeze([
     displayName: 'Bubble Trail',
     type: 'effect',
     slot: null,
+    currencyPrice: 500,
     priceEnvVar: 'STRIPE_PRICE_FX_BUBBLETRAIL'
   })
 ]);
@@ -165,6 +174,7 @@ export const PREMIUM_PASS_PRODUCT = Object.freeze({
   displayName: 'Season 1 Premium Pass',
   type: 'battlepass',
   slot: null,
+  currencyPrice: 1200,
   priceEnvVar: 'STRIPE_PRICE_BATTLEPASS_SEASON_1_PREMIUM'
 });
 
