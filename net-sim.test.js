@@ -1766,3 +1766,158 @@ test('the weapon card comes back to your own gun when the killcam ends', () => {
   assert.strictEqual(match.host.get('elWName.textContent'), 'MARSHMALLOW');
   assert.match(match.host.get('elAmmo.innerHTML'), /^5</);
 });
+
+/* ---------------------------------------------------------------------
+   Getting out
+
+   The match-over card used to carry a REMATCH button and nothing else, and
+   setPaused returns early once G.over is set — so every other route to the
+   title was closed too, including the pointerlockchange that endMatch's own
+   exitPointerLock triggers. A finished match could only be left by reloading
+   the page, and a guest, whose REMATCH reads WAITING FOR HOST and is
+   disabled, had nothing on the screen it could press at all.
+
+   These run against the real handlers rather than a restatement of them: the
+   DOM below remembers class and button state, and Escape is delivered to the
+   listener initInput actually registered.
+   --------------------------------------------------------------------- */
+function menuClient() {
+  const client = SIM.createInstance({ ms: 0 });
+  client.run(`
+    var SIM_ELS = new Map();
+    var SIM_KEYDOWN = [];
+    var SIM_TIMERS = [];
+    document.getElementById = function (id) {
+      if (!SIM_ELS.has(id)) {
+        var classes = new Set(id === 'over' || id === 'dead' ? ['off'] : []);
+        SIM_ELS.set(id, {
+          id: id, textContent: '', innerHTML: '', value: '', hidden: false,
+          disabled: false, checked: false, dataset: {}, children: [], style: {},
+          classList: {
+            add: function (c) { classes.add(c); },
+            remove: function (c) { classes['delete'](c); },
+            toggle: function (c, on) { on ? classes.add(c) : classes['delete'](c); },
+            contains: function (c) { return classes.has(c); }
+          },
+          addEventListener: function () {},
+          appendChild: function (c) { return c; },
+          insertBefore: function (c) { return c; },
+          querySelectorAll: function () { return []; },
+          setAttribute: function () {}, getAttribute: function () { return null; }
+        });
+      }
+      return SIM_ELS.get(id);
+    };
+    addEventListener = function (type, fn) { if (type === 'keydown') SIM_KEYDOWN.push(fn); };
+    setTimeout = function (fn, ms) { SIM_TIMERS.push({ fn: fn, ms: ms }); return SIM_TIMERS.length; };
+    clearTimeout = function () {};
+    initInput();
+    function simEscape() {
+      for (var i = 0; i < SIM_KEYDOWN.length; i++) {
+        SIM_KEYDOWN[i]({ code: 'Escape', repeat: false, preventDefault: function () {} });
+      }
+    }
+    function simFireTimer(ms) {
+      for (var i = 0; i < SIM_TIMERS.length; i++) {
+        if (SIM_TIMERS[i].ms === ms) { SIM_TIMERS[i].fn(); return true; }
+      }
+      return false;
+    }
+  `);
+  const ref = (id) => `document.getElementById(${JSON.stringify(id)})`;
+  client.text = (id) => client.get(`${ref(id)}.textContent`);
+  client.disabled = (id) => client.get(`${ref(id)}.disabled`);
+  client.has = (id, cls) => client.get(`${ref(id)}.classList.contains(${JSON.stringify(cls)})`);
+  return client;
+}
+
+test('a finished match has a way back to the menu', () => {
+  const client = menuClient();
+  client.run(`
+    G.started = true; G.over = true;
+    document.getElementById('title').classList.add('off');
+    document.getElementById('over').classList.remove('off');
+    document.getElementById('again').textContent = 'WAITING FOR HOST';
+    document.getElementById('again').disabled = true;
+    returnToMenu();
+  `);
+
+  assert.strictEqual(client.has('title', 'off'), false, 'the title card is the way back');
+  assert.strictEqual(client.has('over', 'off'), true, 'and the card you left is down');
+  assert.strictEqual(client.has('hud', 'hide'), true);
+  assert.strictEqual(client.get('G.over'), false);
+  assert.strictEqual(client.get('G.started'), false);
+  /* Whatever the last round left on the button must not greet the next one. */
+  assert.strictEqual(client.text('again'), 'REMATCH');
+  assert.strictEqual(client.disabled('again'), false);
+});
+
+test('Escape resolves to something at every point in a match', () => {
+  const client = menuClient();
+
+  client.run('G.started = true; G.over = false; G.paused = false; simEscape();');
+  assert.strictEqual(client.get('G.paused'), true, 'a running match pauses');
+
+  client.run('simEscape();');
+  assert.strictEqual(client.get('G.paused'), false, 'a paused one resumes');
+
+  /* The case that had no route at all: endMatch releases the pointer lock
+     itself, so the pointerlockchange that used to stand in for this key never
+     fires, and setPaused refuses to run on G.over regardless. */
+  client.run('G.over = true; simEscape();');
+  assert.strictEqual(client.get('G.started'), false, 'a finished one leaves');
+  assert.strictEqual(client.has('title', 'off'), false);
+});
+
+test('a guest is never left with nothing it can press', () => {
+  const client = menuClient();
+  client.run(`
+    NET.mode = 'guest'; NET.phase = 'playing';
+    G.started = true; G.over = true;
+    netSyncRematchButton();
+  `);
+
+  assert.strictEqual(client.disabled('again'), true,
+    'only a host may start a rematch, so that button stays honest');
+  assert.strictEqual(client.disabled('overMenu'), false,
+    'which is the whole reason the card carries a second one');
+
+  client.run('netLeaveMatch();');
+  assert.strictEqual(client.has('title', 'off'), false);
+  assert.strictEqual(client.get('NET.mode'), 'solo', 'and leaving hands the seat back');
+  assert.strictEqual(client.get('NET.phase'), 'idle');
+});
+
+test('a start the relay never answers gives the button back', () => {
+  const client = menuClient();
+  client.run(`
+    NET.mode = 'host'; NET.phase = 'playing';
+    G.started = true; G.over = true;
+    netSend = function () { return true; };
+    netHostStart();
+  `);
+
+  assert.strictEqual(client.get('NET.starting'), true);
+  assert.strictEqual(client.text('again'), 'STARTING…');
+  assert.strictEqual(client.disabled('again'), true);
+
+  /* Nothing comes back. That used to be the end of it: a disabled button, on
+     a card with no other control on it, in a room that was working fine. */
+  assert.strictEqual(client.run('simFireTimer(NET_START_TIMEOUT)'), true);
+  assert.strictEqual(client.get('NET.starting'), false);
+  assert.strictEqual(client.text('again'), 'START REMATCH');
+  assert.strictEqual(client.disabled('again'), false);
+});
+
+test('a network call in flight cannot take RESUME away', () => {
+  const client = menuClient();
+  client.run('G.started = true; G.paused = true; netSetMenuBusy(true);');
+  assert.strictEqual(client.disabled('play'), false,
+    'resuming is local, and a relay that is not answering has no say in it');
+  assert.strictEqual(client.disabled('quickPlay'), true,
+    'the buttons that do need the relay still wait for it');
+
+  client.run('G.started = false; netSetMenuBusy(true);');
+  assert.strictEqual(client.disabled('play'), true,
+    'back on the title card it is SOLO again, and busy means busy');
+});

@@ -339,6 +339,11 @@ body.touch .sens{display:none}
 #netStatus[data-kind="error"]{color:#b8406a}
 #menu.pause{margin-top:28px}
 #menu.pause .setup-only{display:none}
+/* The mirror of setup-only: controls that only make sense once there is a
+   match to act on. LEAVE MATCH is the only one, and without it the pause
+   card offered no way out of a round except reloading. */
+.pause-only{display:none}
+#menu.pause .pause-only{display:inline-flex;align-items:center;min-height:44px}
 #menu.pause #menuNote{font-size:14px}
 #lobby{width:min(440px,calc(100vw - 30px));margin-top:22px;padding:18px 20px 20px;pointer-events:auto}
 .lobby-head,.roster-title,.lobby-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -959,6 +964,17 @@ body.touch #dead .report .k{display:none}
 #over .big{font-family:var(--disp);font-size:clamp(40px,9vw,96px);font-weight:800;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 14px 30px rgba(74,63,92,.3);text-align:center}
 #over .rank{margin-top:16px;font-family:var(--disp);font-size:22px;font-weight:700;color:var(--ink)}
+/* #again carried these as inline styles while it was the only thing on the
+   card. It has a neighbour now, so the row owns the spacing and the button
+   owns a rule that :hover and :active can reach. */
+.over-actions{margin-top:28px;display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap}
+#again{pointer-events:auto;cursor:pointer;font-family:var(--disp);font-size:22px;font-weight:800;
+  letter-spacing:.08em;color:var(--ink);padding:13px 42px 15px;border:3px solid var(--ink);
+  border-radius:20px;background:linear-gradient(180deg,#d9f7e6,#b8f2d8);box-shadow:0 6px 0 var(--ink)}
+#again:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 0 var(--ink)}
+#again:active:not(:disabled){transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
+/* Never disabled, whoever is looking at it, which is the whole point of it. */
+#overMenu{min-height:44px;font-size:13px;padding:11px 20px 12px}
 
 #hint{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);font-family:var(--disp);
   font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink);opacity:0;
@@ -973,6 +989,8 @@ body.touch #dead .report .k{display:none}
 #loading.off{display:none}
 #fatal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:60;max-width:70vw;
   padding:18px 22px;font-family:var(--ui);font-size:14px;line-height:1.5;display:none;white-space:pre-wrap}
+/* A dead end with an error on it is still a dead end. */
+#fatal .mini-btn{display:block;margin:14px auto 0}
 
 /* =====================================================================
    TOUCH CONTROLS

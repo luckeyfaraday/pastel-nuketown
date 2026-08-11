@@ -109,6 +109,7 @@ const NET = {
   lastKillerId: null,
   scoreSignature: '',
   connectTimer: 0,
+  startTimer: 0,
   endReason: '',
   roomsBusy: false,
   roomsTimer: 0,
@@ -522,7 +523,12 @@ function netQuickNext(plan) {
 function netSetMenuBusy(busy) {
   for (const id of ['quickPlay', 'hostGame', 'joinGame', 'play']) {
     const el = document.getElementById(id);
-    if (el) el.disabled = !!busy;
+    if (!el) continue;
+    /* #play is RESUME once there is a match behind the card, and resuming is
+       a local act — a call in flight to the relay has no business taking it
+       away, least of all a call that is in flight because it is not
+       answering. */
+    el.disabled = !!busy && !(id === 'play' && G.started);
   }
 }
 
@@ -730,6 +736,26 @@ function netRenderCountdown() {
   }
 }
 
+/* The rematch button's resting label and enabled state, in one place, because
+   two things paint it: showOverScreen when the card goes up, and the start
+   timeout when a start the relay never answered has to be taken back. A guest
+   gets a disabled button because only a host may start a round — which is the
+   reason MAIN MENU sits beside it and is never disabled at all. */
+function netSyncRematchButton() {
+  const again = document.getElementById('again');
+  if (!again) return;
+  if (netIsGuest()) {
+    again.textContent = 'WAITING FOR HOST';
+    again.disabled = true;
+  } else if (netIsHost()) {
+    again.textContent = 'START REMATCH';
+    again.disabled = false;
+  } else {
+    again.textContent = 'REMATCH';
+    again.disabled = false;
+  }
+}
+
 function netSetPauseMenu(paused) {
   const menu = document.getElementById('menu');
   const lobby = document.getElementById('lobby');
@@ -820,6 +846,7 @@ function netResetTransport() {
      would suppress the button against whoever inherits the id shape next. */
   NET.reports.clear();
   NET.reportSending = '';
+  netCancelStartTimeout();
   netCancelAutoStart();
   NET.manualClose = false;
 }
@@ -1173,10 +1200,36 @@ function netHoldStart() {
   netStatus('Holding the start — press START MATCH when you are ready.');
 }
 
+/* A start the relay accepts and never answers used to strand the host on a
+   disabled STARTING… button — and between rounds that button was the only
+   control on the screen, so the page had to be reloaded to get out of a room
+   that was working fine. Matched to the connect timeout: if the round has not
+   begun by now, it is not going to without being asked again. */
+const NET_START_TIMEOUT = 9000;
+
+function netCancelStartTimeout() {
+  if (NET.startTimer) clearTimeout(NET.startTimer);
+  NET.startTimer = 0;
+}
+
+function netArmStartTimeout() {
+  netCancelStartTimeout();
+  NET.startTimer = setTimeout(() => {
+    NET.startTimer = 0;
+    if (!NET.starting) return;
+    NET.starting = false;
+    const start = document.getElementById('netStart');
+    if (start) start.disabled = NET.phase !== 'lobby';
+    if (G.over) netSyncRematchButton();
+    netStatus('The match did not start. Try again, or leave the room.', 'error');
+  }, NET_START_TIMEOUT);
+}
+
 function netHostStart() {
   if (!netIsHost() || NET.starting ||
       (NET.phase !== 'lobby' && NET.phase !== 'playing')) return;
   NET.starting = true;
+  netArmStartTimeout();
   const start = document.getElementById('netStart');
   const again = document.getElementById('again');
   if (start) start.disabled = true;
@@ -1191,6 +1244,7 @@ function netHostStart() {
     authorityEpoch: NET.authorityEpoch
   })) {
     NET.starting = false;
+    netCancelStartTimeout();
     if (start) start.disabled = false;
     if (again && G.over) {
       again.disabled = false;
@@ -1203,6 +1257,7 @@ function netHostStart() {
 function netBeginMatch() {
   NET.phase = 'playing';
   NET.starting = false;
+  netCancelStartTimeout();
   netCancelAutoStart();
   NET.inputSeq = 0;
   NET.lastFireSeqSent = 0;
@@ -1269,28 +1324,20 @@ function netBeginMatch() {
   showHint(netIsHost() ? 'YOU ARE THE HOST' : 'CONNECTED TO ' + NET.room);
 }
 
-function netLeaveLobby() {
+/* Leaving is one act whether the round is running, finished, or never started,
+   so LEAVE MATCH, MAIN MENU and the lobby's own LEAVE all land here. Dropping
+   the socket is what leaves the room — the relay frees the seat on the close,
+   which is why this must not be reached by tearing the match down alone. */
+function netLeaveMatch(reason) {
   netResetTransport();
-  netShowMainMenu();
-  netStatus('');
+  returnToMenu(reason);
+  if (!reason) netStatus('');
 }
 
+function netLeaveLobby() { netLeaveMatch(); }
+
 function netReturnToLobbyAfterHostChange(hostId) {
-  if (G.started) {
-    G.paused = true;
-    G.fixedAcc = 0;
-    exitPointerLock();
-    document.getElementById('hud').classList.add('hide');
-    document.getElementById('dead').classList.add('off');
-    document.getElementById('over').classList.add('off');
-    restoreBoard();
-    G.started = false;
-    G.over = false;
-    G.winner = null;
-  }
-  const menu = document.getElementById('menu');
-  if (menu) menu.classList.remove('pause');
-  document.getElementById('title').classList.remove('off');
+  stopMatch();
   netShowLobby();
 
   const promoted = hostId === NET.id;
@@ -1610,18 +1657,8 @@ function netFinishSeamlessMigration() {
 }
 
 function netEndSession(message) {
-  if (G.started) {
-    G.paused = true;
-    exitPointerLock();
-    document.getElementById('hud').classList.add('hide');
-    document.getElementById('dead').classList.add('off');
-    document.getElementById('over').classList.add('off');
-    restoreBoard();
-    document.getElementById('title').classList.remove('off');
-    G.started = false; G.over = false;
-  }
   netResetTransport();
-  netShowMainMenu(message);
+  returnToMenu(message);
 }
 
 /* ---- drop-in ------------------------------------------------------------

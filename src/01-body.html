@@ -120,6 +120,10 @@
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
       <button class="menu-btn" id="play">SOLO</button>
+      <!-- Pause card only: the way out of a round that is still running.
+           #netLeave cannot serve here — it lives on the lobby panel, which
+           netSetPauseMenu hides for the whole match. -->
+      <button class="mini-btn pause-only" id="leaveMatch" type="button">LEAVE MATCH</button>
     </div>
     <div class="rooms setup-only">
       <div class="rooms-head">
@@ -274,7 +278,15 @@
 <div class="screen off" id="over">
   <div class="big" id="overBig">MATCH OVER</div>
   <div class="rank" id="overRank"></div>
-  <button id="again" style="margin-top:28px;pointer-events:auto;cursor:pointer;font-family:var(--disp);font-size:22px;font-weight:800;letter-spacing:.08em;color:var(--ink);padding:13px 42px 15px;border:3px solid var(--ink);border-radius:20px;background:linear-gradient(180deg,#d9f7e6,#b8f2d8);box-shadow:0 6px 0 var(--ink)">REMATCH</button>
+  <!-- Two ways off this card, and MAIN MENU is the one that has to be here.
+       REMATCH used to be the only control on it, which left the page reload
+       as the only way back to the title — and left a guest, whose REMATCH
+       reads WAITING FOR HOST and is disabled, with nothing clickable at all.
+       showOverScreen puts the scoreboard in ahead of this row. -->
+  <div class="over-actions" id="overActions">
+    <button id="again" type="button">REMATCH</button>
+    <button class="mini-btn" id="overMenu" type="button">MAIN MENU</button>
+  </div>
 </div>
 
 <div id="loading"><div class="lt">WARMING UP THE PASTELS</div><div class="bar"><i id="lbar"></i></div></div>

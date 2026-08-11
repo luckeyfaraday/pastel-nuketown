@@ -301,24 +301,21 @@ function showOverScreen(winner) {
     '  ·  ' + scoreText + ' / ' + G.player.deaths + ' deaths  ·  best streak ' + G.player.bestStreak;
   refreshBoard();
   const over = $('over');
-  over.insertBefore(elBoard, $('again'));
+  /* Ahead of the button row, not ahead of the button: the row is the child
+     of #over now, and insertBefore against a grandchild throws. */
+  over.insertBefore(elBoard, $('overActions'));
   elBoard.classList.add('on');
-  const again = $('again');
-  if (netIsGuest()) {
-    again.textContent = 'WAITING FOR HOST';
-    again.disabled = true;
-  } else if (netIsHost()) {
-    again.textContent = 'START REMATCH';
-    again.disabled = false;
-  } else {
-    again.textContent = 'REMATCH';
-    again.disabled = false;
-  }
+  netSyncRematchButton();
   over.classList.remove('off');
 }
 
 /* ---- pause ---- */
 function setPaused(p) {
+  /* A finished match has nothing left to pause or resume, so the way off the
+     match-over card is returnToMenu — MAIN MENU on the card, or Escape — and
+     not this. Worth stating because this early return is what used to make
+     that card inescapable: it is on the far end of every route to the title,
+     including the pointerlockchange handler endMatch itself triggers. */
   if (G.over) return;
   G.paused = p;
   const dead = $('dead');
