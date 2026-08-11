@@ -286,6 +286,13 @@ function boot() {
     }
     startMatch();
   });
+  /* The two exits. Both mean the same thing — drop the room if there is one,
+     stop the match, show the title card — and they are two buttons only
+     because they sit on two different cards. */
+  for (const id of ['leaveMatch', 'overMenu']) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', () => { SFX.ui(); netLeaveMatch(); });
+  }
 
   document.getElementById('modeDm').addEventListener('click', () => chooseMode('dm'));
   document.getElementById('modeKc').addEventListener('click', () => chooseMode('kc'));

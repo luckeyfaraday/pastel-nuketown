@@ -786,14 +786,37 @@ function initInput() {
        report, and sendReport itself refuses when there is nothing to report —
        which is what keeps F inert for the rest of the match. */
     if (e.code === 'KeyF' && !e.repeat) sendReport();
-    if (e.code === 'Escape') { /* browser exits lock; handled below */ }
+    /* Escape has to resolve to something at every point in a match, and used
+       to resolve to nothing on its own — it was a comment, and the pause it
+       appeared to cause was the browser dropping the pointer lock underneath.
+       That inference fails wherever there is no lock to drop: after endMatch,
+       which releases it; on a page that was never granted one. Resolved in
+       order — a finished round leaves, a running one pauses, a paused one
+       resumes. The dialogs get first refusal, because 82-store.js registers
+       its own Escape handler after this one and would otherwise act second on
+       a key this had already spent. */
+    if (e.code === 'Escape' && !e.repeat) {
+      if (typeof storeIsOpen === 'function' && storeIsOpen()) return;
+      if (typeof battlepassIsOpen === 'function' && battlepassIsOpen()) return;
+      if (G.over) returnToMenu();
+      else if (G.paused) { setPaused(false); requestLock(); }
+      else setPaused(true);
+    }
   });
   addEventListener('keyup', e => {
     KEY[e.code] = false;
     if (e.code === 'Tab') setBoard(false);
   });
   addEventListener('mousedown', e => {
-    if (IN.locked && e.button === 0) pressFire();
+    if (IN.locked && e.button === 0) { pressFire(); return; }
+    /* Clicking back into the window re-takes the lock, the way every other
+       shooter does it. Without it, resuming with Escape would be a trap of
+       its own: Chrome refuses a lock request for about a second after an
+       Escape released one, and a refused request fires no pointerlockchange
+       — so nothing would pause the game again and there would be no way left
+       to ask. Only reachable while actually playing, so it cannot fight the
+       pause card or the buttons on it. */
+    if (e.button === 0 && G.started && !G.paused && !G.over && !TOUCH.on) requestLock();
   });
   addEventListener('mouseup', e => { if (e.button === 0) releaseFire(); });
   addEventListener('wheel', e => {
@@ -1253,4 +1276,44 @@ function startMatch() {
   showHint('FIRST TO ' + matchTarget() + (G.mode === 'kc' ? ' CONFIRMS' : ' KILLS'));
   touchEnterImmersive();                  // no-op unless this is a phone
   requestLock();
+}
+
+/* startMatch run backwards: the world stops, every card comes down, and the
+   title card comes back. Three near-copies of this already existed for the
+   cases the relay drove — a lost connection, a host that left — and none for
+   the case a player could reach, which is why a finished match could only be
+   left by reloading the page. Everything that leaves a match goes through
+   here now: LEAVE MATCH, MAIN MENU, Escape on a finished round, netEndSession
+   and netReturnToLobbyAfterHostChange.
+
+   Safe to call when nothing is running: the menu is idempotent, and the lobby
+   leans on that to reuse it. */
+function stopMatch() {
+  if (G.started) {
+    exitPointerLock();
+    document.getElementById('hud').classList.add('hide');
+  }
+  G.started = false; G.over = false;
+  G.paused = false; G.fixedAcc = 0;
+  G.winner = null;
+  const dead = document.getElementById('dead');
+  dead.classList.add('off');
+  delete dead.dataset.wasUp;
+  document.getElementById('over').classList.add('off');
+  restoreBoard();
+  const menu = document.getElementById('menu');
+  if (menu) menu.classList.remove('pause');
+  document.getElementById('title').classList.remove('off');
+  /* The rematch button carries a label and a disabled state out of whatever
+     the last round left behind — WAITING FOR HOST on a guest, STARTING… on a
+     host whose start never landed. Neither may be what greets the next one. */
+  const again = document.getElementById('again');
+  if (again) { again.disabled = false; again.textContent = 'REMATCH'; }
+}
+
+/* The transport is the caller's business: a player pressing LEAVE has a room
+   to quit, and a session the relay already hung up on does not. */
+function returnToMenu(reason) {
+  stopMatch();
+  netShowMainMenu(reason);
 }

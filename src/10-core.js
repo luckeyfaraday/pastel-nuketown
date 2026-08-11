@@ -15,6 +15,16 @@ function fatal(msg) {
   if (!el) return;
   el.style.display = 'block';
   el.textContent = 'ERROR\n\n' + msg;
+  /* Setting textContent cleared the last one, so repeated errors leave one
+     button rather than a column of them. Reloading is the only honest offer
+     here — whatever broke, this panel is on top of everything else and had
+     nothing on it to press. */
+  const again = document.createElement('button');
+  again.type = 'button';
+  again.className = 'mini-btn';
+  again.textContent = 'RELOAD';
+  again.addEventListener('click', () => { try { location.reload(); } catch (e) {} });
+  el.appendChild(again);
   const l = document.getElementById('loading'); if (l) l.classList.add('off');
 }
 window.addEventListener('error', e => fatal((e.message || 'error') + '\n' + (e.filename || '') + ':' + (e.lineno || '')));

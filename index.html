@@ -341,6 +341,11 @@ body.touch .sens{display:none}
 #netStatus[data-kind="error"]{color:#b8406a}
 #menu.pause{margin-top:28px}
 #menu.pause .setup-only{display:none}
+/* The mirror of setup-only: controls that only make sense once there is a
+   match to act on. LEAVE MATCH is the only one, and without it the pause
+   card offered no way out of a round except reloading. */
+.pause-only{display:none}
+#menu.pause .pause-only{display:inline-flex;align-items:center;min-height:44px}
 #menu.pause #menuNote{font-size:14px}
 #lobby{width:min(440px,calc(100vw - 30px));margin-top:22px;padding:18px 20px 20px;pointer-events:auto}
 .lobby-head,.roster-title,.lobby-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -961,6 +966,17 @@ body.touch #dead .report .k{display:none}
 #over .big{font-family:var(--disp);font-size:clamp(40px,9vw,96px);font-weight:800;color:#fff;
   text-shadow:0 5px 0 var(--ink),0 14px 30px rgba(74,63,92,.3);text-align:center}
 #over .rank{margin-top:16px;font-family:var(--disp);font-size:22px;font-weight:700;color:var(--ink)}
+/* #again carried these as inline styles while it was the only thing on the
+   card. It has a neighbour now, so the row owns the spacing and the button
+   owns a rule that :hover and :active can reach. */
+.over-actions{margin-top:28px;display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap}
+#again{pointer-events:auto;cursor:pointer;font-family:var(--disp);font-size:22px;font-weight:800;
+  letter-spacing:.08em;color:var(--ink);padding:13px 42px 15px;border:3px solid var(--ink);
+  border-radius:20px;background:linear-gradient(180deg,#d9f7e6,#b8f2d8);box-shadow:0 6px 0 var(--ink)}
+#again:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 0 var(--ink)}
+#again:active:not(:disabled){transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
+/* Never disabled, whoever is looking at it, which is the whole point of it. */
+#overMenu{min-height:44px;font-size:13px;padding:11px 20px 12px}
 
 #hint{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);font-family:var(--disp);
   font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink);opacity:0;
@@ -975,6 +991,8 @@ body.touch #dead .report .k{display:none}
 #loading.off{display:none}
 #fatal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:60;max-width:70vw;
   padding:18px 22px;font-family:var(--ui);font-size:14px;line-height:1.5;display:none;white-space:pre-wrap}
+/* A dead end with an error on it is still a dead end. */
+#fatal .mini-btn{display:block;margin:14px auto 0}
 
 /* =====================================================================
    TOUCH CONTROLS
@@ -1204,6 +1222,10 @@ body.touch .touch-keys{display:flex}
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
       <button class="menu-btn" id="play">SOLO</button>
+      <!-- Pause card only: the way out of a round that is still running.
+           #netLeave cannot serve here — it lives on the lobby panel, which
+           netSetPauseMenu hides for the whole match. -->
+      <button class="mini-btn pause-only" id="leaveMatch" type="button">LEAVE MATCH</button>
     </div>
     <div class="rooms setup-only">
       <div class="rooms-head">
@@ -1358,7 +1380,15 @@ body.touch .touch-keys{display:flex}
 <div class="screen off" id="over">
   <div class="big" id="overBig">MATCH OVER</div>
   <div class="rank" id="overRank"></div>
-  <button id="again" style="margin-top:28px;pointer-events:auto;cursor:pointer;font-family:var(--disp);font-size:22px;font-weight:800;letter-spacing:.08em;color:var(--ink);padding:13px 42px 15px;border:3px solid var(--ink);border-radius:20px;background:linear-gradient(180deg,#d9f7e6,#b8f2d8);box-shadow:0 6px 0 var(--ink)">REMATCH</button>
+  <!-- Two ways off this card, and MAIN MENU is the one that has to be here.
+       REMATCH used to be the only control on it, which left the page reload
+       as the only way back to the title — and left a guest, whose REMATCH
+       reads WAITING FOR HOST and is disabled, with nothing clickable at all.
+       showOverScreen puts the scoreboard in ahead of this row. -->
+  <div class="over-actions" id="overActions">
+    <button id="again" type="button">REMATCH</button>
+    <button class="mini-btn" id="overMenu" type="button">MAIN MENU</button>
+  </div>
 </div>
 
 <div id="loading"><div class="lt">WARMING UP THE PASTELS</div><div class="bar"><i id="lbar"></i></div></div>
@@ -3592,6 +3622,16 @@ function fatal(msg) {
   if (!el) return;
   el.style.display = 'block';
   el.textContent = 'ERROR\n\n' + msg;
+  /* Setting textContent cleared the last one, so repeated errors leave one
+     button rather than a column of them. Reloading is the only honest offer
+     here — whatever broke, this panel is on top of everything else and had
+     nothing on it to press. */
+  const again = document.createElement('button');
+  again.type = 'button';
+  again.className = 'mini-btn';
+  again.textContent = 'RELOAD';
+  again.addEventListener('click', () => { try { location.reload(); } catch (e) {} });
+  el.appendChild(again);
   const l = document.getElementById('loading'); if (l) l.classList.add('off');
 }
 window.addEventListener('error', e => fatal((e.message || 'error') + '\n' + (e.filename || '') + ':' + (e.lineno || '')));
@@ -9595,14 +9635,37 @@ function initInput() {
        report, and sendReport itself refuses when there is nothing to report —
        which is what keeps F inert for the rest of the match. */
     if (e.code === 'KeyF' && !e.repeat) sendReport();
-    if (e.code === 'Escape') { /* browser exits lock; handled below */ }
+    /* Escape has to resolve to something at every point in a match, and used
+       to resolve to nothing on its own — it was a comment, and the pause it
+       appeared to cause was the browser dropping the pointer lock underneath.
+       That inference fails wherever there is no lock to drop: after endMatch,
+       which releases it; on a page that was never granted one. Resolved in
+       order — a finished round leaves, a running one pauses, a paused one
+       resumes. The dialogs get first refusal, because 82-store.js registers
+       its own Escape handler after this one and would otherwise act second on
+       a key this had already spent. */
+    if (e.code === 'Escape' && !e.repeat) {
+      if (typeof storeIsOpen === 'function' && storeIsOpen()) return;
+      if (typeof battlepassIsOpen === 'function' && battlepassIsOpen()) return;
+      if (G.over) returnToMenu();
+      else if (G.paused) { setPaused(false); requestLock(); }
+      else setPaused(true);
+    }
   });
   addEventListener('keyup', e => {
     KEY[e.code] = false;
     if (e.code === 'Tab') setBoard(false);
   });
   addEventListener('mousedown', e => {
-    if (IN.locked && e.button === 0) pressFire();
+    if (IN.locked && e.button === 0) { pressFire(); return; }
+    /* Clicking back into the window re-takes the lock, the way every other
+       shooter does it. Without it, resuming with Escape would be a trap of
+       its own: Chrome refuses a lock request for about a second after an
+       Escape released one, and a refused request fires no pointerlockchange
+       — so nothing would pause the game again and there would be no way left
+       to ask. Only reachable while actually playing, so it cannot fight the
+       pause card or the buttons on it. */
+    if (e.button === 0 && G.started && !G.paused && !G.over && !TOUCH.on) requestLock();
   });
   addEventListener('mouseup', e => { if (e.button === 0) releaseFire(); });
   addEventListener('wheel', e => {
@@ -10062,6 +10125,46 @@ function startMatch() {
   showHint('FIRST TO ' + matchTarget() + (G.mode === 'kc' ? ' CONFIRMS' : ' KILLS'));
   touchEnterImmersive();                  // no-op unless this is a phone
   requestLock();
+}
+
+/* startMatch run backwards: the world stops, every card comes down, and the
+   title card comes back. Three near-copies of this already existed for the
+   cases the relay drove — a lost connection, a host that left — and none for
+   the case a player could reach, which is why a finished match could only be
+   left by reloading the page. Everything that leaves a match goes through
+   here now: LEAVE MATCH, MAIN MENU, Escape on a finished round, netEndSession
+   and netReturnToLobbyAfterHostChange.
+
+   Safe to call when nothing is running: the menu is idempotent, and the lobby
+   leans on that to reuse it. */
+function stopMatch() {
+  if (G.started) {
+    exitPointerLock();
+    document.getElementById('hud').classList.add('hide');
+  }
+  G.started = false; G.over = false;
+  G.paused = false; G.fixedAcc = 0;
+  G.winner = null;
+  const dead = document.getElementById('dead');
+  dead.classList.add('off');
+  delete dead.dataset.wasUp;
+  document.getElementById('over').classList.add('off');
+  restoreBoard();
+  const menu = document.getElementById('menu');
+  if (menu) menu.classList.remove('pause');
+  document.getElementById('title').classList.remove('off');
+  /* The rematch button carries a label and a disabled state out of whatever
+     the last round left behind — WAITING FOR HOST on a guest, STARTING… on a
+     host whose start never landed. Neither may be what greets the next one. */
+  const again = document.getElementById('again');
+  if (again) { again.disabled = false; again.textContent = 'REMATCH'; }
+}
+
+/* The transport is the caller's business: a player pressing LEAVE has a room
+   to quit, and a session the relay already hung up on does not. */
+function returnToMenu(reason) {
+  stopMatch();
+  netShowMainMenu(reason);
 }
 </script>
 <script>/* ===== src/72-pickups.js ===== */
@@ -10564,6 +10667,7 @@ const NET = {
   lastKillerId: null,
   scoreSignature: '',
   connectTimer: 0,
+  startTimer: 0,
   endReason: '',
   roomsBusy: false,
   roomsTimer: 0,
@@ -10977,7 +11081,12 @@ function netQuickNext(plan) {
 function netSetMenuBusy(busy) {
   for (const id of ['quickPlay', 'hostGame', 'joinGame', 'play']) {
     const el = document.getElementById(id);
-    if (el) el.disabled = !!busy;
+    if (!el) continue;
+    /* #play is RESUME once there is a match behind the card, and resuming is
+       a local act — a call in flight to the relay has no business taking it
+       away, least of all a call that is in flight because it is not
+       answering. */
+    el.disabled = !!busy && !(id === 'play' && G.started);
   }
 }
 
@@ -11185,6 +11294,26 @@ function netRenderCountdown() {
   }
 }
 
+/* The rematch button's resting label and enabled state, in one place, because
+   two things paint it: showOverScreen when the card goes up, and the start
+   timeout when a start the relay never answered has to be taken back. A guest
+   gets a disabled button because only a host may start a round — which is the
+   reason MAIN MENU sits beside it and is never disabled at all. */
+function netSyncRematchButton() {
+  const again = document.getElementById('again');
+  if (!again) return;
+  if (netIsGuest()) {
+    again.textContent = 'WAITING FOR HOST';
+    again.disabled = true;
+  } else if (netIsHost()) {
+    again.textContent = 'START REMATCH';
+    again.disabled = false;
+  } else {
+    again.textContent = 'REMATCH';
+    again.disabled = false;
+  }
+}
+
 function netSetPauseMenu(paused) {
   const menu = document.getElementById('menu');
   const lobby = document.getElementById('lobby');
@@ -11275,6 +11404,7 @@ function netResetTransport() {
      would suppress the button against whoever inherits the id shape next. */
   NET.reports.clear();
   NET.reportSending = '';
+  netCancelStartTimeout();
   netCancelAutoStart();
   NET.manualClose = false;
 }
@@ -11628,10 +11758,36 @@ function netHoldStart() {
   netStatus('Holding the start — press START MATCH when you are ready.');
 }
 
+/* A start the relay accepts and never answers used to strand the host on a
+   disabled STARTING… button — and between rounds that button was the only
+   control on the screen, so the page had to be reloaded to get out of a room
+   that was working fine. Matched to the connect timeout: if the round has not
+   begun by now, it is not going to without being asked again. */
+const NET_START_TIMEOUT = 9000;
+
+function netCancelStartTimeout() {
+  if (NET.startTimer) clearTimeout(NET.startTimer);
+  NET.startTimer = 0;
+}
+
+function netArmStartTimeout() {
+  netCancelStartTimeout();
+  NET.startTimer = setTimeout(() => {
+    NET.startTimer = 0;
+    if (!NET.starting) return;
+    NET.starting = false;
+    const start = document.getElementById('netStart');
+    if (start) start.disabled = NET.phase !== 'lobby';
+    if (G.over) netSyncRematchButton();
+    netStatus('The match did not start. Try again, or leave the room.', 'error');
+  }, NET_START_TIMEOUT);
+}
+
 function netHostStart() {
   if (!netIsHost() || NET.starting ||
       (NET.phase !== 'lobby' && NET.phase !== 'playing')) return;
   NET.starting = true;
+  netArmStartTimeout();
   const start = document.getElementById('netStart');
   const again = document.getElementById('again');
   if (start) start.disabled = true;
@@ -11646,6 +11802,7 @@ function netHostStart() {
     authorityEpoch: NET.authorityEpoch
   })) {
     NET.starting = false;
+    netCancelStartTimeout();
     if (start) start.disabled = false;
     if (again && G.over) {
       again.disabled = false;
@@ -11658,6 +11815,7 @@ function netHostStart() {
 function netBeginMatch() {
   NET.phase = 'playing';
   NET.starting = false;
+  netCancelStartTimeout();
   netCancelAutoStart();
   NET.inputSeq = 0;
   NET.lastFireSeqSent = 0;
@@ -11724,28 +11882,20 @@ function netBeginMatch() {
   showHint(netIsHost() ? 'YOU ARE THE HOST' : 'CONNECTED TO ' + NET.room);
 }
 
-function netLeaveLobby() {
+/* Leaving is one act whether the round is running, finished, or never started,
+   so LEAVE MATCH, MAIN MENU and the lobby's own LEAVE all land here. Dropping
+   the socket is what leaves the room — the relay frees the seat on the close,
+   which is why this must not be reached by tearing the match down alone. */
+function netLeaveMatch(reason) {
   netResetTransport();
-  netShowMainMenu();
-  netStatus('');
+  returnToMenu(reason);
+  if (!reason) netStatus('');
 }
 
+function netLeaveLobby() { netLeaveMatch(); }
+
 function netReturnToLobbyAfterHostChange(hostId) {
-  if (G.started) {
-    G.paused = true;
-    G.fixedAcc = 0;
-    exitPointerLock();
-    document.getElementById('hud').classList.add('hide');
-    document.getElementById('dead').classList.add('off');
-    document.getElementById('over').classList.add('off');
-    restoreBoard();
-    G.started = false;
-    G.over = false;
-    G.winner = null;
-  }
-  const menu = document.getElementById('menu');
-  if (menu) menu.classList.remove('pause');
-  document.getElementById('title').classList.remove('off');
+  stopMatch();
   netShowLobby();
 
   const promoted = hostId === NET.id;
@@ -12065,18 +12215,8 @@ function netFinishSeamlessMigration() {
 }
 
 function netEndSession(message) {
-  if (G.started) {
-    G.paused = true;
-    exitPointerLock();
-    document.getElementById('hud').classList.add('hide');
-    document.getElementById('dead').classList.add('off');
-    document.getElementById('over').classList.add('off');
-    restoreBoard();
-    document.getElementById('title').classList.remove('off');
-    G.started = false; G.over = false;
-  }
   netResetTransport();
-  netShowMainMenu(message);
+  returnToMenu(message);
 }
 
 /* ---- drop-in ------------------------------------------------------------
@@ -14015,24 +14155,21 @@ function showOverScreen(winner) {
     '  ·  ' + scoreText + ' / ' + G.player.deaths + ' deaths  ·  best streak ' + G.player.bestStreak;
   refreshBoard();
   const over = $('over');
-  over.insertBefore(elBoard, $('again'));
+  /* Ahead of the button row, not ahead of the button: the row is the child
+     of #over now, and insertBefore against a grandchild throws. */
+  over.insertBefore(elBoard, $('overActions'));
   elBoard.classList.add('on');
-  const again = $('again');
-  if (netIsGuest()) {
-    again.textContent = 'WAITING FOR HOST';
-    again.disabled = true;
-  } else if (netIsHost()) {
-    again.textContent = 'START REMATCH';
-    again.disabled = false;
-  } else {
-    again.textContent = 'REMATCH';
-    again.disabled = false;
-  }
+  netSyncRematchButton();
   over.classList.remove('off');
 }
 
 /* ---- pause ---- */
 function setPaused(p) {
+  /* A finished match has nothing left to pause or resume, so the way off the
+     match-over card is returnToMenu — MAIN MENU on the card, or Escape — and
+     not this. Worth stating because this early return is what used to make
+     that card inescapable: it is on the far end of every route to the title,
+     including the pointerlockchange handler endMatch itself triggers. */
   if (G.over) return;
   G.paused = p;
   const dead = $('dead');
@@ -17196,6 +17333,13 @@ function boot() {
     }
     startMatch();
   });
+  /* The two exits. Both mean the same thing — drop the room if there is one,
+     stop the match, show the title card — and they are two buttons only
+     because they sit on two different cards. */
+  for (const id of ['leaveMatch', 'overMenu']) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', () => { SFX.ui(); netLeaveMatch(); });
+  }
 
   document.getElementById('modeDm').addEventListener('click', () => chooseMode('dm'));
   document.getElementById('modeKc').addEventListener('click', () => chooseMode('kc'));
