@@ -760,6 +760,9 @@ function storeEquip(id, type) {
   else EQUIPPED.weapons[where.slot] = EQUIPPED.weapons[where.slot] === id ? null : id;
   storeSaveEquipped();
   storeRenderGrid();
+  /* The character on the title screen is whoever is being worn, so a change
+     made behind the panel has to reach the picture standing in front of it. */
+  menuHudRenderHero();
   if (typeof SFX === 'object' && SFX) SFX.ui();
 }
 
@@ -1510,12 +1513,19 @@ function stageClearSlots() {
 
 /* One item, one picture, or null. Everything is put back afterwards by the
    caller — this leaves the renderer at the thumbnail's size and the stage
-   stands empty. */
-function stageDrawThumb(id, type) {
-  const where = stageKindOf(id, type);
+   stands empty.
+
+   `size` is the card's 256x160 unless somebody asks for another; the title
+   screen's character wants a tall frame. A null `id` means the default of
+   its kind, which is the one thing stageKindOf cannot answer — it reads an
+   id, and a default does not have one. */
+function stageDrawThumb(id, type, size) {
+  const where = id === null ? { kind: 'character' } : stageKindOf(id, type);
   if (!where || !STAGE.renderer || !STAGE.thumbPivot || !STAGE.thumbCam) return null;
   const node = stagePreviewNode(where.kind, where.slot, id);
   if (!node) return null;
+  const drawW = size && size.w > 0 ? size.w : STAGE_THUMB_W;
+  const drawH = size && size.h > 0 ? size.h : STAGE_THUMB_H;
 
   const canvas = (STAGE.renderer && STAGE.renderer.domElement) || STAGE.canvas;
   if (!canvas || typeof canvas.toDataURL !== 'function') return null;
@@ -1538,11 +1548,14 @@ function stageDrawThumb(id, type) {
       minY: 0, maxY: node.userData.pnHeight,
       halfZ: node.userData.pnFlat
     };
+    /* Framing reads the lens, so the shape of the picture has to be set
+       before it is framed and not after. */
+    STAGE.thumbCam.aspect = drawW / drawH;
     stageFrame(STAGE.thumbCam, stageStillBounds(pivot) || swept, 0);
     if (typeof STAGE.thumbCam.updateProjectionMatrix === 'function')
       STAGE.thumbCam.updateProjectionMatrix();
 
-    STAGE.renderer.setSize(STAGE_THUMB_W, STAGE_THUMB_H, false);
+    STAGE.renderer.setSize(drawW, drawH, false);
     STAGE.renderer.render(STAGE.scene, STAGE.thumbCam);
     url = canvas.toDataURL('image/png');
     if (typeof url !== 'string' || url.length < 32) url = null;
@@ -1843,6 +1856,9 @@ function storeRenderAccount() {
       ? 'Signed in as ' + ACCOUNT.user.displayName
       : 'Skins for your guns and your fighter, and effects for your shots.';
   }
+  /* Signing out takes the season with it — the tier badge and the reward
+     strip are read out of an account, and there is no longer one. */
+  menuHudRender();
 }
 
 /* What the panel lists. The relay's catalog when there is one, the six we
@@ -2506,6 +2522,9 @@ function battlepassRender() {
   battlepassRenderCta();
   battlepassRenderLadder();
   bpRetick();
+  /* The title screen tells the same season twice — a tier badge and the
+     next rungs — so whatever moved the ladder has moved those too. */
+  menuHudRender();
 }
 
 function battlepassRenderSeason() {
@@ -2847,4 +2866,243 @@ function battlepassShow(open) {
   /* The offer row draws its price out of the catalog, which is only
      re-asked when somebody is paying attention to it. */
   if (storeSignedIn()) storeRefreshCatalog();
+}
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   The parts of the corner layout that are not already on the page: the
+   tier badge beside the callsign, the pass tile's progress bar, the next
+   rungs of the season, and the character standing in the middle.
+
+   Every figure is one the game already knows — /battlepass/me for the
+   season, EQUIPPED for the character — and every part puts itself away
+   when its figure is missing rather than drawing a zero. A signed-out
+   player has no tier. They are not on tier 0.
+
+   Which of these are visible at all is the media queries' business in
+   00-head.html; this file only decides whether there is anything to
+   show. The two exceptions are below: the `hud` class, which is the
+   state those queries key off, and the character, which is expensive
+   enough to be worth asking about the window before drawing.
+   ===================================================================== */
+
+/* The picture is a still, so it is drawn once per skin and kept.
+   `undefined` is "not tried yet" and null is "tried, and there is none" —
+   a browser that could not give the store a context is the second, and
+   asking it again every render would not change the answer. */
+const MENU_HUD = { heroId: undefined, heroUrl: null, heroJob: 0 };
+/* Tall, because it is a person standing up, and drawn larger than it is
+   shown so a high-density screen has pixels to use. */
+const MENU_HUD_HERO = { w: 420, h: 640 };
+/* The full arrangement's query, verbatim from 00-head.html. Only the
+   character reads it, and only to decide whether drawing one is worth it. */
+const MENU_HUD_WIDE = '(min-width:1000px) and (min-height:640px)';
+
+function menuHudEl(id) { return document.getElementById(id); }
+
+/* #title carries `hud` while the setup menu is the thing on screen. Both
+   of the other states that share #title — the lobby, which hides #menu,
+   and the pause card, which is #menu with a class — want the column, and
+   both are reached from several places in 75-network.js and 80-ui.js.
+   Watching the two attributes that say so is one rule to keep true
+   instead of a call to remember at each of those places. */
+function menuHudSyncLayout() {
+  const title = document.getElementById('title');
+  const menu = document.getElementById('menu');
+  if (!title || !menu) return;
+  title.classList.toggle('hud', !menu.hidden && !menu.classList.contains('pause'));
+}
+
+/* Making a context and building a model costs more than this picture is
+   worth on a phone, where the layout it belongs to is not the one on
+   screen. Anything that cannot answer gets the picture. */
+function menuHudWide() {
+  if (typeof matchMedia !== 'function') return true;
+  try { return matchMedia(MENU_HUD_WIDE).matches; } catch (e) { return true; }
+}
+
+/* How far the player is from the tier they have reached to the next one.
+   The top of the ladder has no next and reads as full. */
+function menuHudTierFraction(me) {
+  if (me.tier >= BP_REWARDS.length) return 1;
+  const floor = me.tier > 0 ? BP_XP_THRESHOLDS[me.tier - 1] : 0;
+  const span = BP_XP_THRESHOLDS[me.tier] - floor;
+  if (!(span > 0)) return 0;
+  const into = me.xp - floor;
+  return into <= 0 ? 0 : (into >= span ? 1 : into / span);
+}
+
+/* A season that has not opened yet is not a tier the player is on, and a
+   season that has ended is a standing rather than a climb — both are the
+   pass screen's story to tell, not the badge's. */
+function menuHudSeasonMe() {
+  const me = bpMe();
+  if (!me) return null;
+  return bpEffectiveStatus(me, Date.now()) === 'active' ? me : null;
+}
+
+function menuHudRenderTier() {
+  const box = menuHudEl('menuTier');
+  if (!box) return;
+  const me = menuHudSeasonMe();
+  if (!me) { box.hidden = true; return; }
+  box.hidden = false;
+  const num = menuHudEl('menuTierNum');
+  const fill = menuHudEl('menuTierFill');
+  const xp = menuHudEl('menuTierXp');
+  if (num) num.textContent = String(me.tier);
+  if (fill) fill.style.width = Math.round(menuHudTierFraction(me) * 100) + '%';
+  if (!xp) return;
+  if (me.tier >= BP_REWARDS.length) { xp.textContent = 'TOP TIER'; return; }
+  const floor = me.tier > 0 ? BP_XP_THRESHOLDS[me.tier - 1] : 0;
+  xp.textContent = bpNum(me.xp - floor) + ' / ' + bpNum(BP_XP_THRESHOLDS[me.tier] - floor);
+}
+
+function menuHudRenderPassTile() {
+  const bar = menuHudEl('passTileBar');
+  if (!bar) return;
+  const me = menuHudSeasonMe();
+  if (!me) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const fill = menuHudEl('passTileFill');
+  if (fill) fill.style.width = Math.round(menuHudTierFraction(me) * 100) + '%';
+}
+
+/* The five rungs from where the player is standing. Near the top it is the
+   last five instead: "next" has run out, and an empty strip under a season
+   somebody has finished reads as a bug rather than as a compliment. */
+function menuHudSeasonTiers(me) {
+  const top = BP_REWARDS.length;
+  const span = 5;
+  const first = Math.min(Math.max(1, me.tier + 1), Math.max(1, top - span + 1));
+  const out = [];
+  for (let tier = first; tier < first + span && tier <= top; tier++) out.push(tier);
+  return out;
+}
+
+function menuHudRenderSeason() {
+  const box = menuHudEl('menuSeason');
+  const track = menuHudEl('seasonTrack');
+  if (!box || !track) return;
+  const me = menuHudSeasonMe();
+  if (!me) { box.hidden = true; return; }
+  box.hidden = false;
+  track.innerHTML = '';
+  /* The lane the player is actually climbing. Showing the premium reward to
+     somebody without the pass would make the strip an advertisement, and the
+     pass screen is where the offer belongs. */
+  const lane = me.premium ? 'premium' : 'free';
+  for (const tier of menuHudSeasonTiers(me)) {
+    const id = BP_REWARDS[tier - 1][lane];
+    const kind = bpRewardKind(id);
+    const info = kind ? BP_KINDS[kind] : null;
+    const name = bpRewardName(id);
+    const li = document.createElement('li');
+    if (tier <= me.tier) li.className = 'done';
+    /* The same glyphs the pass screen uses, for the same reason it uses
+       them: the reward renderers draw skins, not icons. */
+    li.appendChild(bpText('span', 'season-glyph', info ? info.glyph : '🎁'));
+    li.appendChild(bpText('b', '', String(tier)));
+    li.appendChild(bpText('small', '', name));
+    li.title = 'Tier ' + tier + ': ' + name + (info ? ' (' + info.label + ')' : '');
+    track.appendChild(li);
+  }
+}
+
+/* Borrow the display case, take one picture, put it back. This is what
+   stageMakeThumbs does for the store's cards, in the one shape the cards
+   do not need: tall, and of whatever is being worn rather than of an id
+   on a shelf. */
+function menuHudDrawHero(id) {
+  if (typeof stageInit !== 'function' || !stageInit()) return null;
+  stageClearSlots();                       // the stands may hold a model this needs
+  let url = null;
+  try { url = stageDrawThumb(id, 'character', MENU_HUD_HERO); } catch (e) { url = null; }
+  /* Drawing left the renderer at the picture's size and the stands empty.
+     Re-applying puts both back, and is only worth doing while somebody is
+     looking at the case. */
+  STAGE.w = 0; STAGE.h = 0;
+  if (typeof storeIsOpen === 'function' && storeIsOpen()) stageApply();
+  return url;
+}
+
+function menuHudRenderHero() {
+  const box = menuHudEl('menuHero');
+  const img = menuHudEl('menuHeroImg');
+  if (!box || !img) return;
+  if (!menuHudWide()) { box.hidden = true; return; }
+  const id = (typeof EQUIPPED === 'object' && EQUIPPED && EQUIPPED.character) || null;
+  if (MENU_HUD.heroId === id) { box.hidden = !MENU_HUD.heroUrl; return; }
+  if (MENU_HUD.heroJob) return;            // one is already in flight; it will land
+  /* Off the frame the menu appeared on. A context, a character and a render
+     is not what the first frame of the title screen should be spending. */
+  const run = () => {
+    MENU_HUD.heroJob = 0;
+    MENU_HUD.heroId = id;
+    MENU_HUD.heroUrl = menuHudDrawHero(id);
+    if (MENU_HUD.heroUrl) img.src = MENU_HUD.heroUrl;
+    box.hidden = !MENU_HUD.heroUrl;
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    MENU_HUD.heroJob = requestAnimationFrame(run) || 0;
+    if (!MENU_HUD.heroJob) run();          // rAF answered 0, which is also "no job"
+  } else run();
+}
+
+function menuHudRender() {
+  menuHudRenderTier();
+  menuHudRenderPassTile();
+  menuHudRenderSeason();
+  menuHudRenderHero();
+}
+
+function menuHudSettingsOpen(open) {
+  const gear = menuHudEl('menuGear');
+  const panel = menuHudEl('menuSettings');
+  if (!gear || !panel) return;
+  if (open) panel.setAttribute('data-open', '');
+  else panel.removeAttribute('data-open');
+  gear.setAttribute('aria-expanded', String(!!open));
+}
+
+function menuHudInit() {
+  const menu = menuHudEl('menu');
+  if (menu && typeof MutationObserver === 'function') {
+    try {
+      new MutationObserver(menuHudSyncLayout)
+        .observe(menu, { attributes: true, attributeFilter: ['class', 'hidden'] });
+    } catch (e) {}
+  }
+  menuHudSyncLayout();
+  const gear = menuHudEl('menuGear');
+  const panel = menuHudEl('menuSettings');
+  if (gear && panel) {
+    gear.addEventListener('click', e => {
+      e.stopPropagation();
+      menuHudSettingsOpen(!panel.hasAttribute('data-open'));
+      if (typeof SFX === 'object' && SFX) SFX.ui();
+    });
+    /* A popover with only its own button to close it is a popover people
+       leave open. Anywhere else on the page, and Escape, put it away. */
+    addEventListener('click', e => {
+      if (!panel.hasAttribute('data-open')) return;
+      if (panel.contains(e.target) || gear.contains(e.target)) return;
+      menuHudSettingsOpen(false);
+    });
+    addEventListener('keydown', e => {
+      if (e.code === 'Escape' && panel.hasAttribute('data-open')) menuHudSettingsOpen(false);
+    });
+  }
+  /* Dragging a window wide is the one moment the character can become
+     worth drawing without anything else having happened. */
+  if (typeof matchMedia === 'function') {
+    try {
+      const wide = matchMedia(MENU_HUD_WIDE);
+      const onChange = () => menuHudRenderHero();
+      if (typeof wide.addEventListener === 'function') wide.addEventListener('change', onChange);
+      else if (typeof wide.addListener === 'function') wide.addListener(onChange);
+    } catch (e) {}
+  }
+  menuHudRender();
 }

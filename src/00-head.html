@@ -340,6 +340,313 @@ body.touch .sens{display:none}
 #menu.pause{margin-top:28px}
 #menu.pause .setup-only{display:none}
 #menu.pause #menuNote{font-size:14px}
+
+/* =====================================================================
+   THE TITLE SCREEN, ACROSS THE SCREEN
+
+   The title menu has always been one column down the middle, which is the
+   right shape for a portrait phone and the wrong one for every landscape
+   window: a laptop leaves it swimming in map, and a phone held sideways
+   has to be scrolled before PLAY is reachable at all. On a landscape
+   window the same controls take the edges instead — who you are along the
+   top, the locker and the pass down the left, the character and the mode
+   in the middle, the rooms and PLAY down the right.
+
+   Two sizes of it. The full arrangement wants room for a character and a
+   season strip; a phone on its side gets the same three columns with
+   those left out, which is what makes the whole menu fit between the
+   notches without a scroll.
+
+   It is an arrangement and not a second menu. Every group is
+   `display:contents` until one of these blocks hands it a box, so the
+   portrait column and the pause card are laid out by the rules above
+   exactly as they were before any of this, and there is no duplicate
+   control to keep in step.
+
+   `.hud` on #title is menuHudSyncLayout's, and means the setup menu is the
+   thing on screen — not the lobby, not the pause card. A page whose script
+   never ran has no .hud and gets the column, which is what this page
+   shipped with.
+   ===================================================================== */
+.menu-topbar,.menu-account,.menu-settings,.menu-launch,.menu-act{display:contents}
+/* Drawn by the wide layouts alone. Kept out of the column from here rather
+   than by the script, so a window dragged narrow puts them away without
+   anything having to watch for it. */
+.tile-sub,.tile-bar,.menu-act-cap,
+.menu-tier,.menu-hero,.menu-season,.menu-gear{display:none}
+
+/* ---------------------------------------------------------------------
+   Shared by both landscape arrangements. The condition is the union of
+   the two below, so a rule they both want is written once; each then adds
+   only what makes it itself.
+   --------------------------------------------------------------------- */
+@media (min-width:660px) and (min-aspect-ratio:3/2),
+       (min-width:1000px) and (min-height:640px){
+#title.hud{
+  display:grid;justify-items:center;align-content:stretch;
+  /* Full-bleed background, bounded content: past about 1700px the corners
+     stop being a composition and become two menus at opposite ends of a
+     desk. The padding takes the surplus rather than a wrapper, because a
+     wrapper would take the backdrop in with it. */
+  padding:14px max(20px,calc((100vw - 1700px) / 2)) 10px;
+  grid-template-columns:minmax(186px,232px) minmax(0,1fr) minmax(226px,312px);
+}
+/* The two spacers exist to centre a column; a grid does its own. */
+#title.hud::before,#title.hud::after{display:none}
+#title.hud #menu{display:contents}
+#title.hud h1{grid-area:h1;align-self:end;margin:0;
+  /* Its own scale here. At the page's 10vw the word NUKETOWN is wider than
+     the middle column on anything under about 1400px and lands on top of
+     the room browser. */
+  font-size:clamp(34px,5.6vw,104px)}
+#title.hud .sub{grid-area:sub}
+#title.hud #matchesCount{grid-area:counts}
+#title.hud .keys{grid-area:keys;margin-top:2px;gap:6px}
+#title.hud .keys span{padding:4px 9px 5px;font-size:11px}
+#title.hud #menuNote{grid-area:note}
+#title.hud #netStatus{grid-area:status;margin-top:0}
+#title.hud .social{grid-area:social}
+/* Blank below two players by design, and an empty chip reads worse than
+   no chip — hence :empty here rather than a script deciding. */
+#title.hud #onlineCount{grid-area:online;align-self:center;margin:0;opacity:1;
+  display:flex;align-items:center;gap:8px;padding:7px 13px 8px;
+  border:2.5px solid var(--ink);border-radius:13px;background:rgba(255,255,255,.7);
+  box-shadow:0 3px 0 var(--ink);color:var(--ink)}
+#title.hud #onlineCount:empty{display:none}
+#title.hud #onlineCount::before{content:'';flex:none;width:9px;height:9px;
+  border-radius:50%;background:#5fc38a;border:2px solid var(--ink)}
+
+/* ---------- top-left: one player card ---------- */
+/* The callsign and the account were two pills side by side, which read as
+   two settings rather than as one player. One box around both, and the
+   pieces inside give up their own edges to it. */
+#title.hud .menu-topbar{grid-area:topbar;justify-self:start;
+  display:flex;align-items:center;gap:4px;padding:4px 6px;
+  border:2.5px solid var(--ink);border-radius:17px;background:rgba(255,255,255,.72);
+  box-shadow:0 4px 0 var(--ink)}
+#title.hud .menu-topbar .identity,
+#title.hud .menu-topbar .locker-who{width:auto;border:0;box-shadow:none;background:none;
+  border-radius:11px}
+#title.hud .menu-topbar .identity{flex:0 1 238px;padding:4px 6px 4px 10px}
+#title.hud .menu-topbar .locker-who{flex:0 1 auto;padding:2px 4px 2px 10px}
+#title.hud .menu-topbar #signIn{margin:2px}
+#title.hud .menu-tier{display:flex;align-items:center;gap:9px;
+  margin-left:4px;padding:5px 12px 6px;border-left:2.5px solid rgba(74,63,92,.25)}
+#title.hud .menu-tier[hidden]{display:none}
+.menu-tier-num{display:flex;align-items:baseline;gap:6px;font-family:var(--disp)}
+.menu-tier-num small{font-size:9px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft)}
+.menu-tier-num b{font-size:19px;font-weight:800;letter-spacing:.04em;color:#d4638f}
+.menu-tier-bar{position:relative;flex:none;width:76px;height:9px;border:2px solid var(--ink);
+  border-radius:6px;background:rgba(74,63,92,.16);overflow:hidden}
+.menu-tier-bar i{position:absolute;top:0;bottom:0;left:0;width:0;
+  background:linear-gradient(90deg,#ffd0e2,#f79ec0)}
+.menu-tier-xp{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.05em;
+  color:var(--ink-soft);white-space:nowrap}
+
+/* ---------- the rail ---------- */
+#title.hud #locker{grid-area:rail;align-self:start;justify-self:stretch;
+  width:auto;flex-direction:column;align-items:stretch;gap:9px;padding:9px;
+  border:2.5px solid var(--ink);border-radius:19px;background:rgba(255,255,255,.6);
+  box-shadow:0 4px 0 var(--ink)}
+#title.hud #locker .locker-btn{flex:0 0 auto;position:relative;
+  display:grid;grid-template-columns:38px minmax(0,1fr);
+  grid-template-areas:"icon name" "icon sub" "bar bar";
+  gap:0 11px;justify-items:start;align-items:center;
+  padding:11px 13px 12px;text-align:left;white-space:normal;font-size:13px}
+#title.hud #locker .locker-btn>span:first-child{grid-area:icon;align-self:center;
+  display:flex;align-items:center;justify-content:center;width:38px;height:38px;font-size:20px;
+  border:2px solid var(--ink);border-radius:12px;background:rgba(255,255,255,.72)}
+#title.hud #locker .locker-btn>span:nth-child(2){grid-area:name;letter-spacing:.09em}
+#title.hud #locker .tile-sub{grid-area:sub;display:block;font-family:var(--ui);
+  font-size:9px;font-weight:800;letter-spacing:.1em;color:var(--ink-soft)}
+#title.hud #locker .tile-bar{grid-area:bar;display:block;position:relative;
+  width:100%;height:8px;margin-top:8px;border:2px solid var(--ink);border-radius:6px;
+  background:rgba(74,63,92,.16);overflow:hidden}
+#title.hud #locker .tile-bar[hidden]{display:none}
+.tile-bar i{position:absolute;top:0;bottom:0;left:0;width:0;
+  background:linear-gradient(90deg,#ffd0e2,#f79ec0)}
+#title.hud #lockerNote{font-size:11px;text-align:center}
+
+/* ---------- the mode plate ---------- */
+/* Under the character rather than off to one side: it is what they are
+   about to go and do, and a card floating alone in the middle distance
+   was the emptiest thing on the screen. */
+#title.hud #modePicker{grid-area:mode;justify-self:center;align-self:start;
+  width:min(252px,100%);padding:10px 11px 11px;border:2.5px solid var(--ink);
+  border-radius:18px;background:rgba(255,255,255,.68);box-shadow:0 4px 0 var(--ink)}
+#title.hud #modePicker .mode-options{grid-template-columns:minmax(0,1fr);gap:7px}
+
+/* ---------- the launch stack ---------- */
+#title.hud .menu-launch{grid-area:launch;align-self:center;justify-self:stretch;
+  display:flex;flex-direction:column;gap:10px;width:100%}
+/* Source order puts the buttons first, which is the order the portrait
+   column and the pause card want. Here the room browser reads first and
+   PLAY is the last thing before the corner. */
+#title.hud .menu-launch .rooms{order:1;width:100%}
+#title.hud .menu-launch .room-toggle{order:2;width:100%}
+#title.hud .menu-launch #roomOptions{order:3;width:100%}
+#title.hud .menu-launch .menu-actions{order:4;
+  flex-direction:column;align-items:stretch;gap:9px;width:100%}
+#title.hud .menu-act{display:flex;flex-direction:column;align-items:stretch;gap:3px}
+#title.hud .menu-act .menu-btn{width:100%;padding-left:12px;padding-right:12px}
+#title.hud .menu-act-cap{display:block;text-align:center;font-family:var(--disp);
+  font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--ink-soft)}
+
+/* ---------- the gear ---------- */
+#title.hud .menu-gear{grid-area:gear;justify-self:end;align-self:start;
+  display:flex;align-items:center;justify-content:center;
+  width:46px;height:46px;padding:0;font-size:19px;border-radius:15px}
+#title.hud .menu-settings{position:absolute;top:70px;right:20px;z-index:3;
+  display:flex;flex-direction:column;gap:10px;width:268px;padding:13px 15px 14px;
+  border:2.5px solid var(--ink);border-radius:17px;background:#fff8f0;
+  box-shadow:0 5px 0 var(--ink),0 14px 28px rgba(74,63,92,.26)}
+#title.hud .menu-settings:not([data-open]){display:none}
+#title.hud .menu-settings .sens,
+#title.hud .menu-settings .look-invert{width:100%}
+}
+
+/* ---------------------------------------------------------------------
+   The full arrangement: room for the character and the season strip.
+   --------------------------------------------------------------------- */
+@media (min-width:1000px) and (min-height:640px){
+  #title.hud{
+    gap:5px 20px;
+    grid-template-rows:auto auto auto auto minmax(120px,1fr) auto auto auto auto auto auto;
+    /* Every child of #title is named. One that is not gets placed
+       automatically into a row invented for it, which is how the key
+       legend ends up sitting on the note.
+
+       The character has two rows of the middle column, and the mode plate
+       moved under the rail to give it the second one. With one row it came
+       out about 160 points tall in a column near a thousand wide, which is
+       not a character standing on a title screen — it is a sticker. The
+       left column reads better for the move as well: the locker, the pass
+       and the mode are the three things you set before pressing PLAY. */
+    grid-template-areas:
+      "topbar topbar gear"
+      "rail   h1     launch"
+      "rail   sub    launch"
+      "rail   counts launch"
+      "mode   hero   launch"
+      "mode   hero   launch"
+      "season season online"
+      "keys   keys   keys"
+      "note   note   note"
+      "status status status"
+      "social social social";
+  }
+  /* Directly under the rail and the same width, so the left edge reads as
+     one stack — locker, pass, mode — and not as cards that happen to share
+     a column. It takes the top of its two rows; the character below has
+     the rest. */
+  #title.hud #modePicker{grid-area:mode;justify-self:stretch;align-self:start;width:auto}
+  /* Empty except when the relay has something to say, and an empty line
+     here is 18 points the character would rather have. */
+  #title.hud #netStatus:empty{display:none}
+
+  /* ---------- the character ---------- */
+  #title.hud .menu-hero{grid-area:hero;justify-self:center;align-self:stretch;
+    position:relative;display:flex;align-items:flex-end;justify-content:center;
+    min-height:0;width:100%;overflow:hidden;pointer-events:none}
+  #title.hud .menu-hero[hidden]{display:none}
+  /* Something to stand on. Without it the picture is a sticker over the
+     map behind it — the store's case solves the same problem the same way,
+     with a shadow that is CSS and costs the renderer nothing. */
+  #title.hud .menu-hero::after{content:'';position:absolute;bottom:2px;left:50%;
+    width:min(230px,56%);height:26px;transform:translateX(-50%);
+    background:radial-gradient(ellipse at 50% 50%,rgba(74,63,92,.30),rgba(74,63,92,0) 70%)}
+  /* Bounded by its row, not by the viewport: a picture measured in vh
+     stands up through the title on a short window, and the title is the
+     one thing on this screen it must not cover. */
+  .menu-hero img{position:relative;z-index:1;max-width:100%;max-height:100%;
+    filter:drop-shadow(0 12px 14px rgba(74,63,92,.20))}
+
+  /* ---------- the season strip ---------- */
+  /* Capped rather than stretched: five rungs spread across a 1200-point
+     column are five mostly-empty boxes. */
+  #title.hud .menu-season{grid-area:season;justify-self:start;align-self:end;
+    display:block;width:100%;max-width:660px;padding:8px 12px 10px;
+    border:2.5px solid var(--ink);border-radius:16px;background:rgba(255,255,255,.6);
+    box-shadow:0 3px 0 var(--ink)}
+  #title.hud .menu-season[hidden]{display:none}
+  .season-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+    margin-bottom:7px;font-family:var(--disp);font-size:11px;font-weight:700;
+    letter-spacing:.14em;color:var(--ink-soft)}
+  .season-track{list-style:none;display:flex;align-items:stretch;gap:8px}
+  .season-track li{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;
+    gap:2px;padding:5px 4px 6px;border:2px solid rgba(74,63,92,.55);border-radius:12px;
+    background:rgba(255,255,255,.58)}
+  /* The pass screen's glyphs, for the reason it uses them: what the game
+     can draw is a skin on a model, and a rung of a ladder is not the place
+     to stand one up. */
+  .season-glyph{font-size:19px;line-height:1.1}
+  .season-track li b{font-family:var(--disp);font-size:11px;font-weight:800;color:var(--ink)}
+  .season-track li small{font-family:var(--ui);font-size:8px;font-weight:800;letter-spacing:.09em;
+    color:var(--ink-soft);text-align:center;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;max-width:100%}
+  .season-track li.done{border-color:var(--ink);background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+}
+
+/* ---------------------------------------------------------------------
+   A phone on its side. Same three columns, no character and no season
+   strip: at 390 points of height the whole point is that PLAY is on the
+   screen already, and today it is 300 points below the fold.
+   --------------------------------------------------------------------- */
+@media (min-width:660px) and (max-height:639px) and (min-aspect-ratio:3/2){
+  #title.hud{
+    gap:4px 14px;padding-top:10px;
+    grid-template-columns:minmax(150px,196px) minmax(0,1fr) minmax(180px,244px);
+    /* Every row its own height, and the stack starts at the top. A 1fr row
+       here would let the grid squeeze the middle to make the whole thing
+       fit, which on the shortest phone is how PLAY ends up printed across
+       the note underneath it. Overrunning the bottom is the better failure:
+       #title scrolls, and what runs off is the key legend. */
+    align-content:start;
+    grid-template-rows:auto;
+    grid-template-areas:
+      "topbar topbar gear"
+      "rail   h1     launch"
+      "rail   sub    launch"
+      "rail   counts launch"
+      "rail   mode   launch"
+      "online online online"
+      "note   note   note"
+      "status status status"
+      "keys   keys   keys"
+      "social social social";
+  }
+  /* The card holds a text field, so it will happily be wider than the two
+     columns it is given and put SIGN IN on top of the room browser. The
+     callsign gives up width first. */
+  #title.hud .menu-topbar{min-width:0;max-width:100%}
+  #title.hud .menu-topbar .identity{flex:0 1 auto;min-width:0}
+  #title.hud h1{font-size:clamp(28px,4.4vw,44px)}
+  #title.hud .sub{margin-top:2px;font-size:11px}
+  #title.hud #matchesCount{margin-top:1px}
+  /* One line per tile and no bar: the room this saves is the room PLAY
+     needs to be above the fold. */
+  #title.hud #locker{gap:7px;padding:7px}
+  #title.hud #locker .locker-btn{grid-template-columns:30px minmax(0,1fr);
+    padding:8px 10px 9px;font-size:11px}
+  #title.hud #locker .locker-btn>span:first-child{width:30px;height:30px;font-size:16px}
+  #title.hud #locker .tile-sub,#title.hud #locker .tile-bar,
+  #title.hud .menu-act-cap{display:none}
+  #title.hud .menu-topbar{gap:2px;padding:2px 4px}
+  #title.hud .menu-topbar .identity{flex:0 1 190px}
+  #title.hud .menu-tier{padding:3px 9px 4px}
+  #title.hud .menu-tier-bar{width:54px}
+  #title.hud .menu-gear{width:38px;height:38px;font-size:16px}
+  #title.hud #modePicker{width:min(220px,100%);padding:7px 8px 8px}
+  #title.hud #modePicker .mode-option{min-height:42px;font-size:10px}
+  #title.hud .menu-launch{gap:6px}
+  #title.hud .menu-launch #roomList{max-height:58px}
+  #title.hud .menu-launch .menu-actions{gap:6px}
+  #title.hud .menu-act .menu-btn{font-size:19px;padding:9px 12px 11px}
+  #title.hud .menu-act #play{font-size:15px;padding:8px 12px 10px}
+  #title.hud .keys{margin-top:0;gap:4px}
+  #title.hud .keys span{padding:2px 7px 3px;font-size:10px}
+  #title.hud #menuNote{font-size:11px}
+}
 #lobby{width:min(440px,calc(100vw - 30px));margin-top:22px;padding:18px 20px 20px;pointer-events:auto}
 .lobby-head,.roster-title,.lobby-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .lobby-head>div{display:flex;align-items:baseline;gap:10px}
@@ -437,7 +744,9 @@ body.touch .sens{display:none}
 .locker-btn{flex:1 1 auto;min-width:0}
 #signIn{background:#fff}
 .gmark{width:15px;height:15px;flex:none}
-.locker-store{flex:0 0 auto;background:linear-gradient(180deg,#f3e9ff,#d4c5f9)}
+/* The two tiles share the row now that sign-in has its own, so they divide
+   it rather than sitting against the left edge with the width going spare. */
+.locker-store{flex:1 1 auto;background:linear-gradient(180deg,#f3e9ff,#d4c5f9)}
 .locker-who{flex:1 1 175px;display:flex;align-items:center;gap:8px;min-width:0;
   padding:4px 6px 4px 12px;border:2.5px solid var(--ink);border-radius:12px;
   background:rgba(255,255,255,.76);box-shadow:0 3px 0 var(--ink)}
@@ -686,7 +995,7 @@ body.touch .sens{display:none}
    whole ladder without the card ever growing wider than the window.
    ===================================================================== */
 /* The title-screen entry, butter-yellow the way the store button is lilac. */
-.locker-pass{flex:0 0 auto;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+.locker-pass{flex:1 1 auto;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
 #battlepass{z-index:37}                /* over #store (36); the two never open together by design */
 .bp-card{width:min(720px,calc(100vw - 16px));max-height:calc(100vh - 30px);padding:15px 17px 17px;
   display:flex;flex-direction:column;gap:10px;pointer-events:auto;overflow:hidden}

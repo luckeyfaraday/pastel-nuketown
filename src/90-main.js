@@ -257,6 +257,10 @@ function boot() {
      yet, not a browser with storage switched off. Every failure inside is
      already handled; this is the guard for the one that is not. */
   try { initStore(); } catch (e) {}
+  /* Its own guard, and after the store rather than inside it: the gear is
+     the only way to the look settings in the wide layout, and a store that
+     threw on the way in must not be what takes them away. */
+  try { menuHudInit(); } catch (e) {}
   const requestedMode = QS.get('mode');
   setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 
