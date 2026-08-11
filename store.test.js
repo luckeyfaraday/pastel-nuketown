@@ -2436,3 +2436,63 @@ test('a short screen takes the room out of the mode card, not the character', ()
   assert.ok(/height:clamp\(/.test(ruleBody(hud, '.mode-card-art') || ''),
     'the mode card art no longer scales on a screen that has the room');
 });
+
+test('a signed-in load asks for the season, so the title plate is not a guess', async () => {
+  /* The season plate in the bottom corner draws BATTLEPASS.me, and the only
+     thing that used to fill it was opening the pass screen. So a signed-in
+     player was met by their own season reading SEASON NOT RUNNING until they
+     pressed SEASON 1 once, after which it was suddenly right — the corner
+     reporting the absence of an answer nobody had asked for. Entitlements were
+     already fetched on every load for the same class of reason; the season is
+     the other half of what the title screen draws about the player. */
+  const ctx = makeStore({
+    reply: url => url.endsWith('/battlepass/me')
+      ? { status: 200, body: { xp: 900, tier: 3, premium: false, earned: [] } }
+      : { status: 200, body: { userId: 'u1', email: 'p@e.com', displayName: 'P', entitlements: [] } }
+  });
+  ctx.localStorage.setItem('pastel-nuketown-token', JSON.stringify({
+    token: 'SECRET-TOKEN-THAT-IS-LONG-ENOUGH', origin: RELAY, expiresAt: Date.now() + 3600000
+  }));
+
+  ctx.initStore();
+  await settle();
+  await settle();
+
+  const asked = ctx.calls.filter(c => c.url === RELAY + '/battlepass/me');
+  assert.equal(asked.length, 1, 'a signed-in load never asks the relay for the season');
+  assert.ok(asked[0].headers && asked[0].headers['Authorization'],
+    'the season is asked for without the token that identifies whose it is');
+});
+
+test('a signed-out load does not ask the relay for a season nobody owns', async () => {
+  const ctx = makeStore({ reply: () => ({ status: 200, body: {} }) });
+  ctx.initStore();
+  await settle();
+  assert.equal(ctx.calls.filter(c => c.url.endsWith('/battlepass/me')).length, 0);
+});
+
+test('the wide title screen still goes away when the match starts', () => {
+  /* The bug this closes: `.screen.off{display:none}` is two classes and
+     `#title.hud` is an id and a class, so the wide layout quietly outranked
+     the class that takes every screen down. startMatch added `off` to #title
+     and nothing happened — the title HUD stayed at full size over the running
+     match, and because it is a grid of corner tiles the clicks went to it and
+     not to the game. PLAY sat live on top of a match in progress.
+
+     Asserted as specificity rather than as text, because the fix is only a
+     fix if it outranks the rule that caused it. */
+  const hud = hudBlock();
+  assert.ok(/display:grid/.test(ruleBody(hud, '#title.hud') || ''),
+    'the wide title screen no longer sets its own display');
+  const off = ruleBody(hud, '#title.hud.off');
+  assert.ok(off, '#title.hud.off has no rule, so `off` cannot hide the wide layout');
+  assert.ok(/display:none/.test(off),
+    '#title.hud.off does not hide the title');
+
+  /* And it has to sit inside the same media block as the grid it undoes: a
+     copy outside it would be right by accident and would stop being right the
+     moment the layout moved. */
+  const at = hud.indexOf('#title.hud.off{');
+  assert.ok(at > hud.indexOf('#title.hud{'),
+    'the override is not stated alongside the layout it corrects');
+});

@@ -452,6 +452,15 @@ body.touch .sens{display:none}
   background:linear-gradient(180deg,#bfe2f7 0%,#cfd8f6 34%,#e6cfe8 56%,#f0cfd9 78%,#e8c3ce 100%);
   backdrop-filter:none;
 }
+/* `off` is how every .screen is taken down, and the rule that does it —
+   `.screen.off` — is two classes. `#title.hud` is an id and a class, so it
+   outranks it: the moment this layout existed, adding `off` to #title stopped
+   hiding it. The title screen stayed painted over the running match, full
+   size, and its corner tiles took the clicks — PLAY sat live on top of a match
+   in progress. Restated here at this rule's own weight, because the layout a
+   screen uses and whether the screen is on the page are two questions and only
+   this block ever confused them. */
+#title.hud.off{display:none}
 /* The two spacers exist to centre a column; a grid does its own. */
 #title.hud::before,#title.hud::after{display:none}
 #title.hud #menu{display:contents}
@@ -15367,8 +15376,14 @@ function storeRefreshMe() {
     storeRenderWallet();
     storeRenderGrid();
     /* A sign-in that lands while the pass screen is up has to show up there
-       too — it is the difference between the signed-out ladder and a tier. */
-    if (battlepassIsOpen()) battlepassRefresh();
+       too — it is the difference between the signed-out ladder and a tier.
+       Unconditional, because the pass screen is no longer the only thing
+       drawing the season: the title screen's bottom corner draws the tier and
+       the climb, and it is on screen the whole time. While this waited for the
+       panel, a signed-in player met their own season reading SEASON NOT
+       RUNNING until they pressed SEASON 1 once — the corner reporting the
+       absence of an answer nobody had asked for. */
+    battlepassRefresh();
     return true;
   }, () => {
     if (storeStale(session)) return false;

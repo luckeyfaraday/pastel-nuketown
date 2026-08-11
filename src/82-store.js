@@ -492,8 +492,14 @@ function storeRefreshMe() {
     storeRenderWallet();
     storeRenderGrid();
     /* A sign-in that lands while the pass screen is up has to show up there
-       too — it is the difference between the signed-out ladder and a tier. */
-    if (battlepassIsOpen()) battlepassRefresh();
+       too — it is the difference between the signed-out ladder and a tier.
+       Unconditional, because the pass screen is no longer the only thing
+       drawing the season: the title screen's bottom corner draws the tier and
+       the climb, and it is on screen the whole time. While this waited for the
+       panel, a signed-in player met their own season reading SEASON NOT
+       RUNNING until they pressed SEASON 1 once — the corner reporting the
+       absence of an answer nobody had asked for. */
+    battlepassRefresh();
     return true;
   }, () => {
     if (storeStale(session)) return false;
