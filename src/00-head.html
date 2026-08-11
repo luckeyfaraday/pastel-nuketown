@@ -782,6 +782,35 @@ body.touch .sens{display:none}
   #title.hud .menu-account #signIn{width:auto;padding:8px 10px 9px}
   #title.hud .menu-account #signIn>span{display:none}
   #title.hud .locker .locker-btn,#title.hud .hud-rail .locker-btn{padding:8px 10px 9px}
+  /* The character is the only thing on this screen that can shrink — it is
+     the flex item with min-height:0, and everything else is clamp()ed to a
+     floor. So on a short screen it paid for all of them: at 875x406 the mode
+     row was 208 points of a 406-point window and the character got 50, which
+     is 13% of the frame for the one thing the screen is about.
+
+     What goes is what does not carry the decision. The strip of street is
+     decoration, and the blurb says at length what the name and the goal
+     already say. Keeping the card no taller than the PLAY/SOLO stack beside
+     it is the rule: the bottom band cannot be shorter than that anyway, so
+     anything under it is free. */
+  #title.hud .mode-card-art,#title.hud .mode-card-blurb{display:none}
+  #title.hud .mode-card{padding:6px 10px 7px;gap:0}
+  #title.hud .mode-card-tag{padding:1px 7px 2px;font-size:8px}
+  #title.hud .mode-card-name{font-size:14px}
+  #title.hud .mode-card-goal{font-size:10px}
+  #title.hud #modePicker{gap:6px}
+  #title.hud .mode-swap{min-height:32px;padding:6px 10px 7px;font-size:10px}
+  /* The wordmark takes a fifth of a 406-point window at the size it wants.
+     It is a caption up here, not the subject. */
+  #title.hud h1{font-size:clamp(20px,2.9vw,32px);padding-bottom:14px}
+  #title.hud .sub{font-size:9px;letter-spacing:.28em}
+  #title.hud #menuNote{font-size:10px;max-width:44ch}
+  /* The gap under the player card is headroom for the relay's status line,
+     which is empty most of the time and is one short line when it is not.
+     On a 406-point window it was costing the character more than the line
+     it reserves. */
+  #title.hud .hud-player{margin-bottom:8px}
+  #title.hud #netStatus{font-size:10px}
   #title.hud #menuNote{font-size:11px}
   #title.hud #modePicker .mode-option{min-height:46px}
   #title.hud .menu-actions #quickPlay{padding:12px 12px 14px}

@@ -2410,3 +2410,29 @@ test('the mode card is decoration over the two real toggles', () => {
   assert.ok(/\.menu-gear,\.hud-season,\.menu-hero,\.mode-card,\.mode-swap\{display:none\}/.test(HEAD),
     'the mode card leaks into the narrow column');
 });
+
+test('a short screen takes the room out of the mode card, not the character', () => {
+  /* The character is the only element here that can shrink — it is the flex
+     item with min-height:0, and everything around it is clamp()ed to a
+     floor — so on a short screen it paid for all of them. At 875x406 the
+     mode row was 208 points of a 406-point window and the character's row
+     was 50: 13% of the frame for the one thing the screen is about.
+
+     The fix is not to shrink the character further but to stop the card
+     having a floor it does not need. The strip of street is decoration and
+     the blurb restates the name and the goal, so on a short screen they go
+     and the card lands under the PLAY/SOLO stack beside it — which the
+     bottom band cannot be shorter than anyway, so it costs nothing. */
+  const short = mediaBlock('@media (min-width:640px) and (max-height:480px){', '#title.hud');
+  assert.ok(short, 'the short-screen rules are gone from src/00-head.html');
+  assert.ok(/\.mode-card-art,#title\.hud \.mode-card-blurb\{display:none\}/.test(short),
+    'the mode card keeps its decoration on a screen with no room for it');
+  assert.ok(/#title\.hud \.mode-swap\{[^}]*min-height:3\dpx/.test(short),
+    'CHANGE MODE keeps the tall-screen tap target that pushed the card over');
+
+  /* And the pieces that were sized against the viewport still are, so the
+     card is not simply pinned small everywhere. */
+  const hud = hudBlock();
+  assert.ok(/height:clamp\(/.test(ruleBody(hud, '.mode-card-art') || ''),
+    'the mode card art no longer scales on a screen that has the room');
+});
