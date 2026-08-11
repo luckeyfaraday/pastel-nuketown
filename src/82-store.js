@@ -2964,6 +2964,44 @@ function menuHudSeasonMe() {
   return bpEffectiveStatus(me, Date.now()) === 'active' ? me : null;
 }
 
+/* The five rungs from where the player is standing. Near the top it is the
+   last five instead: "next" has run out, and an empty strip under a season
+   somebody has finished reads as a bug rather than as a compliment. */
+function menuHudTrackTiers(me) {
+  const top = BP_REWARDS.length;
+  const span = 5;
+  const first = Math.min(Math.max(1, me.tier + 1), Math.max(1, top - span + 1));
+  const out = [];
+  for (let tier = first; tier < first + span && tier <= top; tier++) out.push(tier);
+  return out;
+}
+
+function menuHudRenderTrack(me) {
+  const track = menuHudEl('hudTrack');
+  if (!track) return;
+  if (!me) { track.hidden = true; return; }
+  track.hidden = false;
+  track.innerHTML = '';
+  /* The lane the player is actually climbing. Drawing the premium reward to
+     somebody without the pass would make the strip an advertisement, and the
+     pass screen is where the offer belongs. */
+  const lane = me.premium ? 'premium' : 'free';
+  for (const tier of menuHudTrackTiers(me)) {
+    const id = BP_REWARDS[tier - 1][lane];
+    const kind = bpRewardKind(id);
+    const info = kind ? BP_KINDS[kind] : null;
+    const name = bpRewardName(id);
+    const li = document.createElement('li');
+    if (tier <= me.tier) li.className = 'done';
+    /* The same glyphs the pass screen uses, for the reason it uses them: the
+       reward renderers draw skins, not icons. */
+    li.appendChild(bpText('span', 'tier-glyph', info ? info.glyph : '\uD83C\uDF81'));
+    li.appendChild(bpText('b', '', String(tier)));
+    li.title = 'Tier ' + tier + ': ' + name + (info ? ' (' + info.label + ')' : '');
+    track.appendChild(li);
+  }
+}
+
 function menuHudRenderSeason() {
   const box = menuHudEl('hudPass');
   const rank = menuHudEl('heroRank');
@@ -2978,6 +3016,7 @@ function menuHudRenderSeason() {
        nothing and a zero here would be a lie about the same thing twice.
        What the corner says instead is what would change that. */
     if (rank) rank.hidden = true;
+    menuHudRenderTrack(null);
     if (!box) return;
     box.hidden = false;
     box.classList.add('pass-idle');
@@ -2991,6 +3030,7 @@ function menuHudRenderSeason() {
     return;
   }
   const pct = Math.round(menuHudTierFraction(me) * 100);
+  menuHudRenderTrack(me);
   if (rank) {
     rank.hidden = false;
     const num = menuHudEl('heroRankNum');

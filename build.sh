@@ -19,6 +19,22 @@ trap 'rm -f "$TMP"' EXIT
   echo '<!doctype html>'
   echo '<html lang="en">'
   cat src/00-head.html
+
+  # The title screen's backdrop, inlined rather than fetched. server.mjs serves
+  # exactly two paths -- / and /net-protocol.js -- so a relative URL here would
+  # 404 for anyone the relay is serving, and teaching it a static route would
+  # make a picture into a relay deploy. A data URI keeps the house rule that an
+  # entry is one self-contained index.html, and keeps this page-only.
+  #
+  # It stays a real file in art/ rather than a blob pasted into the CSS: it is
+  # replaceable without touching source, and 55 KB of WebP is ~74 KB of base64,
+  # which is under a tenth of what three.js costs on the same page.
+  echo '<style>'
+  printf '.hud-scene,.mode-card-art{background-image:url("data:image/webp;base64,'
+  base64 -w0 art/nuketown-street.webp
+  printf '")}\n'
+  echo '</style>'
+
   echo '<body>'
   cat src/01-body.html
 

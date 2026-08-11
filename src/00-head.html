@@ -390,7 +390,11 @@ body.touch .sens{display:none}
    ===================================================================== */
 .hud-stage{display:none}
 .hud-meta,.hud-player,.menu-account,.menu-settings,.hud-rail{display:contents}
-.menu-gear,.hud-pass,.menu-hero{display:none}
+/* Wide-layout only. In the column the two mode buttons are the control and
+   the SEASON 1 tile is already the way into the pass, so a card restating
+   the first and a plate duplicating the second are clutter on the screen
+   with the least room for it. */
+.menu-gear,.hud-season,.menu-hero,.mode-card,.mode-swap{display:none}
 .tile-sub{display:none}
 /* #signIn and the account row moved out of .locker, so the sizing that
    `.locker .mini-btn` was giving them has to come from somewhere. */
@@ -432,11 +436,16 @@ body.touch .sens{display:none}
   padding:clamp(10px,1.6vh,20px) var(--hud-pad);
   gap:clamp(6px,1.4vh,16px) clamp(14px,2.2vw,44px);
   grid-template-columns:clamp(232px,14vw,320px) minmax(0,1fr) clamp(232px,14vw,320px);
-  grid-template-rows:auto minmax(0,1fr) auto auto;
+  grid-template-rows:auto auto minmax(0,1fr) auto auto;
+  /* The wordmark is back, in the row above the character rather than in the
+     middle of it — the mockup puts it across the top and the character
+     underneath, which is the one arrangement where both are the size they
+     want to be. Everything else keeps the corner it had. */
   grid-template-areas:
-    "tl   tc    tr"
+    "tl   h1    tr"
     "lft  mid   rgt"
-    "lft  note  rgt"
+    "lft  mid   rgt"
+    "bl   note  br"
     "bl   mode  br";
   background:linear-gradient(180deg,#bfe2f7 0%,#cfd8f6 34%,#e6cfe8 56%,#f0cfd9 78%,#e8c3ce 100%);
   backdrop-filter:none;
@@ -451,10 +460,28 @@ body.touch .sens{display:none}
    -- which is how the social link ends up as a panel filling a grid cell.
    #title is a stacking context of its own (fixed, z-index:34), so a negative
    layer here stays above its background and below everything in it. */
-/* The wordmark, the key legend and the two counts-as-a-caption lines are
-   what the column used to fill its middle with. The character is what
-   fills it here. */
-#title.hud h1,#title.hud .sub,#title.hud .keys{display:none}
+/* The key legend is the one thing with no home here: it is nine chips of
+   fine print in an arrangement that is already dense, and it is still on
+   the column and on the pause card, which is where somebody looking up a
+   key actually is. */
+#title.hud .keys{display:none}
+/* Across the top, sized against the window so it cannot crowd the character
+   the way it did when it sat in the middle column at 10vw. The sub-line
+   rides with it. */
+#title.hud h1{grid-area:h1;align-self:start;justify-self:center;margin:0;text-align:center;
+  /* Room underneath for .sub, which shares this area — without it the row is
+     the height of the letters, .sub hangs off its bottom edge, and the tier
+     badge at the top of the row below lands on top of it. */
+  padding-bottom:clamp(16px,2.1vh,26px);
+  font-size:clamp(30px,3.9vw,68px);line-height:.84}
+#title.hud h1 em{display:inline;margin-left:.24em}
+#title.hud .sub{grid-area:h1;align-self:end;justify-self:center;margin:0;
+  font-size:clamp(10px,.82vw,15px);letter-spacing:.4em}
+/* The relay's line moves under the player card, which is the only corner
+   with room for a sentence — the middle of the top row is the wordmark's
+   now. */
+#title.hud #netStatus{grid-area:tl;align-self:end;justify-self:start;margin:0;
+  padding:0 4px;font-size:clamp(11px,.75vw,13px);text-align:left}
 
 /* ---- the stage ---- */
 #title.hud .hud-stage{display:block;position:absolute;inset:0;z-index:-1;
@@ -499,6 +526,22 @@ body.touch .sens{display:none}
     rgba(0,0,0,.95) 55%,rgba(0,0,0,.45) 100%);
   mask-image:linear-gradient(180deg,rgba(0,0,0,0) 0,rgba(0,0,0,.5) 18%,
     rgba(0,0,0,.95) 55%,rgba(0,0,0,.45) 100%)}
+/* The street. `cover`, anchored on the horizon rather than the middle, so
+   what stays on screen as the window changes shape is the road and the row
+   of houses instead of the sky. The picture is 1672 wide and a display can
+   be half again that, but it is a soft pastel scene with no hard edges in
+   it, which is the one kind that survives being stretched.
+
+   Washed out on purpose: it is scenery behind a character and eight cards,
+   not the subject. The white veil is what the corner cards sit against and
+   what keeps the character readable over the houses. */
+.hud-scene{position:absolute;inset:0;background-size:cover;
+  background-position:50% 62%;background-repeat:no-repeat;opacity:.9}
+.hud-scene::after{content:'';position:absolute;inset:0;
+  background:
+    linear-gradient(180deg,rgba(255,255,255,.34) 0,rgba(255,255,255,.12) 34%,
+      rgba(255,247,251,.4) 62%,rgba(255,240,247,.6) 100%),
+    radial-gradient(58% 52% at 50% 58%,rgba(255,255,255,.5),rgba(255,255,255,0) 72%)}
 /* The pool of light the character is standing in, and the reason the eye goes
    to the middle before it goes to the corners. Centred on the feet -- which
    is the bottom of the character's row, not the bottom of the window -- and
@@ -508,11 +551,15 @@ body.touch .sens{display:none}
   background:radial-gradient(ellipse at center,rgba(255,255,255,.72),rgba(255,251,253,.4) 42%,rgba(255,255,255,0) 74%)}
 /* Corners pulled down so the tiles have something to sit on. */
 #title.hud .hud-stage::after{content:'';position:absolute;inset:0;
-  background:radial-gradient(ellipse at 50% 46%,rgba(74,63,92,0) 42%,rgba(74,63,92,.2) 100%)}
+  background:radial-gradient(ellipse at 50% 46%,rgba(74,63,92,0) 42%,rgba(74,63,92,.26) 100%)}
+/* The painted floor is what shows while the picture decodes and what its
+   edges sit on. The tile grid is the picture's job now — two floors at two
+   different perspectives is one floor too many. */
+#title.hud .hud-grid{display:none}
 
 /* ---- top left: who you are ---- */
 #title.hud .hud-player{grid-area:tl;display:flex;flex-direction:column;align-items:stretch;gap:6px;
-  align-self:start;justify-self:stretch;min-width:0;padding:7px;
+  align-self:start;justify-self:stretch;min-width:0;margin-bottom:22px;padding:7px;
   border:2.5px solid var(--ink);border-radius:16px;background:rgba(255,255,255,.72);
   box-shadow:0 3px 0 var(--ink);backdrop-filter:blur(6px)}
 /* min-width:0 on both, or the callsign's label and input add up to a
@@ -523,10 +570,6 @@ body.touch .sens{display:none}
 #title.hud .menu-account{display:flex;min-width:0}
 #title.hud .menu-account #signIn{width:100%;min-width:0;padding:7px 9px 8px;font-size:9px;gap:6px}
 #title.hud .menu-account .locker-who{flex:1 1 auto;min-width:0;padding:3px 4px 3px 8px}
-
-/* ---- top centre: what the relay is saying ---- */
-#title.hud #netStatus{grid-area:tc;align-self:start;justify-self:center;margin-top:6px;
-  max-width:100%;padding:0 8px}
 
 /* ---- top right: the counts, and the way into the two look settings ---- */
 #title.hud .hud-meta{grid-area:tr;display:flex;align-items:center;justify-content:flex-end;gap:8px;
@@ -574,11 +617,14 @@ body.touch .sens{display:none}
 #title.hud #lockerNote{font-size:11px;text-align:center}
 
 /* ---- the middle: the character ---- */
-#title.hud .menu-hero{grid-area:mid;display:block;position:relative;min-height:0;
-  /* `visible` so the badge is not clipped by the box that clips the
-     character. The character is capped in its own right, so nothing here
-     can spill: it is 62vh inside a box that is at most the row. */
-  overflow:visible;pointer-events:none}
+/* Badge above, character below, both laid out by the box rather than pinned
+   to it. Absolute positioning cannot put the badge on the head: `contain`
+   letterboxes the raster inside the img, so the img's top edge is not the
+   character's, and when the row is shorter than the cap the badge is pushed
+   clean out of the row and onto the wordmark. As flex items they simply
+   stack, and the row cannot be escaped. */
+#title.hud .menu-hero{grid-area:mid;display:flex;flex-direction:column;align-items:center;
+  justify-content:flex-end;min-height:0;overflow:hidden;gap:4px;pointer-events:none}
 #title.hud .menu-hero[hidden]{display:none}
 /* Out of flow, and that is the whole point. The picture is a fixed 440x680
    still in a row whose height is whatever the four corners leave over, so
@@ -588,7 +634,7 @@ body.touch .sens{display:none}
    Absolute breaks the loop — the row is sized by the badge above, and the
    character is then fitted into it. Standing on the bottom edge puts it in
    the pool of light the stage draws there. */
-#title.hud .menu-hero img{position:absolute;display:block;
+#title.hud .menu-hero img{flex:1 1 auto;min-height:0;display:block;
   /* The box is the row and `contain` fits the still inside it, which is the
      only arrangement that can scale the character *up*. `width:auto` stops
      at the raster's natural size, so on a tall display the character came
@@ -599,7 +645,7 @@ body.touch .sens{display:none}
      the four corners leave over, which on a tall display is most of the
      screen -- and a character filling it is 71% of the frame with nothing
      left above its head for the tier badge. The mockup's is nearer 60. */
-  left:0;right:0;bottom:0;top:auto;width:100%;height:min(100%,62vh);
+  width:100%;height:auto;max-height:55vh;
   object-fit:contain;object-position:center bottom;
   /* The character's own contact shadow. Two drops rather than one: a tight
      dark one that reads as the foot touching the floor, and a wide soft one
@@ -609,14 +655,7 @@ body.touch .sens{display:none}
    character's own box rather than to the top of the row: the row is
    whatever the corners leave over, so in flow the badge drifts further and
    further above the head as the window gets taller. */
-/* Sits on top of the character's own box: `bottom` is the height the
-   picture is capped at, so the badge tracks the head at any window size.
-   The row has to leave space for it — the picture is 62vh and the row is
-   what the corners leave over, which on a wide-but-short window is less
-   than that — so the box gets bottom padding the badge sits in, and the
-   overflow that keeps the character clipped no longer cuts the badge off. */
-#title.hud .hero-rank{position:absolute;left:50%;bottom:min(100%,62vh);
-  transform:translateX(-50%);z-index:1;white-space:nowrap}
+#title.hud .hero-rank{flex:none;white-space:nowrap}
 .hero-rank{display:flex;align-items:center;gap:7px;flex:none;padding:4px 13px 5px;
   border:2.5px solid var(--ink);border-radius:999px;
   background:linear-gradient(180deg,#fff6d6,#ffe08a);box-shadow:0 3px 0 var(--ink)}
@@ -631,15 +670,41 @@ body.touch .sens{display:none}
    reads as a banner rather than as a caption to the button below. */
 #title.hud #menuNote{grid-area:note;align-self:end;justify-self:center;margin:0;
   max-width:min(clamp(560px,40vw,760px),100%);font-size:clamp(13px,.95vw,17px)}
+/* One card: what you are playing, and a button that changes it. The pair of
+   toggles underneath is still the control — they carry the aria-pressed a
+   group of two needs — so they stay in the accessibility tree and out of
+   the picture, and CHANGE MODE presses whichever is not currently on. */
 #title.hud #modePicker{grid-area:mode;align-self:end;justify-self:center;
-  width:min(clamp(430px,32vw,660px),100%)}
-#title.hud #modePicker .mode-option{min-height:clamp(58px,5.2vh,84px);font-size:clamp(11px,.85vw,15px)}
-#title.hud #modePicker .mode-option small{font-size:clamp(10px,.72vw,13px)}
-#title.hud .mode-picker-label{font-size:clamp(11px,.75vw,14px)}
+  width:min(clamp(300px,23vw,400px),100%);display:flex;flex-direction:column;
+  gap:8px;text-align:center;padding-bottom:2px}
+#title.hud .mode-picker-label{display:none}
+#title.hud .mode-options{position:absolute;width:1px;height:1px;overflow:hidden;
+  clip-path:inset(50%);white-space:nowrap}
+#title.hud .mode-card{display:grid;gap:1px;justify-items:center;padding:8px 11px 9px;
+  border:2.5px solid var(--ink);border-radius:clamp(16px,1.2vw,22px);
+  background:rgba(255,248,240,.9);box-shadow:0 3px 0 var(--ink);backdrop-filter:blur(6px)}
+.mode-card-tag{justify-self:start;padding:2px 9px 3px;border:2px solid var(--ink);
+  border-radius:8px;background:#fff;font-family:var(--disp);font-size:9px;font-weight:800;
+  letter-spacing:.16em;color:var(--ink-soft)}
+/* A strip of the street, which is the map this mode is played on — the same
+   picture the stage is drawing, framed on the houses. */
+.mode-card-art{display:block;width:100%;height:clamp(42px,5.4vh,68px);margin:5px 0 4px;
+  border:2px solid var(--ink);border-radius:11px;background-size:190% auto;
+  background-position:50% 34%;box-shadow:inset 0 -10px 18px rgba(74,63,92,.12)}
+.mode-card-name{font-family:var(--disp);font-size:clamp(15px,1.15vw,22px);font-weight:800;
+  letter-spacing:.06em;line-height:1}
+.mode-card-goal{font-family:var(--disp);font-size:clamp(11px,.8vw,14px);font-weight:800;
+  letter-spacing:.1em;color:#d4638f}
+.mode-card-blurb{font-family:var(--ui);font-size:clamp(10px,.7vw,12px);font-weight:700;
+  line-height:1.35;color:var(--ink-soft);max-width:30ch}
+#title.hud .mode-swap{display:inline-flex;align-items:center;justify-content:center;
+  width:100%;min-height:38px;padding:8px 12px 9px;font-size:clamp(10px,.72vw,13px);
+  letter-spacing:.13em}
 
 /* ---- bottom left: the season, as a climb ---- */
-#title.hud .hud-pass{grid-area:bl;display:flex;flex-direction:column;gap:6px;
-  align-self:end;justify-self:stretch;margin-bottom:34px;padding:10px 13px 12px;
+#title.hud .hud-season{grid-area:bl;display:flex;flex-direction:column;gap:6px;
+  align-self:end;justify-self:stretch;margin-bottom:30px}
+#title.hud .hud-pass{display:flex;flex-direction:column;gap:6px;padding:10px 13px 12px;
   border:2.5px solid var(--ink);border-radius:16px;text-align:left;
   font-family:inherit;color:var(--ink);pointer-events:auto;cursor:pointer;
   background:linear-gradient(180deg,rgba(255,246,214,.94),rgba(255,224,138,.94));
@@ -662,6 +727,21 @@ body.touch .sens{display:none}
   background:linear-gradient(90deg,#ffb7c5,#d4c5f9);transition:width .3s}
 .pass-xp{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.07em;
   color:var(--ink-soft);text-align:right}
+/* The next rungs, laid along the bottom next to the plate that opens them.
+   Nodes rather than a list: at this size the number and the glyph are all
+   that fit, and the whole climb is one press away on the pass screen. */
+#title.hud .hud-track{display:flex;align-items:stretch;gap:4px;list-style:none}
+#title.hud .hud-track[hidden]{display:none}
+.hud-track li{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;
+  gap:1px;padding:5px 2px 6px;border:2px solid var(--ink);border-radius:11px;
+  background:rgba(255,255,255,.72);box-shadow:0 2px 0 var(--ink)}
+.hud-track li .tier-glyph{font-size:clamp(13px,1vw,18px);line-height:1}
+.hud-track li b{font-family:var(--disp);font-size:clamp(10px,.68vw,12px);font-weight:800;
+  line-height:1;color:var(--ink-soft)}
+/* Already earned. The lane the player is on is the one drawn, so a tier
+   behind them is a thing they have rather than a thing on offer. */
+.hud-track li.done{background:linear-gradient(180deg,#fff2c9,#ffe08a)}
+.hud-track li.done b{color:var(--ink)}
 /* The quietest thing on the screen, in the corner with the most room for
    something quiet. Absolute so it can sit under the pass plate without
    claiming a row of its own. */

@@ -67,7 +67,11 @@
        wide title screen, so the pause card keeps the see-through wash over
        the frozen game that tells you the game is still there. -->
   <div class="hud-stage" aria-hidden="true">
-    <i class="hud-sky"></i><i class="hud-floor"><i class="hud-grid"></i></i><i class="hud-pool"></i>
+    <i class="hud-sky"></i><i class="hud-floor"><i class="hud-grid"></i></i>
+    <!-- The street itself. Sits over the painted sky and floor rather than
+         replacing them: those are what shows while this decodes, and what
+         its edges fade into on a window wider than it is. -->
+    <i class="hud-scene"></i><i class="hud-pool"></i>
   </div>
   <h1>PASTEL<em>NUKETOWN</em></h1>
   <div class="sub">Free&nbsp;For&nbsp;All</div>
@@ -159,13 +163,32 @@
          signed-out player has none, because server.mjs awards match XP
          against an account identity and anonymous play earns nothing. So it
          says that, rather than drawing a tier nobody is on. -->
-    <button class="hud-pass setup-only" id="hudPass" type="button">
+    <div class="hud-season setup-only">
+    <button class="hud-pass" id="hudPass" type="button">
       <span class="pass-head"><span>SEASON 1</span><b id="passTier">FIRST LIGHT</b></span>
       <span class="pass-bar"><i id="passFill"></i></span>
       <small class="pass-xp" id="passXp">SIGN IN TO EARN XP</small>
     </button>
+    <!-- The next rungs of the season, drawn from the same ladder the pass
+         screen uses. A strip rather than a list: it is a taste of what is
+         coming, and the pass screen is where the whole climb lives. Filled
+         by menuHudRenderTrack, and empty until there is a season to draw. -->
+    <ol class="hud-track" id="hudTrack" hidden></ol>
+    </div>
     <div class="mode-picker setup-only" id="modePicker" role="group" aria-labelledby="modePickerLabel">
       <span class="mode-picker-label" id="modePickerLabel">MATCH MODE</span>
+      <!-- The wide layout draws this as one card: the mode you are on, what
+           it asks of you, and a button that swaps it. The two buttons below
+           are still the control — CHANGE MODE presses the other one — so the
+           narrow column and the pause card are untouched, and a keyboard
+           still meets a pair of real toggles with aria-pressed on them. -->
+      <div class="mode-card" aria-hidden="true">
+        <span class="mode-card-tag">MODE</span>
+        <i class="mode-card-art"></i>
+        <b class="mode-card-name" id="modeCardName">DEATHMATCH</b>
+        <small class="mode-card-goal" id="modeCardGoal">25 KILLS</small>
+        <small class="mode-card-blurb" id="modeCardBlurb">Everyone for themselves. Be the last one standing.</small>
+      </div>
       <div class="mode-options">
         <button class="mini-btn mode-option" id="modeDm" type="button" aria-pressed="true">
           <span>DEATHMATCH</span>
@@ -176,6 +199,7 @@
           <small>20 CONFIRMS</small>
         </button>
       </div>
+      <button class="mini-btn mode-swap" id="modeSwap" type="button">CHANGE MODE</button>
     </div>
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
