@@ -2121,3 +2121,135 @@ test('the battle pass mirrors the mobile store split without clipping a reward l
   assert.ok(node && Number(node[1]) <= 60,
     'both reward lanes no longer fit at the screenshot-height breakpoint');
 });
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   A HUD around a character rather than a column of cards, which means the
+   layout is a grid of named corners. Each test below is a mistake this
+   arrangement actually made on the way in.
+   ===================================================================== */
+
+const HUD_QUERY = '@media (min-width:640px) and (min-aspect-ratio:13/10)';
+
+function hudBlock() {
+  const body = mediaBlock(HUD_QUERY, '#title.hud{');
+  assert.ok(body, 'the wide title screen rules are gone from src/00-head.html');
+  return body;
+}
+
+/* The rule body of a single selector inside a block, brace-matched so a
+   nested grid declaration cannot be mistaken for the outer one. */
+function ruleBody(css, selector) {
+  const at = css.indexOf(selector + '{');
+  if (at < 0) return null;
+  return css.slice(at + selector.length + 1, css.indexOf('}', at));
+}
+
+test('every corner of the wide title screen is claimed by name', () => {
+  const hud = hudBlock();
+  const grid = ruleBody(hud, '#title.hud');
+  assert.ok(grid, '#title.hud has no rule of its own');
+
+  const template = grid.match(/grid-template-areas:([^;]+);/);
+  assert.ok(template, 'the layout names no areas');
+  const cells = new Set((template[1].match(/"[^"]*"/g) || [])
+    .join(' ').replace(/"/g, ' ').trim().split(/\s+/).filter(Boolean));
+
+  /* What each area holds. An element that is on the screen and not in here
+     is auto-placed, which is how the previous attempt at this layout ended
+     up with the key legend sitting on top of the status line: the grid
+     invents a row for anything it was not told about. */
+  const placed = {
+    '.hud-player': 'tl', '#netStatus': 'tc', '.hud-meta': 'tr',
+    '.locker': 'lft', '.menu-hero': 'mid', '.hud-rail': 'rgt',
+    '#menuNote': 'note', '.hud-pass': 'bl', '#modePicker': 'mode',
+    '.menu-actions': 'br',
+  };
+  const claimed = new Set();
+  for (const [sel, area] of Object.entries(placed)) {
+    const re = new RegExp('#title\\.hud [^{}]*' +
+      sel.replace('.', '\\.') + '\\{[^}]*grid-area:' + area + '\\b');
+    assert.ok(re.test(hud), `${sel} is not placed in the ${area} corner`);
+    claimed.add(area);
+  }
+  assert.deepStrictEqual([...cells].sort(), [...claimed].sort(),
+    'the template and the placements disagree about which corners exist');
+});
+
+test('the three layers that are not corners stay out of the grid', () => {
+  const hud = hudBlock();
+  /* Scenery, a popover and a footnote. Each one would otherwise take a cell
+     of its own -- the social link did exactly that, and drew itself as a
+     panel filling the bottom-left corner. */
+  for (const sel of ['.hud-stage', '.menu-settings', '.social']) {
+    const rule = ruleBody(hud, '#title.hud ' + sel);
+    assert.ok(rule && /position:absolute/.test(rule),
+      `${sel} is in flow, so it is taking a grid cell`);
+  }
+  /* And the scenery goes behind rather than the content being lifted in
+     front of it: a blanket `position:relative` on #menu's children carries
+     two ids and silently outranks every rule above. */
+  assert.ok(/#title\.hud \.hud-stage\{[^}]*z-index:-1/.test(hud),
+    'the stage is not the layer behind the content');
+  assert.ok(!/#title\.hud #menu>\*\{[^}]*position:relative/.test(hud),
+    'the blanket position rule is back, and it outranks the rules below it');
+});
+
+test('the wide layout does not inherit .screen centring for its rows', () => {
+  const grid = ruleBody(hudBlock(), '#title.hud');
+  /* .screen is a centred flex column. `align-items:center` survives the
+     switch to grid, where it stops meaning "centre the column" and starts
+     meaning "every item is as tall as its own content" -- which collapses
+     the character's row to nothing, because the character is out of flow. */
+  assert.ok(/align-items:stretch/.test(grid),
+    'the grid still takes align-items:center from .screen');
+});
+
+test('the character is out of flow, so its row can size it', () => {
+  const hud = hudBlock();
+  const img = ruleBody(hud, '#title.hud .menu-hero img');
+  assert.ok(img, 'the character has no rule');
+  /* In flow the two define each other: the row asks the still how tall it
+     is and `max-height:100%` asks the row back, and the answer is a 680px
+     picture with its head cropped off the top of the window. */
+  assert.ok(/position:absolute/.test(img), 'the character is in flow');
+  assert.ok(/max-height:100%/.test(img), 'nothing bounds the character');
+  const box = ruleBody(hud, '#title.hud .menu-hero');
+  assert.ok(/position:relative/.test(box),
+    'the character is positioned against something other than its own row');
+  assert.ok(/min-height:0/.test(box),
+    'without min-height:0 the row cannot shrink below the picture');
+});
+
+test('the wordmark leaves the title screen and turns up on the boot screen', () => {
+  const hud = hudBlock();
+  assert.ok(/#title\.hud h1,#title\.hud \.sub,#title\.hud \.keys\{display:none\}/.test(hud),
+    'the wide title screen still draws the wordmark over the character');
+  /* Which is only defensible because the game still says its name somewhere. */
+  assert.ok(/<div id="loading">[^]*?class="lmark">PASTEL<em>NUKETOWN<\/em>/.test(BODY_HTML),
+    'the wordmark is gone from the page entirely');
+  assert.ok(/#loading \.lmark\{/.test(HEAD), 'the boot wordmark has no styling');
+  /* And the pause card, which shares #title, still gets it: `hud` is only
+     ever on while the setup menu is the thing on screen. */
+  assert.ok(/#title h1\{/.test(HEAD), 'the column lost the wordmark too');
+});
+
+test('the room browser is a dialog and keeps every id the network drives', () => {
+  /* Moved out of the middle of the title card, where it competed with PLAY
+     for the same glance. 75-network.js was not rewritten to match, so every
+     id it reaches for has to still be here. */
+  const card = BODY_HTML.match(/<div class="screen off" id="rooms"[^]*?\n<\/div>/);
+  assert.ok(card, 'there is no room browser dialog');
+  for (const id of ['roomList', 'roomCode', 'joinGame', 'hostGame', 'roomPublic',
+                    'refreshRooms', 'roomsClose']) {
+    assert.ok(card[0].includes('id="' + id + '"'), `#${id} is not in the dialog`);
+  }
+  /* And the way in, on the right rail. */
+  assert.ok(/id="roomsOpen"/.test(BODY_HTML), 'nothing opens the room browser');
+  /* The collapsed panel it replaces is gone rather than left behind hidden. */
+  assert.ok(!/id="roomToggle"/.test(BODY_HTML),
+    'the old collapse toggle is still in the markup');
+  assert.ok(!/id="roomToggle"/.test(fs.readFileSync(path.join(__dirname, 'src', '75-network.js'), 'utf8')),
+    '75-network.js still wires a toggle that no longer exists');
+});

@@ -798,6 +798,7 @@ function initInput() {
     if (e.code === 'Escape' && !e.repeat) {
       if (typeof storeIsOpen === 'function' && storeIsOpen()) return;
       if (typeof battlepassIsOpen === 'function' && battlepassIsOpen()) return;
+      if (typeof roomsIsOpen === 'function' && roomsIsOpen()) return;
       if (G.over) returnToMenu();
       else if (G.paused) { setPaused(false); requestLock(); }
       else setPaused(true);

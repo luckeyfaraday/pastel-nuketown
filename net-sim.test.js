@@ -1789,7 +1789,12 @@ function menuClient() {
     var SIM_TIMERS = [];
     document.getElementById = function (id) {
       if (!SIM_ELS.has(id)) {
-        var classes = new Set(id === 'over' || id === 'dead' ? ['off'] : []);
+        /* The three cards the page ships closed. #rooms belongs here for the
+           same reason the other two do: roomsIsOpen reads this class, and a
+           browser that has not opened the room browser must not look to the
+           Escape chain like one that has. */
+        var classes = new Set(
+          id === 'over' || id === 'dead' || id === 'rooms' ? ['off'] : []);
         SIM_ELS.set(id, {
           id: id, textContent: '', innerHTML: '', value: '', hidden: false,
           disabled: false, checked: false, dataset: {}, children: [], style: {},
@@ -1920,4 +1925,69 @@ test('a network call in flight cannot take RESUME away', () => {
   client.run('G.started = false; netSetMenuBusy(true);');
   assert.strictEqual(client.disabled('play'), true,
     'back on the title card it is SOLO again, and busy means busy');
+});
+
+test('the room browser opens and closes, and owns Escape while it is up', () => {
+  const client = menuClient();
+  /* netRefreshRooms runs on open and there is no relay behind the sim, so
+     opening has to survive it failing. */
+  client.run(`netRefreshRooms = function () {};`);
+
+  assert.strictEqual(client.has('rooms', 'off'), true, 'the page ships it closed');
+
+  client.run('roomsShow(true);');
+  assert.strictEqual(client.has('rooms', 'off'), false);
+
+  /* The interaction this guard exists for: 70-game.js takes Escape on a
+     listener registered long before 75-network.js registers the dialog's, so
+     without it the key would pause the match underneath a browser that is
+     still on screen. Only the guard is exercised here — the listener that
+     does the closing is wired by initNetworkUI, which this harness does not
+     run — so the dialog is closed by hand below. */
+  client.run('G.started = true; G.over = false; G.paused = false; simEscape();');
+  assert.strictEqual(client.get('G.paused'), false,
+    'Escape belongs to the dialog while the dialog is up');
+
+  client.run('roomsShow(false);');
+  assert.strictEqual(client.has('rooms', 'off'), true);
+
+  /* And once it is down the key goes back to the match. */
+  client.run('simEscape();');
+  assert.strictEqual(client.get('G.paused'), true);
+});
+
+test('joining from the room browser puts the browser away first', () => {
+  const client = menuClient();
+  /* The rows are built by netRenderRooms out of document.createElement, and
+     the harness's elements record neither children nor listeners — so this
+     test brings its own, and then presses the button the player presses
+     rather than a restatement of what it does. */
+  client.run(`
+    netRefreshRooms = function () {};
+    netConnect = function (mode, code) { NET.simConnect = mode + ':' + (code || ''); };
+    var SIM_ROWS = [];
+    document.createElement = function (tag) {
+      var el = {
+        tagName: tag, className: '', textContent: '', type: '', title: '',
+        children: [], onClick: null, style: {}, dataset: {},
+        appendChild: function (c) { this.children.push(c); return c; },
+        addEventListener: function (t, fn) { if (t === 'click') this.onClick = fn; },
+        setAttribute: function () {}, getAttribute: function () { return null; },
+        classList: { add: function () {}, remove: function () {},
+                     toggle: function () {}, contains: function () { return false; } }
+      };
+      if (tag === 'li') SIM_ROWS.push(el);
+      return el;
+    };
+    roomsShow(true);
+    netRenderRooms([{ code: 'AB12', host: 'Alan', players: 3, max: 9, inProgress: false }]);
+  `);
+  assert.strictEqual(client.has('rooms', 'off'), false);
+  assert.strictEqual(client.get('SIM_ROWS.length'), 1, 'one room, one row');
+
+  /* code, host, seats, then the button. */
+  client.run('SIM_ROWS[0].children[3].onClick();');
+  assert.strictEqual(client.has('rooms', 'off'), true,
+    'a dialog left up would cover the lobby it just sent you to');
+  assert.strictEqual(client.get('NET.simConnect'), 'join:AB12');
 });

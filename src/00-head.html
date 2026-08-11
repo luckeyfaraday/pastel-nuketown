@@ -261,7 +261,7 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 .menu-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 0 var(--ink),0 16px 30px rgba(74,63,92,.3)}
 .menu-btn:active:not(:disabled){transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
 .menu-btn:disabled,.mini-btn:disabled,#again:disabled{cursor:not-allowed!important;opacity:.55;filter:saturate(.45)}
-.join-row{width:min(330px,100%);display:flex;gap:8px}
+.join-row{width:100%;display:flex;gap:8px}
 #roomCode{flex:1;padding:9px 12px 10px;text-align:center;border:2.5px solid var(--ink);border-radius:13px;
   background:rgba(255,255,255,.78);box-shadow:0 3px 0 var(--ink)}
 #roomCode::placeholder{color:var(--ink-soft);opacity:.72}
@@ -302,24 +302,26 @@ body.touch .sens{display:none}
 .mode-option[aria-pressed="true"]{background:linear-gradient(180deg,#fff2c9,#ffe08a);transform:translateY(-1px);
   box-shadow:0 4px 0 var(--ink)}
 .mode-option:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
-/* Hosting a room by hand is a minority path now that PLAY picks one, but as an
-   underlined line of fine print it read as a caption and nobody found CREATE
-   ROOM behind it. It is a real button now — quieter than PLAY, still a button —
-   and it says what it opens rather than naming the panel. */
-.room-toggle{width:min(330px,100%);display:flex;align-items:center;justify-content:center;gap:9px;
-  padding:9px 14px 10px;font-size:12px;letter-spacing:.13em;background:rgba(255,255,255,.72)}
-.room-toggle::after{content:"\25BE";font-size:9px;line-height:1;color:var(--ink-soft)}
-.room-toggle[aria-expanded="true"]{background:#fff8f0}
-.room-toggle[aria-expanded="true"]::after{content:"\25B4"}
-#roomOptions{width:min(330px,100%);display:flex;flex-direction:column;gap:9px}
-#roomOptions[hidden]{display:none}
+#roomOptions{width:100%;display:flex;flex-direction:column;gap:9px}
 .opt-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-/* ---------- room browser ---------- */
-.rooms{width:min(390px,100%);display:flex;flex-direction:column;gap:7px}
-.rooms-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
-  font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
-.rooms-head .mini-btn{padding:4px 10px 5px;font-size:11px}
-#roomList{list-style:none;display:flex;flex-direction:column;gap:6px;max-height:min(210px,28vh);overflow-y:auto}
+/* ---------- room browser ----------
+   A dialog rather than a panel in the middle of the title card. Hosting or
+   picking a specific room is the minority path -- PLAY chooses one -- and
+   inline it competed with PLAY for the same glance while still being too
+   short to show more than three rooms. Built out of the store's parts, so
+   it opens, traps and closes the way the other two dialogs do. */
+#rooms{z-index:36}                /* over #title (34): it replaces that card, not shares it */
+.rooms-card{width:min(560px,calc(100vw - 16px));max-height:calc(100vh - 30px);padding:15px 17px 17px;
+  display:flex;flex-direction:column;gap:12px;pointer-events:auto;overflow:hidden}
+.rooms-card:focus{outline:none}
+.rooms-card:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+.rooms-head-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.rooms-head-text{min-width:0}
+.rooms-head-bar h2{font-family:var(--disp);font-size:24px;font-weight:800;letter-spacing:.09em;line-height:1}
+.rooms-sub{margin-top:4px;font-family:var(--disp);font-size:12px;font-weight:600;color:var(--ink-soft)}
+.rooms-head-btns{display:flex;gap:8px;flex:none}
+.rooms-head-btns .mini-btn{padding:6px 12px 7px;font-size:11px;min-height:44px}
+#roomList{list-style:none;display:flex;flex-direction:column;gap:6px;min-height:0;overflow-y:auto}
 #roomList li{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;
   padding:7px 9px;border:2px solid rgba(74,63,92,.65);border-radius:11px;background:rgba(255,255,255,.6);
   font-family:var(--disp);font-size:13px}
@@ -371,6 +373,279 @@ body.touch .sens{display:none}
 .keys span{font-family:var(--disp);font-size:13px;font-weight:600;padding:6px 13px 7px;border:2.5px solid var(--ink);
   border-radius:11px;background:rgba(255,255,255,.72);box-shadow:0 3px 0 var(--ink)}
 .keys span b{font-weight:800;color:#d4638f}
+
+/* =====================================================================
+   PARTS THE WIDE TITLE SCREEN NEEDS, IN THE COLUMN IT DOES NOT
+
+   Everything the corner layout groups is wrapped, and every wrapper is
+   `display:contents` until that layout hands it a box. So a phone in
+   portrait, the pause card, and a page whose script never ran all lay
+   these out as the flat column they were before the wrappers existed --
+   one arrangement to keep in step instead of two.
+
+   The four that are `display:none` here are the ones with nothing to say
+   in a column: the stage is scenery for a character the column has no
+   room to stand up, and the gear is a popover for two settings the
+   column already shows in full.
+   ===================================================================== */
+.hud-stage{display:none}
+.hud-meta,.hud-player,.menu-account,.menu-settings,.hud-rail{display:contents}
+.menu-gear,.hud-pass,.menu-hero{display:none}
+.tile-sub{display:none}
+/* #signIn and the account row moved out of .locker, so the sizing that
+   `.locker .mini-btn` was giving them has to come from somewhere. */
+.menu-account .mini-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-height:44px;font-size:11px;letter-spacing:.1em}
+.menu-account #signIn{width:min(330px,100%)}
+.hud-rail .mini-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-height:44px;font-size:11px;letter-spacing:.1em;width:min(330px,100%)}
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   A HUD pinned to the four corners around a character, rather than a
+   column of cards down the middle. The middle belongs to the character;
+   everything else is pushed to an edge, and the loudest thing on the
+   screen is PLAY, alone in the corner a thumb or a cursor rests in.
+
+   `.hud` on #title is menuHudSyncLayout's, and means the setup menu is
+   the thing on screen -- not the lobby, not the pause card. Both of
+   those want the column, so neither gets any of this.
+   ===================================================================== */
+@media (min-width:640px) and (min-aspect-ratio:13/10),
+       (min-width:900px) and (min-height:600px){
+#title.hud{
+  display:grid;overflow:hidden;
+  /* .screen is a centred flex column, and `align-items:center` survives the
+     switch to grid — where it stops meaning "centre the column" and starts
+     meaning "every item is as tall as its own content". The character's row
+     then collapses to nothing, because the character is out of flow. */
+  align-items:stretch;
+  /* Bounded content, full-bleed stage: past about 1640px the corners stop
+     being a composition and become four menus at the edges of a desk. The
+     padding takes the surplus rather than a wrapper, which would take the
+     stage in with it. */
+  padding:clamp(10px,1.6vh,18px) max(16px,calc((100vw - 1640px) / 2));
+  gap:clamp(6px,1.4vh,14px) clamp(14px,2.4vw,30px);
+  grid-template-columns:minmax(168px,224px) minmax(0,1fr) minmax(168px,224px);
+  grid-template-rows:auto minmax(0,1fr) auto auto;
+  grid-template-areas:
+    "tl   tc    tr"
+    "lft  mid   rgt"
+    "lft  note  rgt"
+    "bl   mode  br";
+  background:linear-gradient(180deg,#dbeefb 0%,#e6e2fa 38%,#f4dfeb 60%,#f0d7e0 100%);
+  backdrop-filter:none;
+}
+/* The two spacers exist to centre a column; a grid does its own. */
+#title.hud::before,#title.hud::after{display:none}
+#title.hud #menu{display:contents}
+/* The stage goes behind the content rather than the content being lifted in
+   front of it. A blanket `position:relative` on the children reads as the
+   same thing and is not: at `#title.hud #menu>*` it carries two ids, so it
+   outranks every later rule in this block that wants to position one of them
+   -- which is how the social link ends up as a panel filling a grid cell.
+   #title is a stacking context of its own (fixed, z-index:34), so a negative
+   layer here stays above its background and below everything in it. */
+/* The wordmark, the key legend and the two counts-as-a-caption lines are
+   what the column used to fill its middle with. The character is what
+   fills it here. */
+#title.hud h1,#title.hud .sub,#title.hud .keys{display:none}
+
+/* ---- the stage ---- */
+#title.hud .hud-stage{display:block;position:absolute;inset:0;z-index:-1;
+  pointer-events:none;overflow:hidden}
+/* The floor the character stands on. A plane, not a backdrop: the change of
+   value across the horizon is what stops the character floating in a
+   gradient. The edge is faded in over a few percent rather than drawn -- a
+   hard line across the full width of the window reads as a seam between two
+   backgrounds, which is what it would be. */
+.hud-floor{position:absolute;left:-8%;right:-8%;bottom:0;height:44%;
+  background:linear-gradient(180deg,rgba(255,255,255,0),rgba(255,255,255,.5) 5%,
+    rgba(255,226,240,.32) 42%,rgba(214,199,247,.28))}
+/* The pool of light the character is standing in, and the reason the eye goes
+   to the middle before it goes to the corners. Centred on the feet -- which
+   is the bottom of the character's row, not the bottom of the window -- and
+   kept weak enough that the caption sitting just under it stays readable. */
+.hud-pool{position:absolute;left:50%;bottom:15%;width:min(560px,44vw);height:clamp(90px,19vh,170px);
+  transform:translateX(-50%);border-radius:50%;
+  background:radial-gradient(ellipse at center,rgba(255,255,255,.72),rgba(255,251,253,.4) 42%,rgba(255,255,255,0) 74%)}
+/* Corners pulled down so the tiles have something to sit on. */
+#title.hud .hud-stage::after{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at 50% 46%,rgba(74,63,92,0) 42%,rgba(74,63,92,.2) 100%)}
+
+/* ---- top left: who you are ---- */
+#title.hud .hud-player{grid-area:tl;display:flex;flex-direction:column;align-items:stretch;gap:6px;
+  align-self:start;justify-self:stretch;min-width:0;padding:7px;
+  border:2.5px solid var(--ink);border-radius:16px;background:rgba(255,255,255,.72);
+  box-shadow:0 3px 0 var(--ink);backdrop-filter:blur(6px)}
+/* min-width:0 on both, or the callsign's label and input add up to a
+   min-content width wider than the card and simply hang out of it. */
+#title.hud .hud-player .identity{width:auto;min-width:0;border:0;box-shadow:none;background:none;
+  padding:1px 4px 1px 6px}
+#title.hud .hud-player .identity input{font-size:15px}
+#title.hud .menu-account{display:flex;min-width:0}
+#title.hud .menu-account #signIn{width:100%;min-width:0;padding:7px 9px 8px;font-size:9px;gap:6px}
+#title.hud .menu-account .locker-who{flex:1 1 auto;min-width:0;padding:3px 4px 3px 8px}
+
+/* ---- top centre: what the relay is saying ---- */
+#title.hud #netStatus{grid-area:tc;align-self:start;justify-self:center;margin-top:6px;
+  max-width:100%;padding:0 8px}
+
+/* ---- top right: the counts, and the way into the two look settings ---- */
+#title.hud .hud-meta{grid-area:tr;display:flex;align-items:center;justify-content:flex-end;gap:8px;
+  align-self:start;justify-self:end;flex-wrap:wrap}
+#title.hud .hud-meta .online-count{margin:0;opacity:1;padding:5px 11px 6px;font-size:11px;
+  border:2.5px solid var(--ink);border-radius:11px;background:rgba(255,255,255,.72);
+  box-shadow:0 3px 0 var(--ink);color:var(--ink-soft)}
+/* Ids, because the two rules that light these up are keyed by id and would
+   otherwise outrank a class-and-pseudo selector -- leaving an empty chip
+   drawn as a lone green dot when the relay has nothing to report. */
+#title.hud .hud-meta #onlineCount:empty,#title.hud .hud-meta #matchesCount:empty{display:none}
+/* The live figure gets the dot and the ink; how many have ever been played
+   stays a footnote. */
+#title.hud .hud-meta #onlineCount{display:flex;align-items:center;gap:7px;color:var(--ink)}
+#title.hud .hud-meta #onlineCount::before{content:'';width:9px;height:9px;border-radius:50%;
+  background:#5fc9a2;box-shadow:0 0 0 2px rgba(74,63,92,.55)}
+#title.hud .menu-gear{display:inline-flex;align-items:center;justify-content:center;
+  width:40px;height:40px;padding:0;font-size:17px;border-radius:13px;flex:none}
+#title.hud .menu-settings{position:absolute;top:60px;right:max(16px,calc((100vw - 1640px) / 2));
+  z-index:5;display:flex;flex-direction:column;gap:11px;width:min(290px,calc(100vw - 32px));
+  padding:13px 15px 15px;border:2.5px solid var(--ink);border-radius:16px;
+  background:rgba(255,248,240,.96);box-shadow:0 5px 0 var(--ink),0 12px 26px rgba(74,63,92,.24)}
+#title.hud .menu-settings:not([data-open]){display:none}
+#title.hud .menu-settings .sens,#title.hud .menu-settings .look-invert{width:100%}
+
+/* ---- the two rails ---- */
+#title.hud .locker{grid-area:lft}
+#title.hud .hud-rail{grid-area:rgt}
+#title.hud .locker,#title.hud .hud-rail{display:flex;flex-direction:column;gap:9px;
+  align-self:start;justify-self:stretch;width:auto}
+/* Icon-led square-ish tiles rather than the column's text rows: at this size
+   the glyph is what is recognised, and the words underneath confirm it. */
+#title.hud .locker .locker-btn,#title.hud .hud-rail .locker-btn{
+  flex:0 0 auto;width:100%;min-height:0;display:grid;justify-content:stretch;
+  grid-template-columns:44px minmax(0,1fr);grid-template-areas:"icon name" "icon sub";
+  gap:0 10px;padding:11px 12px 12px;text-align:left;border-radius:16px}
+#title.hud .locker .tile-icon,#title.hud .hud-rail .tile-icon{grid-area:icon;align-self:center;
+  justify-self:center;font-size:29px;line-height:1}
+#title.hud .locker .tile-name,#title.hud .hud-rail .tile-name{grid-area:name;align-self:end;
+  font-size:14px;letter-spacing:.09em}
+#title.hud .locker .tile-sub,#title.hud .hud-rail .tile-sub{grid-area:sub;align-self:start;display:block;
+  font-family:var(--ui);font-size:9px;font-weight:800;letter-spacing:.09em;color:var(--ink-soft);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#title.hud .rail-rooms{background:linear-gradient(180deg,#e3f7ff,#a8dcf0)}
+#title.hud #lockerNote{font-size:11px;text-align:center}
+
+/* ---- the middle: the character ---- */
+#title.hud .menu-hero{grid-area:mid;position:relative;display:flex;flex-direction:column;
+  align-items:center;justify-content:flex-start;min-height:0;overflow:hidden;pointer-events:none}
+#title.hud .menu-hero[hidden]{display:none}
+/* Out of flow, and that is the whole point. The picture is a fixed 440x680
+   still in a row whose height is whatever the four corners leave over, so
+   in flow the two define each other: the row asks the character how tall it
+   is, the character's `max-height:100%` asks the row, and the answer is the
+   still at its natural size with its head cropped off the top of the window.
+   Absolute breaks the loop — the row is sized by the badge above, and the
+   character is then fitted into it. Standing on the bottom edge puts it in
+   the pool of light the stage draws there. */
+#title.hud .menu-hero img{position:absolute;left:50%;bottom:0;transform:translateX(-50%);
+  display:block;max-width:100%;max-height:100%;width:auto;height:auto;
+  /* The character's own contact shadow. Two drops rather than one: a tight
+     dark one that reads as the foot touching the floor, and a wide soft one
+     that seats it in the pool of light. */
+  filter:drop-shadow(0 6px 3px rgba(74,63,92,.34)) drop-shadow(0 18px 22px rgba(74,63,92,.22))}
+/* Above the head, where the mockup puts it. Positioned so it stays over the
+   character rather than behind it. */
+.hero-rank{position:relative;z-index:1;display:flex;align-items:center;gap:7px;flex:none;
+  margin-bottom:4px;padding:4px 13px 5px;
+  border:2.5px solid var(--ink);border-radius:999px;
+  background:linear-gradient(180deg,#fff6d6,#ffe08a);box-shadow:0 3px 0 var(--ink)}
+.hero-rank[hidden]{display:none}
+.hero-rank small{font-family:var(--disp);font-size:9px;font-weight:700;letter-spacing:.15em;
+  color:var(--ink-soft)}
+.hero-rank b{font-family:var(--disp);font-size:17px;font-weight:800;line-height:1}
+
+/* ---- bottom centre: what PLAY is going to do ---- */
+/* Centred and capped: the middle column is a thousand points wide on a
+   desktop, and a single line of explanation stretched across all of it
+   reads as a banner rather than as a caption to the button below. */
+#title.hud #menuNote{grid-area:note;align-self:end;justify-self:center;margin:0;
+  max-width:min(560px,100%);font-size:13px}
+#title.hud #modePicker{grid-area:mode;align-self:end;justify-self:center;width:min(430px,100%)}
+#title.hud #modePicker .mode-option{min-height:58px}
+
+/* ---- bottom left: the season, as a climb ---- */
+#title.hud .hud-pass{grid-area:bl;display:flex;flex-direction:column;gap:6px;
+  align-self:end;justify-self:stretch;margin-bottom:34px;padding:10px 13px 12px;
+  border:2.5px solid var(--ink);border-radius:16px;
+  background:linear-gradient(180deg,rgba(255,246,214,.94),rgba(255,224,138,.94));
+  box-shadow:0 3px 0 var(--ink)}
+#title.hud .hud-pass[hidden]{display:none}
+.pass-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+  font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft)}
+.pass-head b{font-size:13px;letter-spacing:.06em;color:var(--ink)}
+.pass-bar{display:block;height:11px;border:2px solid var(--ink);border-radius:7px;overflow:hidden;
+  background:rgba(255,255,255,.72)}
+.pass-bar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#ffb7c5,#d4c5f9)}
+.pass-xp{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.07em;
+  color:var(--ink-soft);text-align:right}
+/* The quietest thing on the screen, in the corner with the most room for
+   something quiet. Absolute so it can sit under the pass plate without
+   claiming a row of its own. */
+#title.hud .social{position:absolute;left:max(16px,calc((100vw - 1640px) / 2));bottom:12px;
+  z-index:1;font-size:11px;padding:5px 11px 6px}
+
+/* ---- bottom right: the one thing to press ---- */
+#title.hud .menu-actions{grid-area:br;display:flex;flex-direction:column;align-items:stretch;
+  gap:8px;align-self:end;justify-self:stretch}
+#title.hud .menu-actions #quickPlay{width:100%;padding:18px 14px 20px;font-size:clamp(24px,2.4vw,34px);
+  border-radius:20px}
+/* SOLO is the second choice and reads like one -- but it is also the only
+   one that works with no relay reachable, so it stays a button and not a
+   line of fine print. */
+#title.hud .menu-actions #play{width:100%;padding:10px 14px 12px;font-size:15px;border-radius:15px}
+}
+
+/* A landscape phone has no vertical room to spare: the bottom band is the
+   part that has to give, and the note is the part of it that can. */
+@media (min-width:640px) and (max-height:480px){
+  #title.hud{gap:4px clamp(10px,2vw,22px);padding-top:8px;padding-bottom:8px}
+  /* The player card back to one row. Stacked it is a quarter of a landscape
+     phone's height, and every point it gives up here goes to the character,
+     which is the only thing on the screen that gets better with more room. */
+  #title.hud .hud-player{flex-direction:row;align-items:center;gap:6px;padding:5px}
+  /* Two hundred points of card cannot hold a word, a name and a sentence.
+     The label goes -- an uppercase name in a box beside a sign-in button is
+     legible as a callsign without being told -- and the button falls back to
+     its mark, which is why it carries an aria-label. Losing the name instead
+     is not an option: it is the one thing on this card the player set. */
+  #title.hud .hud-player .identity{flex:1 1 auto;min-width:0}
+  #title.hud .hud-player .identity>span{display:none}
+  #title.hud .hud-player .identity input{font-size:13px;text-align:left}
+  #title.hud .menu-account{flex:0 0 auto}
+  #title.hud .menu-account #signIn{width:auto;padding:8px 10px 9px}
+  #title.hud .menu-account #signIn>span{display:none}
+  #title.hud .locker .locker-btn,#title.hud .hud-rail .locker-btn{padding:8px 10px 9px}
+  #title.hud #menuNote{font-size:11px}
+  #title.hud #modePicker .mode-option{min-height:46px}
+  #title.hud .menu-actions #quickPlay{padding:12px 12px 14px}
+  #title.hud .menu-actions #play{padding:7px 12px 9px;font-size:13px}
+  #title.hud .hud-pass{margin-bottom:26px;padding:7px 11px 9px}
+  #title.hud .social{bottom:8px}
+}
+
+/* The taller half of the wide layout. Below this the arrangement is the same
+   but the character is not worth the vertical room, so it keeps the middle
+   without the extra weight. */
+@media (min-width:900px) and (min-height:600px){
+  #title.hud{grid-template-columns:minmax(186px,246px) minmax(0,1fr) minmax(186px,246px)}
+  #title.hud .locker .locker-btn,#title.hud .hud-rail .locker-btn{
+    grid-template-columns:52px minmax(0,1fr);padding:13px 14px 14px}
+  #title.hud .locker .tile-icon,#title.hud .hud-rail .tile-icon{font-size:34px}
+  #title.hud .locker .tile-name,#title.hud .hud-rail .tile-name{font-size:15px}
+  #title.hud .locker .tile-sub,#title.hud .hud-rail .tile-sub{font-size:10px}
+}
 @media(max-height:760px){
   .mode-option{min-height:44px;padding-top:5px;padding-bottom:6px}
   #title h1{font-size:clamp(42px,8vw,78px)}
@@ -983,6 +1258,14 @@ body.touch #dead .report .k{display:none}
 
 #loading{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;
   flex-direction:column;gap:16px;background:linear-gradient(180deg,#ffe9f0,#d8e8fb)}
+/* The wordmark, in the one place it now appears. Same treatment the title
+   card gave it, sized for a screen that holds nothing else. */
+#loading .lmark{font-family:var(--disp);font-size:clamp(38px,9vw,84px);font-weight:800;line-height:.86;
+  letter-spacing:.01em;text-align:center;color:#fff;
+  text-shadow:0 5px 0 var(--ink),0 7px 0 rgba(74,63,92,.35),0 16px 34px rgba(74,63,92,.3)}
+#loading .lmark em{display:block;font-style:normal;
+  background:linear-gradient(180deg,#ffd9e6,#ffb7c5 45%,#f79ec0);-webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;filter:drop-shadow(0 4px 0 var(--ink))}
 #loading .lt{font-family:var(--disp);font-size:22px;font-weight:800;letter-spacing:.2em;color:var(--ink)}
 #loading .bar{width:230px;height:14px;border:3px solid var(--ink);border-radius:9px;overflow:hidden;background:#fff}
 #loading .bar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#ffd3b6,#ffb7c5,#d4c5f9)}

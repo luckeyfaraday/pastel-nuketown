@@ -257,6 +257,11 @@ function boot() {
      yet, not a browser with storage switched off. Every failure inside is
      already handled; this is the guard for the one that is not. */
   try { initStore(); } catch (e) {}
+  /* After initStore, because the character in the middle of the title screen
+     is drawn by the store's display case and read out of what initStore just
+     restored as equipped. Guarded for the same reason it is: the title screen
+     losing its scenery must not be able to stop the game booting. */
+  try { menuHudInit(); } catch (e) {}
   const requestedMode = QS.get('mode');
   setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 

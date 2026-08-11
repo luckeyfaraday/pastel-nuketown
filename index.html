@@ -263,7 +263,7 @@ canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
 .menu-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 0 var(--ink),0 16px 30px rgba(74,63,92,.3)}
 .menu-btn:active:not(:disabled){transform:translateY(4px);box-shadow:0 2px 0 var(--ink)}
 .menu-btn:disabled,.mini-btn:disabled,#again:disabled{cursor:not-allowed!important;opacity:.55;filter:saturate(.45)}
-.join-row{width:min(330px,100%);display:flex;gap:8px}
+.join-row{width:100%;display:flex;gap:8px}
 #roomCode{flex:1;padding:9px 12px 10px;text-align:center;border:2.5px solid var(--ink);border-radius:13px;
   background:rgba(255,255,255,.78);box-shadow:0 3px 0 var(--ink)}
 #roomCode::placeholder{color:var(--ink-soft);opacity:.72}
@@ -304,24 +304,26 @@ body.touch .sens{display:none}
 .mode-option[aria-pressed="true"]{background:linear-gradient(180deg,#fff2c9,#ffe08a);transform:translateY(-1px);
   box-shadow:0 4px 0 var(--ink)}
 .mode-option:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
-/* Hosting a room by hand is a minority path now that PLAY picks one, but as an
-   underlined line of fine print it read as a caption and nobody found CREATE
-   ROOM behind it. It is a real button now — quieter than PLAY, still a button —
-   and it says what it opens rather than naming the panel. */
-.room-toggle{width:min(330px,100%);display:flex;align-items:center;justify-content:center;gap:9px;
-  padding:9px 14px 10px;font-size:12px;letter-spacing:.13em;background:rgba(255,255,255,.72)}
-.room-toggle::after{content:"\25BE";font-size:9px;line-height:1;color:var(--ink-soft)}
-.room-toggle[aria-expanded="true"]{background:#fff8f0}
-.room-toggle[aria-expanded="true"]::after{content:"\25B4"}
-#roomOptions{width:min(330px,100%);display:flex;flex-direction:column;gap:9px}
-#roomOptions[hidden]{display:none}
+#roomOptions{width:100%;display:flex;flex-direction:column;gap:9px}
 .opt-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-/* ---------- room browser ---------- */
-.rooms{width:min(390px,100%);display:flex;flex-direction:column;gap:7px}
-.rooms-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
-  font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
-.rooms-head .mini-btn{padding:4px 10px 5px;font-size:11px}
-#roomList{list-style:none;display:flex;flex-direction:column;gap:6px;max-height:min(210px,28vh);overflow-y:auto}
+/* ---------- room browser ----------
+   A dialog rather than a panel in the middle of the title card. Hosting or
+   picking a specific room is the minority path -- PLAY chooses one -- and
+   inline it competed with PLAY for the same glance while still being too
+   short to show more than three rooms. Built out of the store's parts, so
+   it opens, traps and closes the way the other two dialogs do. */
+#rooms{z-index:36}                /* over #title (34): it replaces that card, not shares it */
+.rooms-card{width:min(560px,calc(100vw - 16px));max-height:calc(100vh - 30px);padding:15px 17px 17px;
+  display:flex;flex-direction:column;gap:12px;pointer-events:auto;overflow:hidden}
+.rooms-card:focus{outline:none}
+.rooms-card:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+.rooms-head-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.rooms-head-text{min-width:0}
+.rooms-head-bar h2{font-family:var(--disp);font-size:24px;font-weight:800;letter-spacing:.09em;line-height:1}
+.rooms-sub{margin-top:4px;font-family:var(--disp);font-size:12px;font-weight:600;color:var(--ink-soft)}
+.rooms-head-btns{display:flex;gap:8px;flex:none}
+.rooms-head-btns .mini-btn{padding:6px 12px 7px;font-size:11px;min-height:44px}
+#roomList{list-style:none;display:flex;flex-direction:column;gap:6px;min-height:0;overflow-y:auto}
 #roomList li{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;
   padding:7px 9px;border:2px solid rgba(74,63,92,.65);border-radius:11px;background:rgba(255,255,255,.6);
   font-family:var(--disp);font-size:13px}
@@ -373,6 +375,279 @@ body.touch .sens{display:none}
 .keys span{font-family:var(--disp);font-size:13px;font-weight:600;padding:6px 13px 7px;border:2.5px solid var(--ink);
   border-radius:11px;background:rgba(255,255,255,.72);box-shadow:0 3px 0 var(--ink)}
 .keys span b{font-weight:800;color:#d4638f}
+
+/* =====================================================================
+   PARTS THE WIDE TITLE SCREEN NEEDS, IN THE COLUMN IT DOES NOT
+
+   Everything the corner layout groups is wrapped, and every wrapper is
+   `display:contents` until that layout hands it a box. So a phone in
+   portrait, the pause card, and a page whose script never ran all lay
+   these out as the flat column they were before the wrappers existed --
+   one arrangement to keep in step instead of two.
+
+   The four that are `display:none` here are the ones with nothing to say
+   in a column: the stage is scenery for a character the column has no
+   room to stand up, and the gear is a popover for two settings the
+   column already shows in full.
+   ===================================================================== */
+.hud-stage{display:none}
+.hud-meta,.hud-player,.menu-account,.menu-settings,.hud-rail{display:contents}
+.menu-gear,.hud-pass,.menu-hero{display:none}
+.tile-sub{display:none}
+/* #signIn and the account row moved out of .locker, so the sizing that
+   `.locker .mini-btn` was giving them has to come from somewhere. */
+.menu-account .mini-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-height:44px;font-size:11px;letter-spacing:.1em}
+.menu-account #signIn{width:min(330px,100%)}
+.hud-rail .mini-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-height:44px;font-size:11px;letter-spacing:.1em;width:min(330px,100%)}
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   A HUD pinned to the four corners around a character, rather than a
+   column of cards down the middle. The middle belongs to the character;
+   everything else is pushed to an edge, and the loudest thing on the
+   screen is PLAY, alone in the corner a thumb or a cursor rests in.
+
+   `.hud` on #title is menuHudSyncLayout's, and means the setup menu is
+   the thing on screen -- not the lobby, not the pause card. Both of
+   those want the column, so neither gets any of this.
+   ===================================================================== */
+@media (min-width:640px) and (min-aspect-ratio:13/10),
+       (min-width:900px) and (min-height:600px){
+#title.hud{
+  display:grid;overflow:hidden;
+  /* .screen is a centred flex column, and `align-items:center` survives the
+     switch to grid — where it stops meaning "centre the column" and starts
+     meaning "every item is as tall as its own content". The character's row
+     then collapses to nothing, because the character is out of flow. */
+  align-items:stretch;
+  /* Bounded content, full-bleed stage: past about 1640px the corners stop
+     being a composition and become four menus at the edges of a desk. The
+     padding takes the surplus rather than a wrapper, which would take the
+     stage in with it. */
+  padding:clamp(10px,1.6vh,18px) max(16px,calc((100vw - 1640px) / 2));
+  gap:clamp(6px,1.4vh,14px) clamp(14px,2.4vw,30px);
+  grid-template-columns:minmax(168px,224px) minmax(0,1fr) minmax(168px,224px);
+  grid-template-rows:auto minmax(0,1fr) auto auto;
+  grid-template-areas:
+    "tl   tc    tr"
+    "lft  mid   rgt"
+    "lft  note  rgt"
+    "bl   mode  br";
+  background:linear-gradient(180deg,#dbeefb 0%,#e6e2fa 38%,#f4dfeb 60%,#f0d7e0 100%);
+  backdrop-filter:none;
+}
+/* The two spacers exist to centre a column; a grid does its own. */
+#title.hud::before,#title.hud::after{display:none}
+#title.hud #menu{display:contents}
+/* The stage goes behind the content rather than the content being lifted in
+   front of it. A blanket `position:relative` on the children reads as the
+   same thing and is not: at `#title.hud #menu>*` it carries two ids, so it
+   outranks every later rule in this block that wants to position one of them
+   -- which is how the social link ends up as a panel filling a grid cell.
+   #title is a stacking context of its own (fixed, z-index:34), so a negative
+   layer here stays above its background and below everything in it. */
+/* The wordmark, the key legend and the two counts-as-a-caption lines are
+   what the column used to fill its middle with. The character is what
+   fills it here. */
+#title.hud h1,#title.hud .sub,#title.hud .keys{display:none}
+
+/* ---- the stage ---- */
+#title.hud .hud-stage{display:block;position:absolute;inset:0;z-index:-1;
+  pointer-events:none;overflow:hidden}
+/* The floor the character stands on. A plane, not a backdrop: the change of
+   value across the horizon is what stops the character floating in a
+   gradient. The edge is faded in over a few percent rather than drawn -- a
+   hard line across the full width of the window reads as a seam between two
+   backgrounds, which is what it would be. */
+.hud-floor{position:absolute;left:-8%;right:-8%;bottom:0;height:44%;
+  background:linear-gradient(180deg,rgba(255,255,255,0),rgba(255,255,255,.5) 5%,
+    rgba(255,226,240,.32) 42%,rgba(214,199,247,.28))}
+/* The pool of light the character is standing in, and the reason the eye goes
+   to the middle before it goes to the corners. Centred on the feet -- which
+   is the bottom of the character's row, not the bottom of the window -- and
+   kept weak enough that the caption sitting just under it stays readable. */
+.hud-pool{position:absolute;left:50%;bottom:15%;width:min(560px,44vw);height:clamp(90px,19vh,170px);
+  transform:translateX(-50%);border-radius:50%;
+  background:radial-gradient(ellipse at center,rgba(255,255,255,.72),rgba(255,251,253,.4) 42%,rgba(255,255,255,0) 74%)}
+/* Corners pulled down so the tiles have something to sit on. */
+#title.hud .hud-stage::after{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at 50% 46%,rgba(74,63,92,0) 42%,rgba(74,63,92,.2) 100%)}
+
+/* ---- top left: who you are ---- */
+#title.hud .hud-player{grid-area:tl;display:flex;flex-direction:column;align-items:stretch;gap:6px;
+  align-self:start;justify-self:stretch;min-width:0;padding:7px;
+  border:2.5px solid var(--ink);border-radius:16px;background:rgba(255,255,255,.72);
+  box-shadow:0 3px 0 var(--ink);backdrop-filter:blur(6px)}
+/* min-width:0 on both, or the callsign's label and input add up to a
+   min-content width wider than the card and simply hang out of it. */
+#title.hud .hud-player .identity{width:auto;min-width:0;border:0;box-shadow:none;background:none;
+  padding:1px 4px 1px 6px}
+#title.hud .hud-player .identity input{font-size:15px}
+#title.hud .menu-account{display:flex;min-width:0}
+#title.hud .menu-account #signIn{width:100%;min-width:0;padding:7px 9px 8px;font-size:9px;gap:6px}
+#title.hud .menu-account .locker-who{flex:1 1 auto;min-width:0;padding:3px 4px 3px 8px}
+
+/* ---- top centre: what the relay is saying ---- */
+#title.hud #netStatus{grid-area:tc;align-self:start;justify-self:center;margin-top:6px;
+  max-width:100%;padding:0 8px}
+
+/* ---- top right: the counts, and the way into the two look settings ---- */
+#title.hud .hud-meta{grid-area:tr;display:flex;align-items:center;justify-content:flex-end;gap:8px;
+  align-self:start;justify-self:end;flex-wrap:wrap}
+#title.hud .hud-meta .online-count{margin:0;opacity:1;padding:5px 11px 6px;font-size:11px;
+  border:2.5px solid var(--ink);border-radius:11px;background:rgba(255,255,255,.72);
+  box-shadow:0 3px 0 var(--ink);color:var(--ink-soft)}
+/* Ids, because the two rules that light these up are keyed by id and would
+   otherwise outrank a class-and-pseudo selector -- leaving an empty chip
+   drawn as a lone green dot when the relay has nothing to report. */
+#title.hud .hud-meta #onlineCount:empty,#title.hud .hud-meta #matchesCount:empty{display:none}
+/* The live figure gets the dot and the ink; how many have ever been played
+   stays a footnote. */
+#title.hud .hud-meta #onlineCount{display:flex;align-items:center;gap:7px;color:var(--ink)}
+#title.hud .hud-meta #onlineCount::before{content:'';width:9px;height:9px;border-radius:50%;
+  background:#5fc9a2;box-shadow:0 0 0 2px rgba(74,63,92,.55)}
+#title.hud .menu-gear{display:inline-flex;align-items:center;justify-content:center;
+  width:40px;height:40px;padding:0;font-size:17px;border-radius:13px;flex:none}
+#title.hud .menu-settings{position:absolute;top:60px;right:max(16px,calc((100vw - 1640px) / 2));
+  z-index:5;display:flex;flex-direction:column;gap:11px;width:min(290px,calc(100vw - 32px));
+  padding:13px 15px 15px;border:2.5px solid var(--ink);border-radius:16px;
+  background:rgba(255,248,240,.96);box-shadow:0 5px 0 var(--ink),0 12px 26px rgba(74,63,92,.24)}
+#title.hud .menu-settings:not([data-open]){display:none}
+#title.hud .menu-settings .sens,#title.hud .menu-settings .look-invert{width:100%}
+
+/* ---- the two rails ---- */
+#title.hud .locker{grid-area:lft}
+#title.hud .hud-rail{grid-area:rgt}
+#title.hud .locker,#title.hud .hud-rail{display:flex;flex-direction:column;gap:9px;
+  align-self:start;justify-self:stretch;width:auto}
+/* Icon-led square-ish tiles rather than the column's text rows: at this size
+   the glyph is what is recognised, and the words underneath confirm it. */
+#title.hud .locker .locker-btn,#title.hud .hud-rail .locker-btn{
+  flex:0 0 auto;width:100%;min-height:0;display:grid;justify-content:stretch;
+  grid-template-columns:44px minmax(0,1fr);grid-template-areas:"icon name" "icon sub";
+  gap:0 10px;padding:11px 12px 12px;text-align:left;border-radius:16px}
+#title.hud .locker .tile-icon,#title.hud .hud-rail .tile-icon{grid-area:icon;align-self:center;
+  justify-self:center;font-size:29px;line-height:1}
+#title.hud .locker .tile-name,#title.hud .hud-rail .tile-name{grid-area:name;align-self:end;
+  font-size:14px;letter-spacing:.09em}
+#title.hud .locker .tile-sub,#title.hud .hud-rail .tile-sub{grid-area:sub;align-self:start;display:block;
+  font-family:var(--ui);font-size:9px;font-weight:800;letter-spacing:.09em;color:var(--ink-soft);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#title.hud .rail-rooms{background:linear-gradient(180deg,#e3f7ff,#a8dcf0)}
+#title.hud #lockerNote{font-size:11px;text-align:center}
+
+/* ---- the middle: the character ---- */
+#title.hud .menu-hero{grid-area:mid;position:relative;display:flex;flex-direction:column;
+  align-items:center;justify-content:flex-start;min-height:0;overflow:hidden;pointer-events:none}
+#title.hud .menu-hero[hidden]{display:none}
+/* Out of flow, and that is the whole point. The picture is a fixed 440x680
+   still in a row whose height is whatever the four corners leave over, so
+   in flow the two define each other: the row asks the character how tall it
+   is, the character's `max-height:100%` asks the row, and the answer is the
+   still at its natural size with its head cropped off the top of the window.
+   Absolute breaks the loop — the row is sized by the badge above, and the
+   character is then fitted into it. Standing on the bottom edge puts it in
+   the pool of light the stage draws there. */
+#title.hud .menu-hero img{position:absolute;left:50%;bottom:0;transform:translateX(-50%);
+  display:block;max-width:100%;max-height:100%;width:auto;height:auto;
+  /* The character's own contact shadow. Two drops rather than one: a tight
+     dark one that reads as the foot touching the floor, and a wide soft one
+     that seats it in the pool of light. */
+  filter:drop-shadow(0 6px 3px rgba(74,63,92,.34)) drop-shadow(0 18px 22px rgba(74,63,92,.22))}
+/* Above the head, where the mockup puts it. Positioned so it stays over the
+   character rather than behind it. */
+.hero-rank{position:relative;z-index:1;display:flex;align-items:center;gap:7px;flex:none;
+  margin-bottom:4px;padding:4px 13px 5px;
+  border:2.5px solid var(--ink);border-radius:999px;
+  background:linear-gradient(180deg,#fff6d6,#ffe08a);box-shadow:0 3px 0 var(--ink)}
+.hero-rank[hidden]{display:none}
+.hero-rank small{font-family:var(--disp);font-size:9px;font-weight:700;letter-spacing:.15em;
+  color:var(--ink-soft)}
+.hero-rank b{font-family:var(--disp);font-size:17px;font-weight:800;line-height:1}
+
+/* ---- bottom centre: what PLAY is going to do ---- */
+/* Centred and capped: the middle column is a thousand points wide on a
+   desktop, and a single line of explanation stretched across all of it
+   reads as a banner rather than as a caption to the button below. */
+#title.hud #menuNote{grid-area:note;align-self:end;justify-self:center;margin:0;
+  max-width:min(560px,100%);font-size:13px}
+#title.hud #modePicker{grid-area:mode;align-self:end;justify-self:center;width:min(430px,100%)}
+#title.hud #modePicker .mode-option{min-height:58px}
+
+/* ---- bottom left: the season, as a climb ---- */
+#title.hud .hud-pass{grid-area:bl;display:flex;flex-direction:column;gap:6px;
+  align-self:end;justify-self:stretch;margin-bottom:34px;padding:10px 13px 12px;
+  border:2.5px solid var(--ink);border-radius:16px;
+  background:linear-gradient(180deg,rgba(255,246,214,.94),rgba(255,224,138,.94));
+  box-shadow:0 3px 0 var(--ink)}
+#title.hud .hud-pass[hidden]{display:none}
+.pass-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+  font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft)}
+.pass-head b{font-size:13px;letter-spacing:.06em;color:var(--ink)}
+.pass-bar{display:block;height:11px;border:2px solid var(--ink);border-radius:7px;overflow:hidden;
+  background:rgba(255,255,255,.72)}
+.pass-bar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#ffb7c5,#d4c5f9)}
+.pass-xp{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.07em;
+  color:var(--ink-soft);text-align:right}
+/* The quietest thing on the screen, in the corner with the most room for
+   something quiet. Absolute so it can sit under the pass plate without
+   claiming a row of its own. */
+#title.hud .social{position:absolute;left:max(16px,calc((100vw - 1640px) / 2));bottom:12px;
+  z-index:1;font-size:11px;padding:5px 11px 6px}
+
+/* ---- bottom right: the one thing to press ---- */
+#title.hud .menu-actions{grid-area:br;display:flex;flex-direction:column;align-items:stretch;
+  gap:8px;align-self:end;justify-self:stretch}
+#title.hud .menu-actions #quickPlay{width:100%;padding:18px 14px 20px;font-size:clamp(24px,2.4vw,34px);
+  border-radius:20px}
+/* SOLO is the second choice and reads like one -- but it is also the only
+   one that works with no relay reachable, so it stays a button and not a
+   line of fine print. */
+#title.hud .menu-actions #play{width:100%;padding:10px 14px 12px;font-size:15px;border-radius:15px}
+}
+
+/* A landscape phone has no vertical room to spare: the bottom band is the
+   part that has to give, and the note is the part of it that can. */
+@media (min-width:640px) and (max-height:480px){
+  #title.hud{gap:4px clamp(10px,2vw,22px);padding-top:8px;padding-bottom:8px}
+  /* The player card back to one row. Stacked it is a quarter of a landscape
+     phone's height, and every point it gives up here goes to the character,
+     which is the only thing on the screen that gets better with more room. */
+  #title.hud .hud-player{flex-direction:row;align-items:center;gap:6px;padding:5px}
+  /* Two hundred points of card cannot hold a word, a name and a sentence.
+     The label goes -- an uppercase name in a box beside a sign-in button is
+     legible as a callsign without being told -- and the button falls back to
+     its mark, which is why it carries an aria-label. Losing the name instead
+     is not an option: it is the one thing on this card the player set. */
+  #title.hud .hud-player .identity{flex:1 1 auto;min-width:0}
+  #title.hud .hud-player .identity>span{display:none}
+  #title.hud .hud-player .identity input{font-size:13px;text-align:left}
+  #title.hud .menu-account{flex:0 0 auto}
+  #title.hud .menu-account #signIn{width:auto;padding:8px 10px 9px}
+  #title.hud .menu-account #signIn>span{display:none}
+  #title.hud .locker .locker-btn,#title.hud .hud-rail .locker-btn{padding:8px 10px 9px}
+  #title.hud #menuNote{font-size:11px}
+  #title.hud #modePicker .mode-option{min-height:46px}
+  #title.hud .menu-actions #quickPlay{padding:12px 12px 14px}
+  #title.hud .menu-actions #play{padding:7px 12px 9px;font-size:13px}
+  #title.hud .hud-pass{margin-bottom:26px;padding:7px 11px 9px}
+  #title.hud .social{bottom:8px}
+}
+
+/* The taller half of the wide layout. Below this the arrangement is the same
+   but the character is not worth the vertical room, so it keeps the middle
+   without the extra weight. */
+@media (min-width:900px) and (min-height:600px){
+  #title.hud{grid-template-columns:minmax(186px,246px) minmax(0,1fr) minmax(186px,246px)}
+  #title.hud .locker .locker-btn,#title.hud .hud-rail .locker-btn{
+    grid-template-columns:52px minmax(0,1fr);padding:13px 14px 14px}
+  #title.hud .locker .tile-icon,#title.hud .hud-rail .tile-icon{font-size:34px}
+  #title.hud .locker .tile-name,#title.hud .hud-rail .tile-name{font-size:15px}
+  #title.hud .locker .tile-sub,#title.hud .hud-rail .tile-sub{font-size:10px}
+}
 @media(max-height:760px){
   .mode-option{min-height:44px;padding-top:5px;padding-bottom:6px}
   #title h1{font-size:clamp(42px,8vw,78px)}
@@ -985,6 +1260,14 @@ body.touch #dead .report .k{display:none}
 
 #loading{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;
   flex-direction:column;gap:16px;background:linear-gradient(180deg,#ffe9f0,#d8e8fb)}
+/* The wordmark, in the one place it now appears. Same treatment the title
+   card gave it, sized for a screen that holds nothing else. */
+#loading .lmark{font-family:var(--disp);font-size:clamp(38px,9vw,84px);font-weight:800;line-height:.86;
+  letter-spacing:.01em;text-align:center;color:#fff;
+  text-shadow:0 5px 0 var(--ink),0 7px 0 rgba(74,63,92,.35),0 16px 34px rgba(74,63,92,.3)}
+#loading .lmark em{display:block;font-style:normal;
+  background:linear-gradient(180deg,#ffd9e6,#ffb7c5 45%,#f79ec0);-webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;filter:drop-shadow(0 4px 0 var(--ink))}
 #loading .lt{font-family:var(--disp);font-size:22px;font-weight:800;letter-spacing:.2em;color:var(--ink)}
 #loading .bar{width:230px;height:14px;border:3px solid var(--ink);border-radius:9px;overflow:hidden;background:#fff}
 #loading .bar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#ffd3b6,#ffb7c5,#d4c5f9)}
@@ -1165,47 +1448,99 @@ body.touch .touch-keys{display:flex}
 </div>
 
 <div class="screen" id="title">
+  <!-- The stage the character stands on, and only ever that: `.hud` is the
+       wide title screen, so the pause card keeps the see-through wash over
+       the frozen game that tells you the game is still there. -->
+  <div class="hud-stage" aria-hidden="true"><i class="hud-floor"></i><i class="hud-pool"></i></div>
   <h1>PASTEL<em>NUKETOWN</em></h1>
   <div class="sub">Free&nbsp;For&nbsp;All</div>
-  <div class="online-count" id="onlineCount"></div>
-  <div class="online-count" id="matchesCount"></div>
+  <!-- Wrapped so the wide layout can put both counts and the gear in one
+       corner cluster. Like every wrapper added here it is `display:contents`
+       everywhere else, so the narrow column and the pause card lay these out
+       exactly as they did before it existed. -->
+  <div class="hud-meta">
+    <div class="online-count" id="onlineCount"></div>
+    <div class="online-count" id="matchesCount"></div>
+    <!-- Wide layout only. On a phone and on the pause card the two look
+         settings stay in the column, which is where they matter most: a
+         setting behind a popover on a paused game is one nobody finds. -->
+    <button class="mini-btn menu-gear" id="menuGear" type="button"
+            aria-expanded="false" aria-controls="menuSettings" aria-label="Look settings">⚙</button>
+  </div>
   <div id="menu">
-    <label class="identity setup-only" for="playerName">
-      <span>CALLSIGN</span>
-      <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
-    </label>
-    <div class="locker setup-only" id="locker">
-      <button class="mini-btn locker-btn" id="signIn" type="button">
-        <svg class="gmark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-          <path fill="#4285f4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"></path>
-          <path fill="#34a853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"></path>
-          <path fill="#fbbc05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"></path>
-          <path fill="#ea4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"></path>
-        </svg>
-        <span>SIGN IN WITH GOOGLE</span>
-      </button>
-      <div class="locker-who" id="lockerWho" hidden>
-        <span class="tag">SIGNED IN</span>
-        <strong id="accountName"></strong>
-        <button class="mini-btn" id="signOut" type="button">SIGN OUT</button>
+    <div class="hud-player setup-only">
+      <label class="identity" for="playerName">
+        <span>CALLSIGN</span>
+        <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
+      </label>
+      <!-- Out of .locker so the wide layout's player card can hold who you
+           are next to your callsign and leave the rail as the two tiles. It
+           keeps .locker-btn / .locker-who, so the narrow column is unchanged. -->
+      <div class="menu-account" id="menuAccount">
+        <button class="mini-btn locker-btn" id="signIn" type="button" aria-label="Sign in with Google">
+          <svg class="gmark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+            <path fill="#4285f4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"></path>
+            <path fill="#34a853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"></path>
+            <path fill="#fbbc05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"></path>
+            <path fill="#ea4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"></path>
+          </svg>
+          <span>SIGN IN WITH GOOGLE</span>
+        </button>
+        <div class="locker-who" id="lockerWho" hidden>
+          <span class="tag">SIGNED IN</span>
+          <strong id="accountName"></strong>
+          <button class="mini-btn" id="signOut" type="button">SIGN OUT</button>
+        </div>
       </div>
+    </div>
+    <div class="locker setup-only" id="locker">
       <button class="mini-btn locker-btn locker-store" id="storeOpen" type="button">
-        <span aria-hidden="true">🧁</span><span>STORE</span>
+        <span class="tile-icon" aria-hidden="true">🧁</span><span class="tile-name">STORE</span>
+        <small class="tile-sub">CHARACTERS &amp; SKINS</small>
       </button>
       <button class="mini-btn locker-btn locker-pass" id="battlepassOpen" type="button">
-        <span aria-hidden="true">🎫</span><span>SEASON&nbsp;1</span>
+        <span class="tile-icon" aria-hidden="true">🎫</span><span class="tile-name">SEASON&nbsp;1</span>
+        <small class="tile-sub">FIRST LIGHT</small>
       </button>
       <div id="lockerNote" role="status" aria-live="polite"></div>
     </div>
-    <label class="sens" for="sensRange">
-      <span>MOUSE SENSITIVITY</span>
-      <input type="range" id="sensRange" min="0.4" max="2.8" step="0.05" value="1">
-      <b id="sensVal">1.00×</b>
-    </label>
-    <label class="listed look-invert" for="invertY">
-      <input type="checkbox" id="invertY">
-      <span>INVERT LOOK (Y)</span>
-    </label>
+    <!-- The right rail. One tile, because there is one thing behind it: the
+         mockup's FRIENDS / TEAM / CLUB have nothing to open here. -->
+    <div class="hud-rail setup-only">
+      <button class="mini-btn locker-btn rail-rooms" id="roomsOpen" type="button">
+        <span class="tile-icon" aria-hidden="true">🚪</span><span class="tile-name">ROOMS</span>
+        <small class="tile-sub" id="roomsTileSub">FIND OR HOST ONE</small>
+      </button>
+    </div>
+    <div class="menu-settings" id="menuSettings">
+      <label class="sens" for="sensRange">
+        <span>MOUSE SENSITIVITY</span>
+        <input type="range" id="sensRange" min="0.4" max="2.8" step="0.05" value="1">
+        <b id="sensVal">1.00×</b>
+      </label>
+      <label class="listed look-invert" for="invertY">
+        <input type="checkbox" id="invertY">
+        <span>INVERT LOOK (Y)</span>
+      </label>
+    </div>
+    <!-- Whoever is being worn, drawn once by the locker's display case into a
+         still. Hidden until there is one: a browser that cannot give the
+         store a WebGL context simply does not get a character, and the
+         layout closes over the gap. -->
+    <div class="menu-hero setup-only" id="menuHero" hidden>
+      <div class="hero-rank" id="heroRank" hidden>
+        <small>TIER</small><b id="heroRankNum">1</b>
+      </div>
+      <img id="menuHeroImg" alt="" aria-hidden="true">
+    </div>
+    <!-- Bottom-left: the season, as a climb rather than a badge. Every figure
+         comes from /battlepass/me, so it stays away entirely for a signed-out
+         player — who has no tier, rather than a tier of zero. -->
+    <div class="hud-pass setup-only" id="hudPass" hidden>
+      <div class="pass-head"><span>SEASON 1</span><b id="passTier">TIER 1</b></div>
+      <span class="pass-bar"><i id="passFill"></i></span>
+      <small class="pass-xp" id="passXp"></small>
+    </div>
     <div class="mode-picker setup-only" id="modePicker" role="group" aria-labelledby="modePickerLabel">
       <span class="mode-picker-label" id="modePickerLabel">MATCH MODE</span>
       <div class="mode-options">
@@ -1226,27 +1561,6 @@ body.touch .touch-keys{display:flex}
            #netLeave cannot serve here — it lives on the lobby panel, which
            netSetPauseMenu hides for the whole match. -->
       <button class="mini-btn pause-only" id="leaveMatch" type="button">LEAVE MATCH</button>
-    </div>
-    <div class="rooms setup-only">
-      <div class="rooms-head">
-        <span>ROOMS</span>
-        <button class="mini-btn" id="refreshRooms">REFRESH</button>
-      </div>
-      <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
-    </div>
-    <button class="mini-btn room-toggle setup-only" id="roomToggle" type="button" aria-expanded="false" aria-controls="roomOptions">CREATE OR JOIN A ROOM</button>
-    <div id="roomOptions" class="setup-only" hidden>
-      <div class="join-row">
-        <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
-        <button class="mini-btn" id="joinGame">JOIN</button>
-      </div>
-      <div class="opt-row">
-        <button class="mini-btn" id="hostGame">CREATE ROOM</button>
-        <label class="listed" for="roomPublic">
-          <input type="checkbox" id="roomPublic" checked>
-          <span>LIST IT PUBLICLY</span>
-        </label>
-      </div>
     </div>
     <div id="menuNote">PLAY finds you a room with people in it. SOLO is you and eight bots.</div>
     <a class="mini-btn social setup-only" id="twitterLink" href="https://x.com/luckeyfaraday"
@@ -1370,6 +1684,45 @@ body.touch .touch-keys{display:flex}
   </div>
 </div>
 
+<!-- The room browser. A .screen dialog in the store's pattern — opened from
+     the ROOMS tile, closed by CLOSE, by Escape and by the wash. It used to be
+     a list and a collapsed panel stacked in the middle of the title card,
+     where it competed with PLAY for the same glance; behind a tile it is the
+     minority path it actually is, and it gets room to be a real table.
+
+     Every id in here is the one 75-network.js already drives. The poller does
+     not care that the list moved: netRoomsPanelOpen is about the setup menu
+     being on screen, which is still exactly when this list is worth keeping
+     warm. -->
+<div class="screen off" id="rooms" role="dialog" aria-modal="true" aria-labelledby="roomsTitle">
+  <div class="rooms-card panel" tabindex="-1">
+    <div class="rooms-head-bar">
+      <div class="rooms-head-text">
+        <h2 id="roomsTitle">ROOMS</h2>
+        <div class="rooms-sub">Join one that is running, or open your own.</div>
+      </div>
+      <div class="rooms-head-btns">
+        <button class="mini-btn" id="refreshRooms" type="button">REFRESH</button>
+        <button class="mini-btn" id="roomsClose" type="button">CLOSE</button>
+      </div>
+    </div>
+    <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
+    <div id="roomOptions">
+      <div class="join-row">
+        <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
+        <button class="mini-btn" id="joinGame">JOIN</button>
+      </div>
+      <div class="opt-row">
+        <button class="mini-btn" id="hostGame">CREATE ROOM</button>
+        <label class="listed" for="roomPublic">
+          <input type="checkbox" id="roomPublic" checked>
+          <span>LIST IT PUBLICLY</span>
+        </label>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="screen off" id="dead">
   <div class="big">DOWN!</div>
   <div class="by" id="deadBy"></div>
@@ -1391,7 +1744,10 @@ body.touch .touch-keys{display:flex}
   </div>
 </div>
 
-<div id="loading"><div class="lt">WARMING UP THE PASTELS</div><div class="bar"><i id="lbar"></i></div></div>
+<!-- The wordmark's home. The wide title screen is a HUD around a character
+     and has no room for a logo the size this one wants to be, so the boot
+     screen is where the game says its own name. -->
+<div id="loading"><div class="lmark">PASTEL<em>NUKETOWN</em></div><div class="lt">WARMING UP THE PASTELS</div><div class="bar"><i id="lbar"></i></div></div>
 <div id="fatal" class="panel"></div>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js" integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" crossorigin="anonymous"></script>
 <script>
@@ -9647,6 +10003,7 @@ function initInput() {
     if (e.code === 'Escape' && !e.repeat) {
       if (typeof storeIsOpen === 'function' && storeIsOpen()) return;
       if (typeof battlepassIsOpen === 'function' && battlepassIsOpen()) return;
+      if (typeof roomsIsOpen === 'function' && roomsIsOpen()) return;
       if (G.over) returnToMenu();
       else if (G.paused) { setPaused(false); requestLock(); }
       else setPaused(true);
@@ -10894,11 +11251,86 @@ function netRoomsURL() {
   }
 }
 
+/* Whether the list is worth keeping warm, which is not the same question as
+   whether the dialog is up: the poll feeds the online and matches counts on
+   the title screen as well, and a list fetched while the dialog was shut is
+   what makes it current the moment it opens. So this stays what it always
+   was — the setup menu is the thing on screen. */
 function netRoomsPanelOpen() {
   const title = document.getElementById('title');
   const menu = document.getElementById('menu');
   return !!title && !title.classList.contains('off') &&
          !!menu && !menu.hidden && !menu.classList.contains('pause');
+}
+
+/* ---- the room browser dialog ----------------------------------------
+   The store's pattern a third time: the same three ways out, the same
+   focus ring, the same title-made-inert underneath. */
+
+function roomsIsOpen() {
+  const panel = document.getElementById('rooms');
+  return !!panel && !panel.classList.contains('off');
+}
+
+function roomsFocusables() {
+  const panel = document.getElementById('rooms');
+  if (!panel || typeof panel.querySelectorAll !== 'function') return [];
+  const found = [];
+  for (const el of panel.querySelectorAll('button,a[href],input,select,textarea,[tabindex]')) {
+    if (el.disabled || el.hidden) continue;
+    if (el.getAttribute && el.getAttribute('tabindex') === '-1') continue;
+    found.push(el);
+  }
+  return found;
+}
+
+/* Tab is the scoreboard key and 70-game.js takes it with preventDefault on
+   every keydown there is, so a dialog on this page has to walk its own ring —
+   which is also, conveniently, exactly the wrap a modal wants. */
+function roomsTrapFocus(e) {
+  if (e.code !== 'Tab' || !roomsIsOpen()) return;
+  const items = roomsFocusables();
+  if (!items.length) return;
+  e.preventDefault();
+  const at = items.indexOf(document.activeElement);
+  const next = at < 0
+    ? (e.shiftKey ? items.length - 1 : 0)
+    : (at + (e.shiftKey ? items.length - 1 : 1)) % items.length;
+  items[next].focus();
+}
+
+const ROOMS_FOCUS = { opener: null };
+
+function roomsShow(open) {
+  const panel = document.getElementById('rooms');
+  if (!panel) return;
+  const wasOpen = roomsIsOpen();
+  panel.classList.toggle('off', !open);
+  const title = document.getElementById('title');
+  if (title && 'inert' in title) title.inert = !!open;
+
+  if (!open) {
+    /* Back where they came from. A dialog that drops focus on the body leaves
+       a keyboard player at the top of the document, several Tabs from the
+       button they just pressed. */
+    if (wasOpen) {
+      const opener = ROOMS_FOCUS.opener;
+      ROOMS_FOCUS.opener = null;
+      if (opener && typeof opener.focus === 'function') { try { opener.focus(); } catch (e) {} }
+    }
+    return;
+  }
+
+  if (!wasOpen) {
+    ROOMS_FOCUS.opener = document.activeElement || null;
+    const card = panel.querySelector ? panel.querySelector('.rooms-card') : null;
+    const target = card || roomsFocusables()[0];
+    if (target && typeof target.focus === 'function') { try { target.focus(); } catch (e) {} }
+  }
+  if (typeof SFX === 'object' && SFX) SFX.ui();
+  /* The poller keeps this list within five seconds of current, but opening is
+     the one moment somebody is about to act on it. */
+  netRefreshRooms(true);
 }
 
 /* Blank unless there is genuinely someone to play with. An unreachable or
@@ -10964,6 +11396,7 @@ function netRenderRooms(rooms, message) {
     join.addEventListener('click', () => {
       const input = document.getElementById('roomCode');
       if (input) input.value = room.code;
+      roomsShow(false);
       netConnect('join', room.code);
     });
     li.appendChild(join);
@@ -13440,24 +13873,29 @@ function initNetworkUI() {
     SFX.init(); SFX.resume(); SFX.ui();
     netQuickPlay();
   });
-  document.getElementById('hostGame').addEventListener('click', () => netConnect('create'));
-  document.getElementById('joinGame').addEventListener('click', () => netConnect('join', roomInput.value));
+  document.getElementById('hostGame').addEventListener('click', () => {
+    roomsShow(false);
+    netConnect('create');
+  });
+  document.getElementById('joinGame').addEventListener('click', () => {
+    roomsShow(false);
+    netConnect('join', roomInput.value);
+  });
 
-  const toggle = document.getElementById('roomToggle');
-  const options = document.getElementById('roomOptions');
-  if (toggle && options) {
-    toggle.addEventListener('click', () => {
-      const open = options.hidden;
-      options.hidden = !open;
-      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
-    /* Someone who arrived on a link already cares about a specific room, so
-       give them the code they came with rather than making them find it. */
-    if (invited) {
-      options.hidden = false;
-      toggle.setAttribute('aria-expanded', 'true');
-    }
-  }
+  /* The three ways out of the browser, and the one way in. */
+  const roomsBtn = document.getElementById('roomsOpen');
+  const roomsClose = document.getElementById('roomsClose');
+  const roomsPanel = document.getElementById('rooms');
+  if (roomsBtn) roomsBtn.addEventListener('click', () => roomsShow(true));
+  if (roomsClose) roomsClose.addEventListener('click', () => {
+    roomsShow(false);
+    if (typeof SFX === 'object' && SFX) SFX.ui();
+  });
+  /* The wash around the card is a way out on a phone, where CLOSE sits at the
+     top of a tall panel and a thumb is already at the bottom. */
+  if (roomsPanel) roomsPanel.addEventListener('click', e => { if (e.target === roomsPanel) roomsShow(false); });
+  addEventListener('keydown', e => { if (e.code === 'Escape' && roomsIsOpen()) roomsShow(false); });
+  addEventListener('keydown', roomsTrapFocus);
 
   const hold = document.getElementById('holdStart');
   if (hold) hold.addEventListener('click', () => { SFX.ui(); netHoldStart(); });
@@ -14955,6 +15393,9 @@ function storeEquip(id, type) {
   else EQUIPPED.weapons[where.slot] = EQUIPPED.weapons[where.slot] === id ? null : id;
   storeSaveEquipped();
   storeRenderGrid();
+  /* The character on the title screen is whoever is being worn, so a change
+     made behind the panel has to reach the picture standing in front of it. */
+  menuHudRenderHero();
   if (typeof SFX === 'object' && SFX) SFX.ui();
 }
 
@@ -15705,12 +16146,19 @@ function stageClearSlots() {
 
 /* One item, one picture, or null. Everything is put back afterwards by the
    caller — this leaves the renderer at the thumbnail's size and the stage
-   stands empty. */
-function stageDrawThumb(id, type) {
-  const where = stageKindOf(id, type);
+   stands empty.
+
+   `size` is the card's 256x160 unless somebody asks for another; the title
+   screen's character wants a tall frame. A null `id` means the default of
+   its kind, which is the one thing stageKindOf cannot answer — it reads an
+   id, and a default does not have one. */
+function stageDrawThumb(id, type, size) {
+  const where = id === null ? { kind: 'character' } : stageKindOf(id, type);
   if (!where || !STAGE.renderer || !STAGE.thumbPivot || !STAGE.thumbCam) return null;
   const node = stagePreviewNode(where.kind, where.slot, id);
   if (!node) return null;
+  const drawW = size && size.w > 0 ? size.w : STAGE_THUMB_W;
+  const drawH = size && size.h > 0 ? size.h : STAGE_THUMB_H;
 
   const canvas = (STAGE.renderer && STAGE.renderer.domElement) || STAGE.canvas;
   if (!canvas || typeof canvas.toDataURL !== 'function') return null;
@@ -15733,11 +16181,14 @@ function stageDrawThumb(id, type) {
       minY: 0, maxY: node.userData.pnHeight,
       halfZ: node.userData.pnFlat
     };
+    /* Framing reads the lens, so the shape of the picture has to be set
+       before it is framed and not after. */
+    STAGE.thumbCam.aspect = drawW / drawH;
     stageFrame(STAGE.thumbCam, stageStillBounds(pivot) || swept, 0);
     if (typeof STAGE.thumbCam.updateProjectionMatrix === 'function')
       STAGE.thumbCam.updateProjectionMatrix();
 
-    STAGE.renderer.setSize(STAGE_THUMB_W, STAGE_THUMB_H, false);
+    STAGE.renderer.setSize(drawW, drawH, false);
     STAGE.renderer.render(STAGE.scene, STAGE.thumbCam);
     url = canvas.toDataURL('image/png');
     if (typeof url !== 'string' || url.length < 32) url = null;
@@ -16038,6 +16489,10 @@ function storeRenderAccount() {
       ? 'Signed in as ' + ACCOUNT.user.displayName
       : 'Skins for your guns and your fighter, and effects for your shots.';
   }
+  /* Signing out takes the season with it — the tier plate and the badge over
+     the character's head are read out of an account, and there is no longer
+     one. */
+  menuHudRender();
 }
 
 /* What the panel lists. The relay's catalog when there is one, the six we
@@ -16701,6 +17156,9 @@ function battlepassRender() {
   battlepassRenderCta();
   battlepassRenderLadder();
   bpRetick();
+  /* The title screen tells the same season in miniature, so whatever moved
+     the ladder has moved that too. */
+  menuHudRender();
 }
 
 function battlepassRenderSeason() {
@@ -17043,6 +17501,209 @@ function battlepassShow(open) {
      re-asked when somebody is paying attention to it. */
   if (storeSignedIn()) storeRefreshCatalog();
 }
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   The parts of the corner layout that are not already on the page: the
+   character standing in the middle, the tier badge over its head, and the
+   season plate in the bottom-left corner.
+
+   Every figure is one the game already knows — /battlepass/me for the
+   season, EQUIPPED for the character — and every part puts itself away
+   when its figure is missing rather than drawing a zero. A signed-out
+   player has no tier. They are not on tier 0.
+
+   Which of these are visible at all is the media queries' business in
+   00-head.html; this file only decides whether there is anything to show.
+   The two exceptions are below: the `hud` class, which is the state those
+   queries key off, and the character, which is expensive enough to be
+   worth asking about the window before drawing.
+   ===================================================================== */
+
+/* The picture is a still, so it is drawn once per skin and kept.
+   `undefined` is "not tried yet" and null is "tried, and there is none" —
+   a browser that could not give the store a context is the second, and
+   asking it again every render would not change the answer. */
+const MENU_HUD = { heroId: undefined, heroUrl: null, heroJob: 0 };
+/* Tall, because it is a person standing up, and drawn larger than it is
+   shown so a high-density screen has pixels to use. */
+const MENU_HUD_HERO = { w: 440, h: 680 };
+/* The wide arrangement's query, verbatim from 00-head.html. Only the
+   character reads it, and only to decide whether drawing one is worth it. */
+const MENU_HUD_WIDE =
+  '(min-width:640px) and (min-aspect-ratio:13/10),(min-width:900px) and (min-height:600px)';
+
+function menuHudEl(id) { return document.getElementById(id); }
+
+/* #title carries `hud` while the setup menu is the thing on screen. Both of
+   the other states that share #title — the lobby, which hides #menu, and the
+   pause card, which is #menu with a class — want the column, and both are
+   reached from several places in 75-network.js and 80-ui.js. Watching the two
+   attributes that say so is one rule to keep true instead of a call to
+   remember at each of those places. */
+function menuHudSyncLayout() {
+  const title = menuHudEl('title');
+  const menu = menuHudEl('menu');
+  if (!title || !menu) return;
+  title.classList.toggle('hud', !menu.hidden && !menu.classList.contains('pause'));
+}
+
+/* Making a context and building a model costs more than this picture is worth
+   on a phone in portrait, where the layout it belongs to is not the one on
+   screen. Anything that cannot answer gets the picture. */
+function menuHudWide() {
+  if (typeof matchMedia !== 'function') return true;
+  try { return matchMedia(MENU_HUD_WIDE).matches; } catch (e) { return true; }
+}
+
+/* How far the player is from the tier they have reached to the next one. The
+   top of the ladder has no next and reads as full. */
+function menuHudTierFraction(me) {
+  if (me.tier >= BP_REWARDS.length) return 1;
+  const floor = me.tier > 0 ? BP_XP_THRESHOLDS[me.tier - 1] : 0;
+  const span = BP_XP_THRESHOLDS[me.tier] - floor;
+  if (!(span > 0)) return 0;
+  const into = me.xp - floor;
+  return into <= 0 ? 0 : (into >= span ? 1 : into / span);
+}
+
+/* A season that has not opened yet is not a tier the player is on, and one
+   that has ended is a standing rather than a climb — both are the pass
+   screen's story to tell, not this plate's. */
+function menuHudSeasonMe() {
+  const me = bpMe();
+  if (!me) return null;
+  return bpEffectiveStatus(me, Date.now()) === 'active' ? me : null;
+}
+
+function menuHudRenderSeason() {
+  const box = menuHudEl('hudPass');
+  const rank = menuHudEl('heroRank');
+  const me = menuHudSeasonMe();
+  if (!me) {
+    if (box) box.hidden = true;
+    if (rank) rank.hidden = true;
+    return;
+  }
+  const pct = Math.round(menuHudTierFraction(me) * 100);
+  if (rank) {
+    rank.hidden = false;
+    const num = menuHudEl('heroRankNum');
+    if (num) num.textContent = String(me.tier);
+  }
+  if (!box) return;
+  box.hidden = false;
+  const tier = menuHudEl('passTier');
+  const fill = menuHudEl('passFill');
+  const xp = menuHudEl('passXp');
+  if (tier) tier.textContent = 'TIER ' + me.tier;
+  if (fill) fill.style.width = pct + '%';
+  if (!xp) return;
+  if (me.tier >= BP_REWARDS.length) { xp.textContent = 'TOP TIER'; return; }
+  const floor = me.tier > 0 ? BP_XP_THRESHOLDS[me.tier - 1] : 0;
+  const span = BP_XP_THRESHOLDS[me.tier] - floor;
+  /* Clamped to the rung, because the bar above it already is: an answer whose
+     xp has run past the tier it also reports would otherwise read as
+     "2,900 / 1,300" under a bar that is simply full. */
+  const into = Math.max(0, Math.min(me.xp - floor, span));
+  xp.textContent = bpNum(into) + ' / ' + bpNum(span) + ' XP';
+}
+
+/* Borrow the display case, take one picture, put it back. This is what
+   stageMakeThumbs does for the store's cards, in the one shape the cards do
+   not need: tall, and of whatever is being worn rather than of an id on a
+   shelf. */
+function menuHudDrawHero(id) {
+  if (typeof stageInit !== 'function' || !stageInit()) return null;
+  stageClearSlots();                       // the stands may hold a model this needs
+  let url = null;
+  try { url = stageDrawThumb(id, 'character', MENU_HUD_HERO); } catch (e) { url = null; }
+  /* Drawing left the renderer at the picture's size and the stands empty.
+     Re-applying puts both back, and is only worth doing while somebody is
+     looking at the case. */
+  STAGE.w = 0; STAGE.h = 0;
+  if (typeof storeIsOpen === 'function' && storeIsOpen()) stageApply();
+  return url;
+}
+
+function menuHudRenderHero() {
+  const box = menuHudEl('menuHero');
+  const img = menuHudEl('menuHeroImg');
+  if (!box || !img) return;
+  if (!menuHudWide()) { box.hidden = true; return; }
+  const id = (typeof EQUIPPED === 'object' && EQUIPPED && EQUIPPED.character) || null;
+  if (MENU_HUD.heroId === id) { box.hidden = !MENU_HUD.heroUrl; return; }
+  if (MENU_HUD.heroJob) return;            // one is already in flight; it will land
+  /* Off the frame the menu appeared on. A context, a character and a render
+     is not what the first frame of the title screen should be spending. */
+  const run = () => {
+    MENU_HUD.heroJob = 0;
+    MENU_HUD.heroId = id;
+    MENU_HUD.heroUrl = menuHudDrawHero(id);
+    if (MENU_HUD.heroUrl) img.src = MENU_HUD.heroUrl;
+    box.hidden = !MENU_HUD.heroUrl;
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    MENU_HUD.heroJob = requestAnimationFrame(run) || 0;
+    if (!MENU_HUD.heroJob) run();          // rAF answered 0, which is also "no job"
+  } else run();
+}
+
+function menuHudRender() {
+  menuHudRenderSeason();
+  menuHudRenderHero();
+}
+
+function menuHudSettingsOpen(open) {
+  const gear = menuHudEl('menuGear');
+  const panel = menuHudEl('menuSettings');
+  if (!gear || !panel) return;
+  if (open) panel.setAttribute('data-open', '');
+  else panel.removeAttribute('data-open');
+  gear.setAttribute('aria-expanded', String(!!open));
+}
+
+function menuHudInit() {
+  const menu = menuHudEl('menu');
+  if (menu && typeof MutationObserver === 'function') {
+    try {
+      new MutationObserver(menuHudSyncLayout)
+        .observe(menu, { attributes: true, attributeFilter: ['class', 'hidden'] });
+    } catch (e) {}
+  }
+  menuHudSyncLayout();
+  const gear = menuHudEl('menuGear');
+  const panel = menuHudEl('menuSettings');
+  if (gear && panel) {
+    gear.addEventListener('click', e => {
+      e.stopPropagation();
+      menuHudSettingsOpen(!panel.hasAttribute('data-open'));
+      if (typeof SFX === 'object' && SFX) SFX.ui();
+    });
+    /* A popover with only its own button to close it is a popover people
+       leave open. Anywhere else on the page, and Escape, put it away. */
+    addEventListener('click', e => {
+      if (!panel.hasAttribute('data-open')) return;
+      if (panel.contains(e.target) || gear.contains(e.target)) return;
+      menuHudSettingsOpen(false);
+    });
+    addEventListener('keydown', e => {
+      if (e.code === 'Escape' && panel.hasAttribute('data-open')) menuHudSettingsOpen(false);
+    });
+  }
+  /* Dragging a window wide is the one moment the character can become worth
+     drawing without anything else having happened. */
+  if (typeof matchMedia === 'function') {
+    try {
+      const wide = matchMedia(MENU_HUD_WIDE);
+      const onChange = () => menuHudRenderHero();
+      if (typeof wide.addEventListener === 'function') wide.addEventListener('change', onChange);
+      else if (typeof wide.addListener === 'function') wide.addListener(onChange);
+    } catch (e) {}
+  }
+  menuHudRender();
+}
 </script>
 <script>/* ===== src/90-main.js ===== */
 /* =====================================================================
@@ -17304,6 +17965,11 @@ function boot() {
      yet, not a browser with storage switched off. Every failure inside is
      already handled; this is the guard for the one that is not. */
   try { initStore(); } catch (e) {}
+  /* After initStore, because the character in the middle of the title screen
+     is drawn by the store's display case and read out of what initStore just
+     restored as equipped. Guarded for the same reason it is: the title screen
+     losing its scenery must not be able to stop the game booting. */
+  try { menuHudInit(); } catch (e) {}
   const requestedMode = QS.get('mode');
   setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 
