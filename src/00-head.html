@@ -421,13 +421,17 @@ body.touch .sens{display:none}
      meaning "every item is as tall as its own content". The character's row
      then collapses to nothing, because the character is out of flow. */
   align-items:stretch;
-  /* Bounded content, full-bleed stage: past about 1640px the corners stop
-     being a composition and become four menus at the edges of a desk. The
-     padding takes the surplus rather than a wrapper, which would take the
-     stage in with it. */
-  padding:clamp(10px,1.6vh,18px) max(16px,calc((100vw - 1640px) / 2));
-  gap:clamp(6px,1.4vh,14px) clamp(14px,2.4vw,30px);
-  grid-template-columns:minmax(168px,224px) minmax(0,1fr) minmax(168px,224px);
+  /* A corner HUD is measured from the corners of the screen. Capping the
+     content at a fixed width instead — which is what this did, at 1640 —
+     leaves 428 points of nothing outside every corner on a 2495-wide
+     display, and the arrangement stops reading as a HUD and starts reading
+     as fragments scattered in a frame. The rails go to the real edges, and
+     what sits in them is sized in vw/vh, so the composition grows with the
+     window rather than staying laptop-sized in the middle of it. */
+  --hud-pad:clamp(16px,1.9vw,52px);
+  padding:clamp(10px,1.6vh,20px) var(--hud-pad);
+  gap:clamp(6px,1.4vh,16px) clamp(14px,2.2vw,44px);
+  grid-template-columns:clamp(232px,14vw,320px) minmax(0,1fr) clamp(232px,14vw,320px);
   grid-template-rows:auto minmax(0,1fr) auto auto;
   grid-template-areas:
     "tl   tc    tr"
@@ -509,7 +513,7 @@ body.touch .sens{display:none}
   background:#5fc9a2;box-shadow:0 0 0 2px rgba(74,63,92,.55)}
 #title.hud .menu-gear{display:inline-flex;align-items:center;justify-content:center;
   width:40px;height:40px;padding:0;font-size:17px;border-radius:13px;flex:none}
-#title.hud .menu-settings{position:absolute;top:60px;right:max(16px,calc((100vw - 1640px) / 2));
+#title.hud .menu-settings{position:absolute;top:60px;right:var(--hud-pad);
   z-index:5;display:flex;flex-direction:column;gap:11px;width:min(290px,calc(100vw - 32px));
   padding:13px 15px 15px;border:2.5px solid var(--ink);border-radius:16px;
   background:rgba(255,248,240,.96);box-shadow:0 5px 0 var(--ink),0 12px 26px rgba(74,63,92,.24)}
@@ -538,8 +542,8 @@ body.touch .sens{display:none}
 #title.hud #lockerNote{font-size:11px;text-align:center}
 
 /* ---- the middle: the character ---- */
-#title.hud .menu-hero{grid-area:mid;position:relative;display:flex;flex-direction:column;
-  align-items:center;justify-content:flex-start;min-height:0;overflow:hidden;pointer-events:none}
+#title.hud .menu-hero{grid-area:mid;display:block;position:relative;min-height:0;
+  overflow:hidden;pointer-events:none}
 #title.hud .menu-hero[hidden]{display:none}
 /* Out of flow, and that is the whole point. The picture is a fixed 440x680
    still in a row whose height is whatever the four corners leave over, so
@@ -549,16 +553,30 @@ body.touch .sens{display:none}
    Absolute breaks the loop — the row is sized by the badge above, and the
    character is then fitted into it. Standing on the bottom edge puts it in
    the pool of light the stage draws there. */
-#title.hud .menu-hero img{position:absolute;left:50%;bottom:0;transform:translateX(-50%);
-  display:block;max-width:100%;max-height:100%;width:auto;height:auto;
+#title.hud .menu-hero img{position:absolute;display:block;
+  /* The box is the row and `contain` fits the still inside it, which is the
+     only arrangement that can scale the character *up*. `width:auto` stops
+     at the raster's natural size, so on a tall display the character came
+     out 46% of the frame where the mockup's is nearer 60 — and got smaller
+     as the screen got bigger. menuHudHeroSize draws the raster to match, so
+     nothing here is upscaling. */
+  /* Capped as a share of the window, not of the row. The row is whatever
+     the four corners leave over, which on a tall display is most of the
+     screen -- and a character filling it is 71% of the frame with nothing
+     left above its head for the tier badge. The mockup's is nearer 60. */
+  left:0;right:0;bottom:0;top:auto;width:100%;height:min(100%,62vh);
+  object-fit:contain;object-position:center bottom;
   /* The character's own contact shadow. Two drops rather than one: a tight
      dark one that reads as the foot touching the floor, and a wide soft one
      that seats it in the pool of light. */
   filter:drop-shadow(0 6px 3px rgba(74,63,92,.34)) drop-shadow(0 18px 22px rgba(74,63,92,.22))}
-/* Above the head, where the mockup puts it. Positioned so it stays over the
-   character rather than behind it. */
-.hero-rank{position:relative;z-index:1;display:flex;align-items:center;gap:7px;flex:none;
-  margin-bottom:4px;padding:4px 13px 5px;
+/* Above the head, where the mockup puts it. Anchored to the top of the
+   character's own box rather than to the top of the row: the row is
+   whatever the corners leave over, so in flow the badge drifts further and
+   further above the head as the window gets taller. */
+#title.hud .hero-rank{position:absolute;left:50%;bottom:min(100%,62vh);
+  transform:translateX(-50%);z-index:1}
+.hero-rank{display:flex;align-items:center;gap:7px;flex:none;padding:4px 13px 5px;
   border:2.5px solid var(--ink);border-radius:999px;
   background:linear-gradient(180deg,#fff6d6,#ffe08a);box-shadow:0 3px 0 var(--ink)}
 .hero-rank[hidden]{display:none}
@@ -571,9 +589,12 @@ body.touch .sens{display:none}
    desktop, and a single line of explanation stretched across all of it
    reads as a banner rather than as a caption to the button below. */
 #title.hud #menuNote{grid-area:note;align-self:end;justify-self:center;margin:0;
-  max-width:min(560px,100%);font-size:13px}
-#title.hud #modePicker{grid-area:mode;align-self:end;justify-self:center;width:min(430px,100%)}
-#title.hud #modePicker .mode-option{min-height:58px}
+  max-width:min(clamp(560px,40vw,760px),100%);font-size:clamp(13px,.95vw,17px)}
+#title.hud #modePicker{grid-area:mode;align-self:end;justify-self:center;
+  width:min(clamp(430px,32vw,660px),100%)}
+#title.hud #modePicker .mode-option{min-height:clamp(58px,5.2vh,84px);font-size:clamp(11px,.85vw,15px)}
+#title.hud #modePicker .mode-option small{font-size:clamp(10px,.72vw,13px)}
+#title.hud .mode-picker-label{font-size:clamp(11px,.75vw,14px)}
 
 /* ---- bottom left: the season, as a climb ---- */
 #title.hud .hud-pass{grid-area:bl;display:flex;flex-direction:column;gap:6px;
@@ -593,18 +614,21 @@ body.touch .sens{display:none}
 /* The quietest thing on the screen, in the corner with the most room for
    something quiet. Absolute so it can sit under the pass plate without
    claiming a row of its own. */
-#title.hud .social{position:absolute;left:max(16px,calc((100vw - 1640px) / 2));bottom:12px;
+#title.hud .social{position:absolute;left:var(--hud-pad);bottom:12px;
   z-index:1;font-size:11px;padding:5px 11px 6px}
 
 /* ---- bottom right: the one thing to press ---- */
 #title.hud .menu-actions{grid-area:br;display:flex;flex-direction:column;align-items:stretch;
   gap:8px;align-self:end;justify-self:stretch}
-#title.hud .menu-actions #quickPlay{width:100%;padding:18px 14px 20px;font-size:clamp(24px,2.4vw,34px);
-  border-radius:20px}
+#title.hud .menu-actions #quickPlay{width:100%;
+  padding:clamp(16px,1.5vh,26px) 14px clamp(18px,1.7vh,29px);
+  font-size:clamp(24px,2.5vw,46px);border-radius:clamp(20px,1.6vw,28px)}
 /* SOLO is the second choice and reads like one -- but it is also the only
    one that works with no relay reachable, so it stays a button and not a
    line of fine print. */
-#title.hud .menu-actions #play{width:100%;padding:10px 14px 12px;font-size:15px;border-radius:15px}
+#title.hud .menu-actions #play{width:100%;
+  padding:clamp(10px,.9vh,16px) 14px clamp(12px,1.1vh,18px);
+  font-size:clamp(15px,1.1vw,21px);border-radius:clamp(15px,1.1vw,20px)}
 }
 
 /* A landscape phone has no vertical room to spare: the bottom band is the
@@ -639,12 +663,19 @@ body.touch .sens{display:none}
    but the character is not worth the vertical room, so it keeps the middle
    without the extra weight. */
 @media (min-width:900px) and (min-height:600px){
-  #title.hud{grid-template-columns:minmax(186px,246px) minmax(0,1fr) minmax(186px,246px)}
   #title.hud .locker .locker-btn,#title.hud .hud-rail .locker-btn{
-    grid-template-columns:52px minmax(0,1fr);padding:13px 14px 14px}
-  #title.hud .locker .tile-icon,#title.hud .hud-rail .tile-icon{font-size:34px}
-  #title.hud .locker .tile-name,#title.hud .hud-rail .tile-name{font-size:15px}
-  #title.hud .locker .tile-sub,#title.hud .hud-rail .tile-sub{font-size:10px}
+    grid-template-columns:clamp(52px,3.4vw,72px) minmax(0,1fr);
+    padding:clamp(13px,1.2vh,20px) clamp(14px,.9vw,20px) clamp(14px,1.3vh,21px);
+    border-radius:clamp(16px,1.2vw,22px)}
+  #title.hud .locker .tile-icon,#title.hud .hud-rail .tile-icon{font-size:clamp(34px,2.4vw,48px)}
+  #title.hud .locker .tile-name,#title.hud .hud-rail .tile-name{font-size:clamp(15px,1.05vw,21px)}
+  #title.hud .locker .tile-sub,#title.hud .hud-rail .tile-sub{font-size:clamp(10px,.68vw,13px)}
+  #title.hud .hud-player .identity input{font-size:clamp(15px,1.05vw,21px)}
+  #title.hud .hud-meta .online-count{font-size:clamp(11px,.72vw,14px)}
+  #title.hud .menu-gear{width:clamp(40px,2.8vw,54px);height:clamp(40px,2.8vw,54px);
+    font-size:clamp(17px,1.3vw,24px)}
+  #title.hud .pass-head b{font-size:clamp(13px,.95vw,18px)}
+  #title.hud .hero-rank b{font-size:clamp(17px,1.2vw,24px)}
 }
 @media(max-height:760px){
   .mode-option{min-height:44px;padding-top:5px;padding-bottom:6px}

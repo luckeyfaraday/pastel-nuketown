@@ -2892,10 +2892,30 @@ function battlepassShow(open) {
    `undefined` is "not tried yet" and null is "tried, and there is none" —
    a browser that could not give the store a context is the second, and
    asking it again every render would not change the answer. */
-const MENU_HUD = { heroId: undefined, heroUrl: null, heroJob: 0 };
-/* Tall, because it is a person standing up, and drawn larger than it is
-   shown so a high-density screen has pixels to use. */
-const MENU_HUD_HERO = { w: 440, h: 680 };
+const MENU_HUD = { heroId: undefined, heroUrl: null, heroJob: 0, heroH: 0 };
+/* Tall, because it is a person standing up. Drawn to the window rather than
+   to one fixed size: the still cannot be scaled up without going soft, so a
+   fixed raster is a ceiling on how big the character can ever be, and on a
+   1469-point display that ceiling put it at 46% of the frame where the
+   mockup's character is nearer 60 — the taller the screen, the smaller the
+   character looked. Bounded at both ends: 680 is what a laptop needs, and
+   past 1600 this is a data URL nobody can see the difference in. */
+const MENU_HUD_HERO_RATIO = 440 / 680;
+const MENU_HUD_HERO_MIN = 680;
+const MENU_HUD_HERO_MAX = 1600;
+/* A redraw is a WebGL render and a PNG encode, so a window being dragged
+   must not queue one per frame. Only a change of this much is worth it. */
+const MENU_HUD_HERO_SLACK = 0.15;
+
+function menuHudHeroSize() {
+  /* Capped at 2: past that the extra pixels cost more than they show. */
+  const dpr = typeof devicePixelRatio === 'number' && devicePixelRatio > 0
+    ? Math.min(2, devicePixelRatio) : 1;
+  const vh = typeof innerHeight === 'number' && innerHeight > 0 ? innerHeight : 800;
+  const h = Math.max(MENU_HUD_HERO_MIN,
+    Math.min(MENU_HUD_HERO_MAX, Math.round(vh * 0.72 * dpr)));
+  return { w: Math.round(h * MENU_HUD_HERO_RATIO), h: h };
+}
 /* The wide arrangement's query, verbatim from 00-head.html. Only the
    character reads it, and only to decide whether drawing one is worth it. */
 const MENU_HUD_WIDE =
@@ -2981,11 +3001,11 @@ function menuHudRenderSeason() {
    stageMakeThumbs does for the store's cards, in the one shape the cards do
    not need: tall, and of whatever is being worn rather than of an id on a
    shelf. */
-function menuHudDrawHero(id) {
+function menuHudDrawHero(id, size) {
   if (typeof stageInit !== 'function' || !stageInit()) return null;
   stageClearSlots();                       // the stands may hold a model this needs
   let url = null;
-  try { url = stageDrawThumb(id, 'character', MENU_HUD_HERO); } catch (e) { url = null; }
+  try { url = stageDrawThumb(id, 'character', size); } catch (e) { url = null; }
   /* Drawing left the renderer at the picture's size and the stands empty.
      Re-applying puts both back, and is only worth doing while somebody is
      looking at the case. */
@@ -3000,14 +3020,19 @@ function menuHudRenderHero() {
   if (!box || !img) return;
   if (!menuHudWide()) { box.hidden = true; return; }
   const id = (typeof EQUIPPED === 'object' && EQUIPPED && EQUIPPED.character) || null;
-  if (MENU_HUD.heroId === id) { box.hidden = !MENU_HUD.heroUrl; return; }
+  const size = menuHudHeroSize();
+  /* Same character at a size this window has no use for redrawing. */
+  const fits = MENU_HUD.heroH > 0 &&
+    Math.abs(size.h - MENU_HUD.heroH) <= MENU_HUD.heroH * MENU_HUD_HERO_SLACK;
+  if (MENU_HUD.heroId === id && fits) { box.hidden = !MENU_HUD.heroUrl; return; }
   if (MENU_HUD.heroJob) return;            // one is already in flight; it will land
   /* Off the frame the menu appeared on. A context, a character and a render
      is not what the first frame of the title screen should be spending. */
   const run = () => {
     MENU_HUD.heroJob = 0;
     MENU_HUD.heroId = id;
-    MENU_HUD.heroUrl = menuHudDrawHero(id);
+    MENU_HUD.heroH = size.h;
+    MENU_HUD.heroUrl = menuHudDrawHero(id, size);
     if (MENU_HUD.heroUrl) img.src = MENU_HUD.heroUrl;
     box.hidden = !MENU_HUD.heroUrl;
   };
@@ -3059,8 +3084,18 @@ function menuHudInit() {
       if (e.code === 'Escape' && panel.hasAttribute('data-open')) menuHudSettingsOpen(false);
     });
   }
-  /* Dragging a window wide is the one moment the character can become worth
-     drawing without anything else having happened. */
+  /* A window that changed size is the one moment the character can need
+     redrawing without anything else having happened -- either because the
+     wide layout has just started applying, or because the raster no longer
+     matches the row it has to fill. Trailing-edge only: a drag is hundreds
+     of these and each one would be a render and a PNG encode. */
+  if (typeof addEventListener === 'function') {
+    let resizeJob = 0;
+    addEventListener('resize', () => {
+      if (resizeJob) clearTimeout(resizeJob);
+      resizeJob = setTimeout(() => { resizeJob = 0; menuHudRenderHero(); }, 250);
+    });
+  }
   if (typeof matchMedia === 'function') {
     try {
       const wide = matchMedia(MENU_HUD_WIDE);

@@ -2211,10 +2211,19 @@ test('the character is out of flow, so its row can size it', () => {
   const img = ruleBody(hud, '#title.hud .menu-hero img');
   assert.ok(img, 'the character has no rule');
   /* In flow the two define each other: the row asks the still how tall it
-     is and `max-height:100%` asks the row back, and the answer is a 680px
-     picture with its head cropped off the top of the window. */
+     is and a percentage height asks the row back, and the answer is the
+     raster at natural size with its head cropped off the top of the
+     window. */
   assert.ok(/position:absolute/.test(img), 'the character is in flow');
-  assert.ok(/max-height:100%/.test(img), 'nothing bounds the character');
+  /* `contain` is what both bounds the still and lets it scale up. `width:auto`
+     bounds it too, but only downwards -- which made the raster a ceiling on
+     how big the character could ever be, so the taller the display, the
+     smaller a share of it the character took. */
+  assert.ok(/object-fit:contain/.test(img), 'nothing bounds the character');
+  const height = img.match(/height:min\(100%,(\d+)vh\)/);
+  assert.ok(height, 'the character is not capped against the window');
+  assert.ok(Number(height[1]) >= 50 && Number(height[1]) <= 70,
+    `${height[1]}vh is not the share of the frame the mockup gives a character`);
   const box = ruleBody(hud, '#title.hud .menu-hero');
   assert.ok(/position:relative/.test(box),
     'the character is positioned against something other than its own row');
@@ -2252,4 +2261,41 @@ test('the room browser is a dialog and keeps every id the network drives', () =>
     'the old collapse toggle is still in the markup');
   assert.ok(!/id="roomToggle"/.test(fs.readFileSync(path.join(__dirname, 'src', '75-network.js'), 'utf8')),
     '75-network.js still wires a toggle that no longer exists');
+});
+
+test('the wide layout is measured from the corners of the screen', () => {
+  const grid = ruleBody(hudBlock(), '#title.hud');
+  /* A fixed content cap put 428 points of nothing outside every corner on a
+     2495-wide display, and the arrangement stopped reading as a HUD. The
+     padding is a share of the window now, and bounded so it cannot run away
+     on an ultrawide. */
+  assert.ok(!/calc\(\(100vw - \d+px\) \/ 2\)/.test(grid),
+    'the fixed content cap is back, and it strands the corners');
+  const pad = grid.match(/--hud-pad:clamp\((\d+)px,([\d.]+)vw,(\d+)px\)/);
+  assert.ok(pad, 'the padding does not scale with the window');
+  assert.ok(Number(pad[3]) <= 80, `a ${pad[3]}px outer margin is a cap by another name`);
+  /* And the rails scale with it, or the HUD stays laptop-sized in a bigger
+     frame -- which is the same complaint from the other direction. */
+  assert.ok(/grid-template-columns:clamp\(/.test(grid),
+    'the rails are a fixed width at every screen size');
+});
+
+test('the character raster is drawn to the window, not to one fixed size', () => {
+  /* The CSS can only scale a still it was given. A 440x680 raster is a
+     ceiling: upscaled it goes soft, so it simply stopped growing, and on a
+     tall display the character was 46% of the frame. */
+  assert.ok(/function menuHudHeroSize\(\)/.test(SOURCE),
+    'the hero raster is a constant again');
+  const fn = SOURCE.slice(SOURCE.indexOf('function menuHudHeroSize()'));
+  assert.ok(/innerHeight/.test(fn.slice(0, 500)), 'the raster ignores the window height');
+  assert.ok(/devicePixelRatio/.test(fn.slice(0, 500)), 'the raster ignores pixel density');
+  /* Bounded at both ends: a floor for a laptop, and a ceiling because past
+     it this is a data URL nobody can see the difference in. */
+  assert.ok(/MENU_HUD_HERO_MIN\s*=\s*\d+/.test(SOURCE) && /MENU_HUD_HERO_MAX\s*=\s*\d+/.test(SOURCE),
+    'the raster size is unbounded');
+  /* And a resize redraws it, or the character stays whatever size the window
+     happened to be at boot. */
+  assert.ok(/addEventListener\('resize'/.test(SOURCE), 'a resized window never redraws the character');
+  assert.ok(/MENU_HUD_HERO_SLACK/.test(SOURCE),
+    'every resize event redraws, which is a render and a PNG encode per frame');
 });
