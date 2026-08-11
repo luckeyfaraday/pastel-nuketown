@@ -66,7 +66,9 @@
   <!-- The stage the character stands on, and only ever that: `.hud` is the
        wide title screen, so the pause card keeps the see-through wash over
        the frozen game that tells you the game is still there. -->
-  <div class="hud-stage" aria-hidden="true"><i class="hud-floor"></i><i class="hud-pool"></i></div>
+  <div class="hud-stage" aria-hidden="true">
+    <i class="hud-sky"></i><i class="hud-floor"><i class="hud-grid"></i></i><i class="hud-pool"></i>
+  </div>
   <h1>PASTEL<em>NUKETOWN</em></h1>
   <div class="sub">Free&nbsp;For&nbsp;All</div>
   <!-- Wrapped so the wide layout can put both counts and the gear in one
@@ -111,7 +113,7 @@
     <div class="locker setup-only" id="locker">
       <button class="mini-btn locker-btn locker-store" id="storeOpen" type="button">
         <span class="tile-icon" aria-hidden="true">🧁</span><span class="tile-name">STORE</span>
-        <small class="tile-sub">CHARACTERS &amp; SKINS</small>
+        <small class="tile-sub">SKINS &amp; EFFECTS</small>
       </button>
       <button class="mini-btn locker-btn locker-pass" id="battlepassOpen" type="button">
         <span class="tile-icon" aria-hidden="true">🎫</span><span class="tile-name">SEASON&nbsp;1</span>
@@ -148,14 +150,20 @@
       </div>
       <img id="menuHeroImg" alt="" aria-hidden="true">
     </div>
-    <!-- Bottom-left: the season, as a climb rather than a badge. Every figure
-         comes from /battlepass/me, so it stays away entirely for a signed-out
-         player — who has no tier, rather than a tier of zero. -->
-    <div class="hud-pass setup-only" id="hudPass" hidden>
-      <div class="pass-head"><span>SEASON 1</span><b id="passTier">TIER 1</b></div>
+    <!-- Bottom-left: the season, as a climb rather than a badge, and the way
+         into the pass screen — the corner is the mockup's BRAWL PASS widget
+         and it is pressable there for the same reason.
+
+         It is on the screen whether or not there is a climb to report. What
+         it says changes: the figures come from /battlepass/me, and a
+         signed-out player has none, because server.mjs awards match XP
+         against an account identity and anonymous play earns nothing. So it
+         says that, rather than drawing a tier nobody is on. -->
+    <button class="hud-pass setup-only" id="hudPass" type="button">
+      <span class="pass-head"><span>SEASON 1</span><b id="passTier">FIRST LIGHT</b></span>
       <span class="pass-bar"><i id="passFill"></i></span>
-      <small class="pass-xp" id="passXp"></small>
-    </div>
+      <small class="pass-xp" id="passXp">SIGN IN TO EARN XP</small>
+    </button>
     <div class="mode-picker setup-only" id="modePicker" role="group" aria-labelledby="modePickerLabel">
       <span class="mode-picker-label" id="modePickerLabel">MATCH MODE</span>
       <div class="mode-options">

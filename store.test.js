@@ -2299,3 +2299,52 @@ test('the character raster is drawn to the window, not to one fixed size', () =>
   assert.ok(/MENU_HUD_HERO_SLACK/.test(SOURCE),
     'every resize event redraws, which is a render and a PNG encode per frame');
 });
+
+test('the season corner is on the screen whether or not there is a climb', () => {
+  /* It used to hide itself when /battlepass/me had nothing to report, which
+     is most of the time: server.mjs awards match XP against an account
+     identity, so a signed-out player earns nothing and would never see this
+     corner at all. Hiding the one thing that says the season exists is the
+     opposite of what the corner is for. */
+  assert.ok(!/id="hudPass"[^>]*\shidden/.test(BODY_HTML),
+    'the season corner still ships hidden');
+  /* And it is the way in, the way the mockup's pass widget is. */
+  assert.ok(/<button class="hud-pass[^"]*" id="hudPass"/.test(BODY_HTML),
+    'the season corner is not pressable');
+  assert.ok(/pass\.addEventListener\('click', \(\) => battlepassShow\(true\)\)/.test(SOURCE),
+    'pressing the season corner does not open the pass');
+
+  /* What it says with nothing to report. A tier is a standing and there
+     isn't one, so it must not draw a zero — it says what would change
+     that. */
+  const render = SOURCE.slice(SOURCE.indexOf('function menuHudRenderSeason()'));
+  const idle = render.slice(0, render.indexOf('const pct'));
+  assert.ok(/rank\.hidden = true/.test(idle),
+    'a signed-out player is shown a tier badge over their character');
+  assert.ok(/SIGN IN TO EARN XP/.test(idle), 'the idle corner does not say what to do');
+  assert.ok(!/TIER ' \+/.test(idle), 'the idle corner draws a tier nobody is on');
+});
+
+test('the stage is a place, not a wash', () => {
+  const hud = hudBlock();
+  /* A flat gradient behind a character is what made the first pass read as
+     floating. The floor needs a horizon that fades rather than cuts, and
+     tiles that actually recede. */
+  for (const layer of ['.hud-sky', '.hud-floor', '.hud-grid']) {
+    assert.ok(HEAD.includes(layer + '{'), `${layer} is gone from the stage`);
+  }
+  assert.ok(/<i class="hud-floor"><i class="hud-grid"><\/i><\/i>/.test(BODY_HTML),
+    'the grid is not inside the floor, so it cannot be clipped by it');
+  const grid = ruleBody(HEAD, '.hud-grid');
+  assert.ok(/perspective\(/.test(grid) && /rotateX\(/.test(grid),
+    'the floor tiles do not recede, so the floor is a band of colour');
+  assert.ok(/mask-image/.test(grid),
+    'the grid runs into the horizon, where it turns into moire');
+  const floor = ruleBody(HEAD, '.hud-floor');
+  assert.ok(/rgba\(255,255,255,0\) 0/.test(floor),
+    'the floor has a hard top edge, which cuts the sky rather than meeting it');
+  /* The badge sits above the character's head, so the box that clips the
+     character must not clip the badge. */
+  assert.ok(/overflow:visible/.test(ruleBody(hud, '#title.hud .menu-hero')),
+    'the character box clips the tier badge to a sliver');
+});

@@ -438,7 +438,7 @@ body.touch .sens{display:none}
     "lft  mid   rgt"
     "lft  note  rgt"
     "bl   mode  br";
-  background:linear-gradient(180deg,#dbeefb 0%,#e6e2fa 38%,#f4dfeb 60%,#f0d7e0 100%);
+  background:linear-gradient(180deg,#bfe2f7 0%,#cfd8f6 34%,#e6cfe8 56%,#f0cfd9 78%,#e8c3ce 100%);
   backdrop-filter:none;
 }
 /* The two spacers exist to centre a column; a grid does its own. */
@@ -464,9 +464,41 @@ body.touch .sens{display:none}
    gradient. The edge is faded in over a few percent rather than drawn -- a
    hard line across the full width of the window reads as a seam between two
    backgrounds, which is what it would be. */
-.hud-floor{position:absolute;left:-8%;right:-8%;bottom:0;height:44%;
-  background:linear-gradient(180deg,rgba(255,255,255,0),rgba(255,255,255,.5) 5%,
-    rgba(255,226,240,.32) 42%,rgba(214,199,247,.28))}
+.hud-floor{position:absolute;left:-8%;right:-8%;bottom:0;height:46%;overflow:hidden;
+  /* Transparent at the top: the plane has to meet the sky rather than cut
+     it. The light band just under that is the horizon haze, which is what
+     sells the two as one space instead of two stacked rectangles. */
+  background:linear-gradient(180deg,rgba(255,255,255,0) 0,rgba(255,252,255,.8) 5%,
+    rgba(255,236,246,.86) 16%,rgba(246,214,232,.9) 52%,rgba(226,199,238,.92))}
+/* The sky the map has: soft pastel clouds, well out of focus. Four blobs
+   rather than a tiled pattern -- a repeat at this scale reads as wallpaper,
+   and this has to stay scenery, because it sits behind the one thing on the
+   screen the eye is meant to go to. */
+.hud-sky{position:absolute;left:0;right:0;top:0;height:66%;
+  background:
+    radial-gradient(30% 26% at 13% 22%,rgba(255,255,255,.95),rgba(255,255,255,0) 66%),
+    radial-gradient(22% 19% at 24% 29%,rgba(255,255,255,.85),rgba(255,255,255,0) 68%),
+    radial-gradient(26% 22% at 83% 15%,rgba(255,255,255,.9),rgba(255,255,255,0) 66%),
+    radial-gradient(19% 16% at 72% 21%,rgba(255,255,255,.72),rgba(255,255,255,0) 70%),
+    radial-gradient(24% 20% at 57% 36%,rgba(255,251,254,.6),rgba(255,255,255,0) 72%),
+    radial-gradient(34% 26% at 36% 48%,rgba(255,255,255,.42),rgba(255,255,255,0) 76%)}
+/* The tiles receding towards the horizon, which is what the mockup's floor
+   does and what makes the plane read as a plane rather than as a band of
+   colour. A real perspective rather than a drawn fake: the lines are square
+   and the transform lays them down, so they converge on their own and stay
+   converged at any window size. Masked to fade out before the horizon, where
+   a grid this fine turns into moire. */
+.hud-grid{position:absolute;left:-60%;right:-60%;top:0;bottom:0;
+  transform:perspective(34vh) rotateX(58deg);transform-origin:50% 0;
+  background-image:
+    repeating-linear-gradient(90deg,rgba(74,63,92,.19) 0 3px,rgba(74,63,92,0) 3px 92px),
+    repeating-linear-gradient(0deg,rgba(74,63,92,.19) 0 3px,rgba(74,63,92,0) 3px 92px);
+  /* Gone at the horizon, where a grid this fine turns into moire, and
+     strongest underfoot. */
+  -webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,0) 0,rgba(0,0,0,.5) 18%,
+    rgba(0,0,0,.95) 55%,rgba(0,0,0,.45) 100%);
+  mask-image:linear-gradient(180deg,rgba(0,0,0,0) 0,rgba(0,0,0,.5) 18%,
+    rgba(0,0,0,.95) 55%,rgba(0,0,0,.45) 100%)}
 /* The pool of light the character is standing in, and the reason the eye goes
    to the middle before it goes to the corners. Centred on the feet -- which
    is the bottom of the character's row, not the bottom of the window -- and
@@ -543,7 +575,10 @@ body.touch .sens{display:none}
 
 /* ---- the middle: the character ---- */
 #title.hud .menu-hero{grid-area:mid;display:block;position:relative;min-height:0;
-  overflow:hidden;pointer-events:none}
+  /* `visible` so the badge is not clipped by the box that clips the
+     character. The character is capped in its own right, so nothing here
+     can spill: it is 62vh inside a box that is at most the row. */
+  overflow:visible;pointer-events:none}
 #title.hud .menu-hero[hidden]{display:none}
 /* Out of flow, and that is the whole point. The picture is a fixed 440x680
    still in a row whose height is whatever the four corners leave over, so
@@ -574,8 +609,14 @@ body.touch .sens{display:none}
    character's own box rather than to the top of the row: the row is
    whatever the corners leave over, so in flow the badge drifts further and
    further above the head as the window gets taller. */
+/* Sits on top of the character's own box: `bottom` is the height the
+   picture is capped at, so the badge tracks the head at any window size.
+   The row has to leave space for it — the picture is 62vh and the row is
+   what the corners leave over, which on a wide-but-short window is less
+   than that — so the box gets bottom padding the badge sits in, and the
+   overflow that keeps the character clipped no longer cuts the badge off. */
 #title.hud .hero-rank{position:absolute;left:50%;bottom:min(100%,62vh);
-  transform:translateX(-50%);z-index:1}
+  transform:translateX(-50%);z-index:1;white-space:nowrap}
 .hero-rank{display:flex;align-items:center;gap:7px;flex:none;padding:4px 13px 5px;
   border:2.5px solid var(--ink);border-radius:999px;
   background:linear-gradient(180deg,#fff6d6,#ffe08a);box-shadow:0 3px 0 var(--ink)}
@@ -599,16 +640,26 @@ body.touch .sens{display:none}
 /* ---- bottom left: the season, as a climb ---- */
 #title.hud .hud-pass{grid-area:bl;display:flex;flex-direction:column;gap:6px;
   align-self:end;justify-self:stretch;margin-bottom:34px;padding:10px 13px 12px;
-  border:2.5px solid var(--ink);border-radius:16px;
+  border:2.5px solid var(--ink);border-radius:16px;text-align:left;
+  font-family:inherit;color:var(--ink);pointer-events:auto;cursor:pointer;
   background:linear-gradient(180deg,rgba(255,246,214,.94),rgba(255,224,138,.94));
-  box-shadow:0 3px 0 var(--ink)}
+  box-shadow:0 3px 0 var(--ink);transition:transform .09s,box-shadow .09s}
 #title.hud .hud-pass[hidden]{display:none}
-.pass-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+#title.hud .hud-pass:hover{transform:translateY(-1px);box-shadow:0 4px 0 var(--ink)}
+#title.hud .hud-pass:active{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+#title.hud .hud-pass:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
+/* Nothing to report yet. Quieter than the plate with a climb on it, so a
+   season somebody is actually in reads as the louder of the two. */
+#title.hud .hud-pass.pass-idle{
+  background:linear-gradient(180deg,rgba(255,251,238,.9),rgba(255,240,206,.9))}
+#title.hud .hud-pass.pass-idle .pass-bar i{background:rgba(74,63,92,.16)}
+.pass-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;width:100%;
   font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft)}
 .pass-head b{font-size:13px;letter-spacing:.06em;color:var(--ink)}
 .pass-bar{display:block;height:11px;border:2px solid var(--ink);border-radius:7px;overflow:hidden;
   background:rgba(255,255,255,.72)}
-.pass-bar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#ffb7c5,#d4c5f9)}
+.pass-bar i{display:block;height:100%;width:0%;border-radius:5px;
+  background:linear-gradient(90deg,#ffb7c5,#d4c5f9);transition:width .3s}
 .pass-xp{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.07em;
   color:var(--ink-soft);text-align:right}
 /* The quietest thing on the screen, in the corner with the most room for
@@ -669,7 +720,7 @@ body.touch .sens{display:none}
     border-radius:clamp(16px,1.2vw,22px)}
   #title.hud .locker .tile-icon,#title.hud .hud-rail .tile-icon{font-size:clamp(34px,2.4vw,48px)}
   #title.hud .locker .tile-name,#title.hud .hud-rail .tile-name{font-size:clamp(15px,1.05vw,21px)}
-  #title.hud .locker .tile-sub,#title.hud .hud-rail .tile-sub{font-size:clamp(10px,.68vw,13px)}
+  #title.hud .locker .tile-sub,#title.hud .hud-rail .tile-sub{font-size:clamp(10px,.62vw,12px)}
   #title.hud .hud-player .identity input{font-size:clamp(15px,1.05vw,21px)}
   #title.hud .hud-meta .online-count{font-size:clamp(11px,.72vw,14px)}
   #title.hud .menu-gear{width:clamp(40px,2.8vw,54px);height:clamp(40px,2.8vw,54px);

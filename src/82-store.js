@@ -2968,9 +2968,26 @@ function menuHudRenderSeason() {
   const box = menuHudEl('hudPass');
   const rank = menuHudEl('heroRank');
   const me = menuHudSeasonMe();
+  const tier = menuHudEl('passTier');
+  const fill = menuHudEl('passFill');
+  const xp = menuHudEl('passXp');
   if (!me) {
-    if (box) box.hidden = true;
+    /* The plate stays. The badge over the character does not: a tier is a
+       standing, and without an account there is not one to show — server.mjs
+       awards match XP against an account identity, so anonymous play earns
+       nothing and a zero here would be a lie about the same thing twice.
+       What the corner says instead is what would change that. */
     if (rank) rank.hidden = true;
+    if (!box) return;
+    box.hidden = false;
+    box.classList.add('pass-idle');
+    if (tier) tier.textContent = 'FIRST LIGHT';
+    if (fill) fill.style.width = '0%';
+    if (xp) {
+      xp.textContent = storeSignedIn()
+        ? 'SEASON NOT RUNNING'      /* signed in, but between seasons */
+        : 'SIGN IN TO EARN XP';
+    }
     return;
   }
   const pct = Math.round(menuHudTierFraction(me) * 100);
@@ -2981,9 +2998,7 @@ function menuHudRenderSeason() {
   }
   if (!box) return;
   box.hidden = false;
-  const tier = menuHudEl('passTier');
-  const fill = menuHudEl('passFill');
-  const xp = menuHudEl('passXp');
+  box.classList.remove('pass-idle');
   if (tier) tier.textContent = 'TIER ' + me.tier;
   if (fill) fill.style.width = pct + '%';
   if (!xp) return;
@@ -3065,6 +3080,11 @@ function menuHudInit() {
     } catch (e) {}
   }
   menuHudSyncLayout();
+  /* The corner is the way into the season, the way the mockup's pass widget
+     is. Signed out it is still the right destination — the pass screen is
+     where the offer and the sign-in prompt live. */
+  const pass = menuHudEl('hudPass');
+  if (pass) pass.addEventListener('click', () => battlepassShow(true));
   const gear = menuHudEl('menuGear');
   const panel = menuHudEl('menuSettings');
   if (gear && panel) {
