@@ -336,11 +336,86 @@ function netRoomsURL() {
   }
 }
 
+/* Whether the list is worth keeping warm, which is not the same question as
+   whether the dialog is up: the poll feeds the online and matches counts on
+   the title screen as well, and a list fetched while the dialog was shut is
+   what makes it current the moment it opens. So this stays what it always
+   was — the setup menu is the thing on screen. */
 function netRoomsPanelOpen() {
   const title = document.getElementById('title');
   const menu = document.getElementById('menu');
   return !!title && !title.classList.contains('off') &&
          !!menu && !menu.hidden && !menu.classList.contains('pause');
+}
+
+/* ---- the room browser dialog ----------------------------------------
+   The store's pattern a third time: the same three ways out, the same
+   focus ring, the same title-made-inert underneath. */
+
+function roomsIsOpen() {
+  const panel = document.getElementById('rooms');
+  return !!panel && !panel.classList.contains('off');
+}
+
+function roomsFocusables() {
+  const panel = document.getElementById('rooms');
+  if (!panel || typeof panel.querySelectorAll !== 'function') return [];
+  const found = [];
+  for (const el of panel.querySelectorAll('button,a[href],input,select,textarea,[tabindex]')) {
+    if (el.disabled || el.hidden) continue;
+    if (el.getAttribute && el.getAttribute('tabindex') === '-1') continue;
+    found.push(el);
+  }
+  return found;
+}
+
+/* Tab is the scoreboard key and 70-game.js takes it with preventDefault on
+   every keydown there is, so a dialog on this page has to walk its own ring —
+   which is also, conveniently, exactly the wrap a modal wants. */
+function roomsTrapFocus(e) {
+  if (e.code !== 'Tab' || !roomsIsOpen()) return;
+  const items = roomsFocusables();
+  if (!items.length) return;
+  e.preventDefault();
+  const at = items.indexOf(document.activeElement);
+  const next = at < 0
+    ? (e.shiftKey ? items.length - 1 : 0)
+    : (at + (e.shiftKey ? items.length - 1 : 1)) % items.length;
+  items[next].focus();
+}
+
+const ROOMS_FOCUS = { opener: null };
+
+function roomsShow(open) {
+  const panel = document.getElementById('rooms');
+  if (!panel) return;
+  const wasOpen = roomsIsOpen();
+  panel.classList.toggle('off', !open);
+  const title = document.getElementById('title');
+  if (title && 'inert' in title) title.inert = !!open;
+
+  if (!open) {
+    /* Back where they came from. A dialog that drops focus on the body leaves
+       a keyboard player at the top of the document, several Tabs from the
+       button they just pressed. */
+    if (wasOpen) {
+      const opener = ROOMS_FOCUS.opener;
+      ROOMS_FOCUS.opener = null;
+      if (opener && typeof opener.focus === 'function') { try { opener.focus(); } catch (e) {} }
+    }
+    return;
+  }
+
+  if (!wasOpen) {
+    ROOMS_FOCUS.opener = document.activeElement || null;
+    const card = panel.querySelector ? panel.querySelector('.rooms-card') : null;
+    const target = card || roomsFocusables()[0];
+    if (target && typeof target.focus === 'function') { try { target.focus(); } catch (e) {} }
+  }
+  if (typeof SFX === 'object' && SFX) SFX.ui();
+  /* The poller keeps this list within five seconds of current, but opening is
+     the one moment somebody is about to act on it. */
+  netRefreshRooms(true);
 }
 
 /* Blank unless there is genuinely someone to play with. An unreachable or
@@ -406,6 +481,7 @@ function netRenderRooms(rooms, message) {
     join.addEventListener('click', () => {
       const input = document.getElementById('roomCode');
       if (input) input.value = room.code;
+      roomsShow(false);
       netConnect('join', room.code);
     });
     li.appendChild(join);
@@ -2882,24 +2958,29 @@ function initNetworkUI() {
     SFX.init(); SFX.resume(); SFX.ui();
     netQuickPlay();
   });
-  document.getElementById('hostGame').addEventListener('click', () => netConnect('create'));
-  document.getElementById('joinGame').addEventListener('click', () => netConnect('join', roomInput.value));
+  document.getElementById('hostGame').addEventListener('click', () => {
+    roomsShow(false);
+    netConnect('create');
+  });
+  document.getElementById('joinGame').addEventListener('click', () => {
+    roomsShow(false);
+    netConnect('join', roomInput.value);
+  });
 
-  const toggle = document.getElementById('roomToggle');
-  const options = document.getElementById('roomOptions');
-  if (toggle && options) {
-    toggle.addEventListener('click', () => {
-      const open = options.hidden;
-      options.hidden = !open;
-      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
-    /* Someone who arrived on a link already cares about a specific room, so
-       give them the code they came with rather than making them find it. */
-    if (invited) {
-      options.hidden = false;
-      toggle.setAttribute('aria-expanded', 'true');
-    }
-  }
+  /* The three ways out of the browser, and the one way in. */
+  const roomsBtn = document.getElementById('roomsOpen');
+  const roomsClose = document.getElementById('roomsClose');
+  const roomsPanel = document.getElementById('rooms');
+  if (roomsBtn) roomsBtn.addEventListener('click', () => roomsShow(true));
+  if (roomsClose) roomsClose.addEventListener('click', () => {
+    roomsShow(false);
+    if (typeof SFX === 'object' && SFX) SFX.ui();
+  });
+  /* The wash around the card is a way out on a phone, where CLOSE sits at the
+     top of a tall panel and a thumb is already at the bottom. */
+  if (roomsPanel) roomsPanel.addEventListener('click', e => { if (e.target === roomsPanel) roomsShow(false); });
+  addEventListener('keydown', e => { if (e.code === 'Escape' && roomsIsOpen()) roomsShow(false); });
+  addEventListener('keydown', roomsTrapFocus);
 
   const hold = document.getElementById('holdStart');
   if (hold) hold.addEventListener('click', () => { SFX.ui(); netHoldStart(); });

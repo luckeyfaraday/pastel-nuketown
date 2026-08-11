@@ -227,6 +227,25 @@ function syncModePicker(mode) {
   const isKC = active === 'kc';
   dm.setAttribute('aria-pressed', String(!isKC));
   kc.setAttribute('aria-pressed', String(isKC));
+
+  /* The wide layout draws the same state as a card. It is decoration over
+     the two buttons above rather than a third control, so it is filled from
+     here — the one place that already knows which mode is live — and never
+     from a click handler that would have to be kept in step. */
+  const on = isKC ? kc : dm;
+  const name = document.getElementById('modeCardName');
+  const goal = document.getElementById('modeCardGoal');
+  const blurb = document.getElementById('modeCardBlurb');
+  /* Read off the button rather than restated here: DEATHMATCH / 25 KILLS
+     already live in the markup, and a second copy is a second thing to
+     forget when the numbers move. */
+  if (name && on.children[0]) name.textContent = on.children[0].textContent;
+  if (goal && on.children[1]) goal.textContent = on.children[1].textContent;
+  if (blurb) {
+    blurb.textContent = isKC
+      ? 'Kills only count once you collect the tag they drop.'
+      : 'Everyone for themselves. Most kills takes it.';
+  }
 }
 
 function chooseMode(mode) {
@@ -257,6 +276,11 @@ function boot() {
      yet, not a browser with storage switched off. Every failure inside is
      already handled; this is the guard for the one that is not. */
   try { initStore(); } catch (e) {}
+  /* After initStore, because the character in the middle of the title screen
+     is drawn by the store's display case and read out of what initStore just
+     restored as equipped. Guarded for the same reason it is: the title screen
+     losing its scenery must not be able to stop the game booting. */
+  try { menuHudInit(); } catch (e) {}
   const requestedMode = QS.get('mode');
   setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 
@@ -296,6 +320,13 @@ function boot() {
 
   document.getElementById('modeDm').addEventListener('click', () => chooseMode('dm'));
   document.getElementById('modeKc').addEventListener('click', () => chooseMode('kc'));
+  /* The card's button. With two modes, "change" is unambiguous — it is the
+     other one — and it presses the real toggle so there is one path in. */
+  const swap = document.getElementById('modeSwap');
+  if (swap) swap.addEventListener('click', () => {
+    chooseMode(G.mode === 'kc' ? 'dm' : 'kc');
+    if (typeof SFX === 'object' && SFX) SFX.ui();
+  });
   syncModePicker();
 
   requestAnimationFrame(frame);

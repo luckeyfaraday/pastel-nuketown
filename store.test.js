@@ -2121,3 +2121,318 @@ test('the battle pass mirrors the mobile store split without clipping a reward l
   assert.ok(node && Number(node[1]) <= 60,
     'both reward lanes no longer fit at the screenshot-height breakpoint');
 });
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   A HUD around a character rather than a column of cards, which means the
+   layout is a grid of named corners. Each test below is a mistake this
+   arrangement actually made on the way in.
+   ===================================================================== */
+
+const HUD_QUERY = '@media (min-width:640px) and (min-aspect-ratio:13/10)';
+
+function hudBlock() {
+  const body = mediaBlock(HUD_QUERY, '#title.hud{');
+  assert.ok(body, 'the wide title screen rules are gone from src/00-head.html');
+  return body;
+}
+
+/* The rule body of a single selector inside a block, brace-matched so a
+   nested grid declaration cannot be mistaken for the outer one. */
+function ruleBody(css, selector) {
+  const at = css.indexOf(selector + '{');
+  if (at < 0) return null;
+  return css.slice(at + selector.length + 1, css.indexOf('}', at));
+}
+
+test('every corner of the wide title screen is claimed by name', () => {
+  const hud = hudBlock();
+  const grid = ruleBody(hud, '#title.hud');
+  assert.ok(grid, '#title.hud has no rule of its own');
+
+  const template = grid.match(/grid-template-areas:([^;]+);/);
+  assert.ok(template, 'the layout names no areas');
+  const cells = new Set((template[1].match(/"[^"]*"/g) || [])
+    .join(' ').replace(/"/g, ' ').trim().split(/\s+/).filter(Boolean));
+
+  /* What each area holds. An element that is on the screen and not in here
+     is auto-placed, which is how the previous attempt at this layout ended
+     up with the key legend sitting on top of the status line: the grid
+     invents a row for anything it was not told about. */
+  const placed = {
+    '.hud-player': 'tl', 'h1': 'h1', '.hud-meta': 'tr',
+    '.locker': 'lft', '.menu-hero': 'mid', '.hud-rail': 'rgt',
+    '#menuNote': 'note', '.hud-season': 'bl', '#modePicker': 'mode',
+    '.menu-actions': 'br',
+  };
+  const claimed = new Set();
+  for (const [sel, area] of Object.entries(placed)) {
+    const re = new RegExp('#title\\.hud [^{}]*' +
+      sel.replace('.', '\\.') + '\\{[^}]*grid-area:' + area + '\\b');
+    assert.ok(re.test(hud), `${sel} is not placed in the ${area} corner`);
+    claimed.add(area);
+  }
+  assert.deepStrictEqual([...cells].sort(), [...claimed].sort(),
+    'the template and the placements disagree about which corners exist');
+});
+
+test('the three layers that are not corners stay out of the grid', () => {
+  const hud = hudBlock();
+  /* Scenery, a popover and a footnote. Each one would otherwise take a cell
+     of its own -- the social link did exactly that, and drew itself as a
+     panel filling the bottom-left corner. */
+  for (const sel of ['.hud-stage', '.menu-settings', '.social']) {
+    const rule = ruleBody(hud, '#title.hud ' + sel);
+    assert.ok(rule && /position:absolute/.test(rule),
+      `${sel} is in flow, so it is taking a grid cell`);
+  }
+  /* And the scenery goes behind rather than the content being lifted in
+     front of it: a blanket `position:relative` on #menu's children carries
+     two ids and silently outranks every rule above. */
+  assert.ok(/#title\.hud \.hud-stage\{[^}]*z-index:-1/.test(hud),
+    'the stage is not the layer behind the content');
+  assert.ok(!/#title\.hud #menu>\*\{[^}]*position:relative/.test(hud),
+    'the blanket position rule is back, and it outranks the rules below it');
+});
+
+test('the wide layout does not inherit .screen centring for its rows', () => {
+  const grid = ruleBody(hudBlock(), '#title.hud');
+  /* .screen is a centred flex column. `align-items:center` survives the
+     switch to grid, where it stops meaning "centre the column" and starts
+     meaning "every item is as tall as its own content" -- which collapses
+     the character's row to nothing, because the character is out of flow. */
+  assert.ok(/align-items:stretch/.test(grid),
+    'the grid still takes align-items:center from .screen');
+});
+
+test('the character and its badge are laid out, not pinned', () => {
+  const hud = hudBlock();
+  const img = ruleBody(hud, '#title.hud .menu-hero img');
+  assert.ok(img, 'the character has no rule');
+  /* Pinning the badge to the picture's box cannot put it on the head:
+     `contain` letterboxes the raster inside the img, so the img's top edge
+     is not the character's — and when the row is shorter than the cap, an
+     absolute badge is pushed clean out of the row and onto the wordmark.
+     As flex items in one column they stack, and neither can escape. */
+  const box = ruleBody(hud, '#title.hud .menu-hero');
+  assert.ok(/display:flex/.test(box) && /flex-direction:column/.test(box),
+    'the character box is not a column, so the badge is pinned again');
+  assert.ok(/flex:none/.test(ruleBody(hud, '#title.hud .hero-rank')),
+    'the badge is not a flex item of that column');
+  assert.ok(/flex:1 1 auto/.test(img) && /min-height:0/.test(img),
+    'the character cannot give its row back the space the badge needs');
+  /* `contain` is what both bounds the still and lets it scale up. `width:auto`
+     bounds it too, but only downwards -- which made the raster a ceiling on
+     how big the character could ever be, so the taller the display, the
+     smaller a share of it the character took. */
+  assert.ok(/object-fit:contain/.test(img), 'nothing bounds the character');
+  const height = img.match(/max-height:(\d+)vh/);
+  assert.ok(height, 'the character is not capped against the window');
+  assert.ok(Number(height[1]) >= 45 && Number(height[1]) <= 62,
+    `${height[1]}vh leaves no room for the wordmark above the character`);
+  assert.ok(/min-height:0/.test(box),
+    'without min-height:0 the row cannot shrink below the picture');
+});
+
+test('the wordmark is across the top, not through the character', () => {
+  const hud = hudBlock();
+  /* It sits in a row of its own above the character. In the middle column it
+     was 10vw of display type standing exactly where the head goes, which is
+     what made that attempt read as a poster rather than a menu. */
+  const h1 = ruleBody(hud, '#title.hud h1');
+  assert.ok(h1 && /grid-area:h1/.test(h1), 'the wordmark is not in its own row');
+  const size = h1.match(/font-size:clamp\([^,]+,([\d.]+)vw/);
+  assert.ok(size && Number(size[1]) <= 5,
+    `${size && size[1]}vw is the size that crowded the character out of the middle`);
+  /* And it has to leave room for the sub-line it shares the row with, or the
+     tier badge in the row below lands on top of it. */
+  assert.ok(/padding-bottom:clamp/.test(h1), 'the wordmark row cannot hold its own sub-line');
+  /* The key legend is the one thing with no home here — still on the column
+     and the pause card, which is where somebody looking up a key is. */
+  assert.ok(/#title\.hud \.keys\{display:none\}/.test(hud), 'the key legend is back on the HUD');
+  /* The boot screen kept the copy it was given when the title screen had
+     none, and it is still the first thing the game says. */
+  assert.ok(/<div id="loading">[^]*?class="lmark">PASTEL<em>NUKETOWN<\/em>/.test(BODY_HTML),
+    'the boot screen lost the wordmark');
+});
+
+test('the room browser is a dialog and keeps every id the network drives', () => {
+  /* Moved out of the middle of the title card, where it competed with PLAY
+     for the same glance. 75-network.js was not rewritten to match, so every
+     id it reaches for has to still be here. */
+  const card = BODY_HTML.match(/<div class="screen off" id="rooms"[^]*?\n<\/div>/);
+  assert.ok(card, 'there is no room browser dialog');
+  for (const id of ['roomList', 'roomCode', 'joinGame', 'hostGame', 'roomPublic',
+                    'refreshRooms', 'roomsClose']) {
+    assert.ok(card[0].includes('id="' + id + '"'), `#${id} is not in the dialog`);
+  }
+  /* And the way in, on the right rail. */
+  assert.ok(/id="roomsOpen"/.test(BODY_HTML), 'nothing opens the room browser');
+  /* The collapsed panel it replaces is gone rather than left behind hidden. */
+  assert.ok(!/id="roomToggle"/.test(BODY_HTML),
+    'the old collapse toggle is still in the markup');
+  assert.ok(!/id="roomToggle"/.test(fs.readFileSync(path.join(__dirname, 'src', '75-network.js'), 'utf8')),
+    '75-network.js still wires a toggle that no longer exists');
+});
+
+test('the wide layout is measured from the corners of the screen', () => {
+  const grid = ruleBody(hudBlock(), '#title.hud');
+  /* A fixed content cap put 428 points of nothing outside every corner on a
+     2495-wide display, and the arrangement stopped reading as a HUD. The
+     padding is a share of the window now, and bounded so it cannot run away
+     on an ultrawide. */
+  assert.ok(!/calc\(\(100vw - \d+px\) \/ 2\)/.test(grid),
+    'the fixed content cap is back, and it strands the corners');
+  const pad = grid.match(/--hud-pad:clamp\((\d+)px,([\d.]+)vw,(\d+)px\)/);
+  assert.ok(pad, 'the padding does not scale with the window');
+  assert.ok(Number(pad[3]) <= 80, `a ${pad[3]}px outer margin is a cap by another name`);
+  /* And the rails scale with it, or the HUD stays laptop-sized in a bigger
+     frame -- which is the same complaint from the other direction. */
+  assert.ok(/grid-template-columns:clamp\(/.test(grid),
+    'the rails are a fixed width at every screen size');
+});
+
+test('the character raster is drawn to the window, not to one fixed size', () => {
+  /* The CSS can only scale a still it was given. A 440x680 raster is a
+     ceiling: upscaled it goes soft, so it simply stopped growing, and on a
+     tall display the character was 46% of the frame. */
+  assert.ok(/function menuHudHeroSize\(\)/.test(SOURCE),
+    'the hero raster is a constant again');
+  const fn = SOURCE.slice(SOURCE.indexOf('function menuHudHeroSize()'));
+  assert.ok(/innerHeight/.test(fn.slice(0, 500)), 'the raster ignores the window height');
+  assert.ok(/devicePixelRatio/.test(fn.slice(0, 500)), 'the raster ignores pixel density');
+  /* Bounded at both ends: a floor for a laptop, and a ceiling because past
+     it this is a data URL nobody can see the difference in. */
+  assert.ok(/MENU_HUD_HERO_MIN\s*=\s*\d+/.test(SOURCE) && /MENU_HUD_HERO_MAX\s*=\s*\d+/.test(SOURCE),
+    'the raster size is unbounded');
+  /* And a resize redraws it, or the character stays whatever size the window
+     happened to be at boot. */
+  assert.ok(/addEventListener\('resize'/.test(SOURCE), 'a resized window never redraws the character');
+  assert.ok(/MENU_HUD_HERO_SLACK/.test(SOURCE),
+    'every resize event redraws, which is a render and a PNG encode per frame');
+});
+
+test('the season corner is on the screen whether or not there is a climb', () => {
+  /* It used to hide itself when /battlepass/me had nothing to report, which
+     is most of the time: server.mjs awards match XP against an account
+     identity, so a signed-out player earns nothing and would never see this
+     corner at all. Hiding the one thing that says the season exists is the
+     opposite of what the corner is for. */
+  assert.ok(!/id="hudPass"[^>]*\shidden/.test(BODY_HTML),
+    'the season corner still ships hidden');
+  /* Plate and strip are one stack, so the corner is laid out rather than two
+     things aligned to the same edge and held apart by arithmetic. */
+  assert.ok(/<div class="hud-season setup-only">[^]*?id="hudPass"[^]*?id="hudTrack"/.test(BODY_HTML),
+    'the plate and the reward strip are not one corner');
+  /* And it is the way in, the way the mockup's pass widget is. */
+  assert.ok(/<button class="hud-pass[^"]*" id="hudPass"/.test(BODY_HTML),
+    'the season corner is not pressable');
+  assert.ok(/pass\.addEventListener\('click', \(\) => battlepassShow\(true\)\)/.test(SOURCE),
+    'pressing the season corner does not open the pass');
+
+  /* What it says with nothing to report. A tier is a standing and there
+     isn't one, so it must not draw a zero — it says what would change
+     that. */
+  const render = SOURCE.slice(SOURCE.indexOf('function menuHudRenderSeason()'));
+  const idle = render.slice(0, render.indexOf('const pct'));
+  assert.ok(/rank\.hidden = true/.test(idle),
+    'a signed-out player is shown a tier badge over their character');
+  assert.ok(/SIGN IN TO EARN XP/.test(idle), 'the idle corner does not say what to do');
+  assert.ok(!/TIER ' \+/.test(idle), 'the idle corner draws a tier nobody is on');
+});
+
+test('the stage is a place, not a wash', () => {
+  const hud = hudBlock();
+  /* A flat gradient behind a character is what made the first pass read as
+     floating. The floor needs a horizon that fades rather than cuts, and
+     tiles that actually recede. */
+  for (const layer of ['.hud-sky', '.hud-floor', '.hud-grid']) {
+    assert.ok(HEAD.includes(layer + '{'), `${layer} is gone from the stage`);
+  }
+  assert.ok(/<i class="hud-floor"><i class="hud-grid"><\/i><\/i>/.test(BODY_HTML),
+    'the grid is not inside the floor, so it cannot be clipped by it');
+  const grid = ruleBody(HEAD, '.hud-grid');
+  assert.ok(/perspective\(/.test(grid) && /rotateX\(/.test(grid),
+    'the floor tiles do not recede, so the floor is a band of colour');
+  assert.ok(/mask-image/.test(grid),
+    'the grid runs into the horizon, where it turns into moire');
+  const floor = ruleBody(HEAD, '.hud-floor');
+  assert.ok(/rgba\(255,255,255,0\) 0/.test(floor),
+    'the floor has a hard top edge, which cuts the sky rather than meeting it');
+  /* The picture is the stage's subject, so it has to sit in front of the
+     street rather than be tinted by it. (What keeps the badge off the
+     wordmark is the column in the test above, not overflow.) */
+  assert.ok(/\.hud-scene\{[^}]*position:absolute/.test(HEAD),
+    'the street is in flow, so it is taking a grid cell');
+});
+
+test('the street is inlined at build time, so the page stays one file', () => {
+  const build = fs.readFileSync(path.join(__dirname, 'build.sh'), 'utf8');
+  /* server.mjs serves exactly two paths — / and /net-protocol.js — so a
+     relative URL would 404 for anyone the relay is serving, and teaching it
+     a static route would turn a picture into a relay deploy. */
+  assert.ok(/base64 -w0 art\/nuketown-street\.webp/.test(build),
+    'the backdrop is not inlined, so it is a request the relay cannot answer');
+  assert.ok(fs.existsSync(path.join(__dirname, 'art', 'nuketown-street.webp')),
+    'the backdrop art is missing');
+  /* Small enough that inlining it is cheaper than a second request: this is
+     under a tenth of what three.js costs on the same page. */
+  const bytes = fs.statSync(path.join(__dirname, 'art', 'nuketown-street.webp')).size;
+  assert.ok(bytes < 220 * 1024, `${Math.round(bytes / 1024)} KB is too much to inline`);
+  /* And it really is in the built page rather than only in the recipe. */
+  const built = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  assert.ok(built.includes('data:image/webp;base64,'), 'the built page has no backdrop in it');
+});
+
+test('the mode card is decoration over the two real toggles', () => {
+  /* Two buttons carrying aria-pressed are what a group of two modes needs,
+     and they are what the column and the pause card show. The card is the
+     wide layout's picture of the same state, so it must not become a third
+     source of truth: it is filled from syncModePicker, which is the one
+     place that already knows which mode is live, and CHANGE MODE presses
+     the toggle rather than setting the mode itself. */
+  const main = fs.readFileSync(path.join(__dirname, 'src', '90-main.js'), 'utf8');
+  const sync = main.slice(main.indexOf('function syncModePicker'));
+  const body = sync.slice(0, sync.indexOf('\nfunction '));
+  assert.ok(/modeCardName/.test(body) && /modeCardGoal/.test(body),
+    'the mode card is filled somewhere other than syncModePicker');
+  assert.ok(/chooseMode\(G\.mode === 'kc' \? 'dm' : 'kc'\)/.test(main),
+    'CHANGE MODE does not go through the same path as the buttons');
+  /* The toggles stay in the accessibility tree when the card covers them —
+     clipped, not display:none, or a screen reader loses the control. */
+  const hud = hudBlock();
+  const opts = ruleBody(hud, '#title.hud .mode-options');
+  assert.ok(opts && /clip-path/.test(opts) && !/display:none/.test(opts),
+    'the wide layout hides the mode toggles from assistive tech');
+  /* The card and its button are the wide layout's alone; in the column the
+     toggles are the control and a second one would be clutter. */
+  assert.ok(/\.menu-gear,\.hud-season,\.menu-hero,\.mode-card,\.mode-swap\{display:none\}/.test(HEAD),
+    'the mode card leaks into the narrow column');
+});
+
+test('a short screen takes the room out of the mode card, not the character', () => {
+  /* The character is the only element here that can shrink — it is the flex
+     item with min-height:0, and everything around it is clamp()ed to a
+     floor — so on a short screen it paid for all of them. At 875x406 the
+     mode row was 208 points of a 406-point window and the character's row
+     was 50: 13% of the frame for the one thing the screen is about.
+
+     The fix is not to shrink the character further but to stop the card
+     having a floor it does not need. The strip of street is decoration and
+     the blurb restates the name and the goal, so on a short screen they go
+     and the card lands under the PLAY/SOLO stack beside it — which the
+     bottom band cannot be shorter than anyway, so it costs nothing. */
+  const short = mediaBlock('@media (min-width:640px) and (max-height:480px){', '#title.hud');
+  assert.ok(short, 'the short-screen rules are gone from src/00-head.html');
+  assert.ok(/\.mode-card-art,#title\.hud \.mode-card-blurb\{display:none\}/.test(short),
+    'the mode card keeps its decoration on a screen with no room for it');
+  assert.ok(/#title\.hud \.mode-swap\{[^}]*min-height:3\dpx/.test(short),
+    'CHANGE MODE keeps the tall-screen tap target that pushed the card over');
+
+  /* And the pieces that were sized against the viewport still are, so the
+     card is not simply pinned small everywhere. */
+  const hud = hudBlock();
+  assert.ok(/height:clamp\(/.test(ruleBody(hud, '.mode-card-art') || ''),
+    'the mode card art no longer scales on a screen that has the room');
+});
