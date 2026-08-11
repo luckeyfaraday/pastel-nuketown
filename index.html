@@ -342,6 +342,200 @@ body.touch .sens{display:none}
 #menu.pause{margin-top:28px}
 #menu.pause .setup-only{display:none}
 #menu.pause #menuNote{font-size:14px}
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   Above 1040x660 the title stops being one column down the middle and
+   becomes the corners of the screen: who you are top-left, the locker
+   and the pass down the left, the mode and your character in the
+   middle, PLAY bottom-right. It is the same DOM in a different
+   arrangement and not a second menu — every group is `display:contents`
+   until this block hands it a box, so a phone and the pause card below
+   are laid out by the rules above exactly as they were before this
+   existed, and there is no duplicate control to keep in step.
+
+   The switch is the :has() below. A browser without it gets the column,
+   which is the layout this page shipped with, so the fallback needs no
+   thought beyond not styling anything outside here.
+   ===================================================================== */
+.menu-topbar,.menu-account,.menu-settings,.menu-launch,.menu-act{display:contents}
+/* Drawn by the wide layout alone. Kept out of the column from here rather
+   than by the script, so a window dragged narrow puts them away without
+   anything having to watch for it. */
+.tile-sub,.tile-bar,.menu-act-cap,
+.menu-tier,.menu-hero,.menu-season,.menu-gear{display:none}
+
+@media (min-width:1040px) and (min-height:660px){
+  /* Four columns: the rail, the mode card, whatever room is left for the
+     character, and the launch stack. The title sits across the two middle
+     ones, which is what keeps it centred over the character rather than
+     over the screen. */
+  #title:has(#menu:not([hidden]):not(.pause)){
+    display:grid;justify-items:center;align-content:stretch;
+    padding:14px 20px 10px;gap:5px 20px;
+    grid-template-columns:minmax(190px,224px) minmax(184px,220px) minmax(0,1fr) minmax(242px,314px);
+    /* The middle row has a floor because the mode card cannot shrink: at the
+       shortest window this layout runs at, a 1fr row is smaller than the card
+       standing in it and the card would hang over the season strip. The floor
+       is the card's height; a window too short for it scrolls, which #title
+       has always been able to do. */
+    grid-template-rows:auto auto auto auto minmax(184px,1fr) auto auto auto auto auto;
+    /* Every child of #title is named here. One that is not would be placed
+       automatically, in a row of its own invented for it, which is how the
+       key legend ends up on top of the note. */
+    grid-template-areas:
+      "topbar topbar topbar gear"
+      "rail   h1     h1     launch"
+      "rail   sub    sub    launch"
+      "rail   counts counts launch"
+      "rail   mode   hero   launch"
+      "season season online launch"
+      "keys   keys   keys   keys"
+      "note   note   note   note"
+      "status status status status"
+      "social social social social";
+  }
+  /* The two 14px spacers exist to centre a column; a grid does its own. */
+  #title:has(#menu:not([hidden]):not(.pause))::before,
+  #title:has(#menu:not([hidden]):not(.pause))::after{display:none}
+  #title:has(#menu:not([hidden]):not(.pause)) #menu{display:contents}
+  #title:has(#menu:not([hidden]):not(.pause)) h1{grid-area:h1;align-self:end;margin:0}
+  #title:has(#menu:not([hidden]):not(.pause)) .sub{grid-area:sub;margin-top:6px}
+  #title:has(#menu:not([hidden]):not(.pause)) #matchesCount{grid-area:counts}
+  /* Blank below two players by design, and an empty chip is worse than no
+     chip — hence :empty rather than a script deciding. */
+  #title:has(#menu:not([hidden]):not(.pause)) #onlineCount{
+    grid-area:online;align-self:center;margin:0;opacity:1;
+    display:flex;align-items:center;gap:8px;padding:7px 13px 8px;
+    border:2.5px solid var(--ink);border-radius:13px;background:rgba(255,255,255,.7);
+    box-shadow:0 3px 0 var(--ink);color:var(--ink)}
+  #title:has(#menu:not([hidden]):not(.pause)) #onlineCount:empty{display:none}
+  #title:has(#menu:not([hidden]):not(.pause)) #onlineCount::before{
+    content:'';flex:none;width:9px;height:9px;border-radius:50%;
+    background:#5fc38a;border:2px solid var(--ink)}
+  /* The legend is a whole band of the screen it does not need to be. Only
+     the two of these that match the input the player has are ever up. */
+  #title:has(#menu:not([hidden]):not(.pause)) .keys{grid-area:keys;margin-top:2px;gap:6px}
+  #title:has(#menu:not([hidden]):not(.pause)) .keys span{padding:4px 9px 5px;font-size:11px}
+  #title:has(#menu:not([hidden]):not(.pause)) #menuNote{grid-area:note}
+  #title:has(#menu:not([hidden]):not(.pause)) #netStatus{grid-area:status;margin-top:0}
+  #title:has(#menu:not([hidden]):not(.pause)) .social{grid-area:social}
+
+  /* ---------- top-left: callsign, account, tier ---------- */
+  #menu:not(.pause) .menu-topbar{grid-area:topbar;justify-self:start;
+    display:flex;align-items:center;gap:10px}
+  #menu:not(.pause) .menu-topbar .identity{width:auto;flex:0 1 250px}
+  #menu:not(.pause) .menu-topbar .locker-who{flex:0 1 auto}
+  #menu:not(.pause) .menu-tier{display:flex;align-items:center;gap:9px;padding:5px 13px 6px;
+    border:2.5px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.76);
+    box-shadow:0 3px 0 var(--ink)}
+  #menu:not(.pause) .menu-tier[hidden]{display:none}
+  .menu-tier-num{display:flex;align-items:baseline;gap:6px;font-family:var(--disp)}
+  .menu-tier-num small{font-size:9px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft)}
+  .menu-tier-num b{font-size:19px;font-weight:800;letter-spacing:.04em;color:#d4638f}
+  .menu-tier-bar{position:relative;flex:none;width:76px;height:9px;border:2px solid var(--ink);
+    border-radius:6px;background:rgba(74,63,92,.16);overflow:hidden}
+  .menu-tier-bar i{position:absolute;top:0;bottom:0;left:0;width:0;
+    background:linear-gradient(90deg,#ffd0e2,#f79ec0)}
+  .menu-tier-xp{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.05em;
+    color:var(--ink-soft);white-space:nowrap}
+
+  /* ---------- the rail ---------- */
+  #menu:not(.pause) #locker{grid-area:rail;align-self:start;justify-self:stretch;
+    width:auto;flex-direction:column;align-items:stretch;gap:9px;padding:9px;
+    border:2.5px solid var(--ink);border-radius:19px;background:rgba(255,255,255,.6);
+    box-shadow:0 4px 0 var(--ink)}
+  #menu:not(.pause) #locker .locker-btn{flex:0 0 auto;position:relative;
+    display:grid;grid-template-columns:36px minmax(0,1fr);
+    grid-template-areas:"icon name" "icon sub" "bar bar";
+    gap:0 11px;justify-items:start;align-items:center;
+    padding:10px 12px 11px;text-align:left;white-space:normal;font-size:13px}
+  #menu:not(.pause) #locker .locker-btn>span:first-child{grid-area:icon;align-self:center;
+    display:flex;align-items:center;justify-content:center;width:36px;height:36px;font-size:19px;
+    border:2px solid var(--ink);border-radius:11px;background:rgba(255,255,255,.72)}
+  #menu:not(.pause) #locker .locker-btn>span:nth-child(2){grid-area:name;letter-spacing:.09em}
+  #menu:not(.pause) #locker .tile-sub{grid-area:sub;display:block;font-family:var(--ui);
+    font-size:9px;font-weight:800;letter-spacing:.1em;color:var(--ink-soft)}
+  #menu:not(.pause) #locker .tile-bar{grid-area:bar;display:block;position:relative;
+    width:100%;height:8px;margin-top:7px;border:2px solid var(--ink);border-radius:6px;
+    background:rgba(74,63,92,.16);overflow:hidden}
+  #menu:not(.pause) #locker .tile-bar[hidden]{display:none}
+  .tile-bar i{position:absolute;top:0;bottom:0;left:0;width:0;
+    background:linear-gradient(90deg,#ffd0e2,#f79ec0)}
+  #menu:not(.pause) #lockerNote{font-size:11px;text-align:center}
+
+  /* ---------- the mode card ---------- */
+  #menu:not(.pause) #modePicker{grid-area:mode;align-self:center;justify-self:stretch;
+    width:auto;padding:11px 12px 12px;border:2.5px solid var(--ink);border-radius:19px;
+    background:rgba(255,255,255,.66);box-shadow:0 4px 0 var(--ink)}
+  #menu:not(.pause) #modePicker .mode-options{grid-template-columns:minmax(0,1fr);gap:7px}
+  #menu:not(.pause) #modePicker .mode-option{min-height:54px}
+
+  /* ---------- the character ---------- */
+  #menu:not(.pause) .menu-hero{grid-area:hero;justify-self:center;align-self:stretch;
+    display:flex;align-items:flex-end;justify-content:center;min-height:0;
+    width:100%;overflow:hidden;pointer-events:none}
+  #menu:not(.pause) .menu-hero[hidden]{display:none}
+  /* Bounded by the row and not by the viewport: a picture measured against
+     vh stands up through the title on a short window, and the title is the
+     one thing on this screen it must not cover. */
+  .menu-hero img{max-width:100%;max-height:100%;
+    filter:drop-shadow(0 15px 20px rgba(74,63,92,.28))}
+
+  /* ---------- the launch stack ---------- */
+  #menu:not(.pause) .menu-launch{grid-area:launch;align-self:center;justify-self:stretch;
+    display:flex;flex-direction:column;gap:10px;width:100%}
+  /* Source order puts the buttons first because that is the order a phone
+     and the pause card want them in. Here the room browser reads first and
+     PLAY is the last thing before the corner. */
+  #menu:not(.pause) .menu-launch .rooms{order:1;width:100%}
+  #menu:not(.pause) .menu-launch .room-toggle{order:2;width:100%}
+  #menu:not(.pause) .menu-launch #roomOptions{order:3;width:100%}
+  #menu:not(.pause) .menu-launch .menu-actions{order:4;
+    flex-direction:column;align-items:stretch;gap:9px;width:100%}
+  #menu:not(.pause) .menu-act{display:flex;flex-direction:column;align-items:stretch;gap:3px}
+  #menu:not(.pause) .menu-act .menu-btn{width:100%;padding-left:12px;padding-right:12px}
+  #menu:not(.pause) .menu-act-cap{display:block;text-align:center;font-family:var(--disp);
+    font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--ink-soft)}
+  #menu:not(.pause) .menu-launch #roomList{max-height:min(168px,22vh)}
+
+  /* ---------- the season strip ---------- */
+  #menu:not(.pause) .menu-season{grid-area:season;justify-self:stretch;align-self:end;
+    display:block;width:100%;padding:8px 12px 10px;border:2.5px solid var(--ink);
+    border-radius:16px;background:rgba(255,255,255,.6);box-shadow:0 3px 0 var(--ink)}
+  #menu:not(.pause) .menu-season[hidden]{display:none}
+  .season-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+    margin-bottom:7px;font-family:var(--disp);font-size:11px;font-weight:700;
+    letter-spacing:.14em;color:var(--ink-soft)}
+  .season-track{list-style:none;display:flex;align-items:stretch;gap:8px}
+  .season-track li{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;
+    gap:2px;padding:5px 4px 6px;border:2px solid rgba(74,63,92,.55);border-radius:12px;
+    background:rgba(255,255,255,.58)}
+  /* The pass screen's glyphs, for the reason it uses them: what the game
+     can draw is a skin on a model, and a rung of a ladder is not the place
+     to stand one up. */
+  .season-glyph{font-size:19px;line-height:1.1}
+  .season-track li b{font-family:var(--disp);font-size:11px;font-weight:800;color:var(--ink)}
+  .season-track li small{font-family:var(--ui);font-size:8px;font-weight:800;letter-spacing:.09em;
+    color:var(--ink-soft);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    max-width:100%}
+  /* Reached, and still yours to take. Same pink as the badge that counts it. */
+  .season-track li.ready{border-color:var(--ink);background:linear-gradient(180deg,#ffe4ef,#ffc2d8)}
+  .season-track li.done{border-color:var(--ink);background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+
+  /* ---------- the gear ---------- */
+  #menu:not(.pause) .menu-gear{grid-area:gear;justify-self:end;align-self:start;
+    display:flex;align-items:center;justify-content:center;
+    width:46px;height:46px;padding:0;font-size:19px;border-radius:15px}
+  #menu:not(.pause) .menu-settings{position:absolute;top:70px;right:20px;z-index:3;
+    display:flex;flex-direction:column;gap:10px;width:268px;padding:13px 15px 14px;
+    border:2.5px solid var(--ink);border-radius:17px;background:#fff8f0;
+    box-shadow:0 5px 0 var(--ink),0 14px 28px rgba(74,63,92,.26)}
+  #menu:not(.pause) .menu-settings:not([data-open]){display:none}
+  #menu:not(.pause) .menu-settings .sens,
+  #menu:not(.pause) .menu-settings .look-invert{width:100%}
+}
 #lobby{width:min(440px,calc(100vw - 30px));margin-top:22px;padding:18px 20px 20px;pointer-events:auto}
 .lobby-head,.roster-title,.lobby-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .lobby-head>div{display:flex;align-items:baseline;gap:10px}
@@ -439,7 +633,9 @@ body.touch .sens{display:none}
 .locker-btn{flex:1 1 auto;min-width:0}
 #signIn{background:#fff}
 .gmark{width:15px;height:15px;flex:none}
-.locker-store{flex:0 0 auto;background:linear-gradient(180deg,#f3e9ff,#d4c5f9)}
+/* The two tiles share the row now that sign-in has its own, so they divide
+   it rather than sitting against the left edge with the width going spare. */
+.locker-store{flex:1 1 auto;background:linear-gradient(180deg,#f3e9ff,#d4c5f9)}
 .locker-who{flex:1 1 175px;display:flex;align-items:center;gap:8px;min-width:0;
   padding:4px 6px 4px 12px;border:2.5px solid var(--ink);border-radius:12px;
   background:rgba(255,255,255,.76);box-shadow:0 3px 0 var(--ink)}
@@ -688,7 +884,7 @@ body.touch .sens{display:none}
    whole ladder without the card ever growing wider than the window.
    ===================================================================== */
 /* The title-screen entry, butter-yellow the way the store button is lilac. */
-.locker-pass{flex:0 0 auto;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+.locker-pass{flex:1 1 auto;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
 #battlepass{z-index:37}                /* over #store (36); the two never open together by design */
 .bp-card{width:min(720px,calc(100vw - 16px));max-height:calc(100vh - 30px);padding:15px 17px 17px;
   display:flex;flex-direction:column;gap:10px;pointer-events:auto;overflow:hidden}
@@ -1152,42 +1348,84 @@ body.touch .touch-keys{display:flex}
   <div class="online-count" id="onlineCount"></div>
   <div class="online-count" id="matchesCount"></div>
   <div id="menu">
-    <label class="identity setup-only" for="playerName">
-      <span>CALLSIGN</span>
-      <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
-    </label>
-    <div class="locker setup-only" id="locker">
-      <button class="mini-btn locker-btn" id="signIn" type="button">
-        <svg class="gmark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+    <!-- The wide title screen groups these into a card in the top-left corner.
+         Everywhere else — narrow screens, and the pause card — the wrapper is
+         `display:contents` and its children flow into the column exactly as
+         they did before it existed. Every group below works the same way, so
+         the arrangement is one block of CSS and not a second layout to keep
+         in step with this one. -->
+    <div class="menu-topbar setup-only">
+      <label class="identity" for="playerName">
+        <span>CALLSIGN</span>
+        <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
+      </label>
+      <!-- Sign-in moved out of .locker so the wide layout can put who you are
+           beside your callsign and leave the locker row as the two tiles. It
+           keeps .locker-btn / .locker-who, so the narrow row is unchanged. -->
+      <div class="menu-account" id="menuAccount">
+        <button class="mini-btn locker-btn" id="signIn" type="button">
+          <svg class="gmark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
           <path fill="#4285f4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"></path>
           <path fill="#34a853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"></path>
           <path fill="#fbbc05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"></path>
           <path fill="#ea4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"></path>
         </svg>
-        <span>SIGN IN WITH GOOGLE</span>
-      </button>
-      <div class="locker-who" id="lockerWho" hidden>
-        <span class="tag">SIGNED IN</span>
-        <strong id="accountName"></strong>
-        <button class="mini-btn" id="signOut" type="button">SIGN OUT</button>
+          <span>SIGN IN WITH GOOGLE</span>
+        </button>
+        <div class="locker-who" id="lockerWho" hidden>
+          <span class="tag">SIGNED IN</span>
+          <strong id="accountName"></strong>
+          <button class="mini-btn" id="signOut" type="button">SIGN OUT</button>
+        </div>
       </div>
+      <!-- Season tier and the climb to the next one. Every figure on it comes
+           from /battlepass/me, so it stays hidden until there is an answer to
+           draw — which is also what makes it absent for a signed-out player,
+           who has no tier rather than a tier of zero. -->
+      <div class="menu-tier" id="menuTier" hidden>
+        <span class="menu-tier-num"><small>TIER</small><b id="menuTierNum">1</b></span>
+        <span class="menu-tier-bar" id="menuTierBar"><i id="menuTierFill"></i></span>
+        <small class="menu-tier-xp" id="menuTierXp"></small>
+      </div>
+    </div>
+    <!-- The two tiles. `.tile-sub`, `.tile-bar` and `.tile-badge` are drawn
+         only by the wide layout; the narrow row is the pair of buttons it has
+         always been. -->
+    <div class="locker setup-only" id="locker">
       <button class="mini-btn locker-btn locker-store" id="storeOpen" type="button">
         <span aria-hidden="true">🧁</span><span>STORE</span>
+        <small class="tile-sub">CHARACTERS &amp; SKINS</small>
       </button>
       <button class="mini-btn locker-btn locker-pass" id="battlepassOpen" type="button">
         <span aria-hidden="true">🎫</span><span>SEASON&nbsp;1</span>
+        <small class="tile-sub">FIRST LIGHT</small>
+        <!-- No count sits on this tile. The mockup's badge is a number of
+             rewards waiting to be claimed, and there is nothing to claim
+             here: battlepass.mjs grants a tier's rewards as the XP that
+             unlocks it lands, so a badge would be pointing at an action
+             this game does not have. The bar is real. -->
+        <span class="tile-bar" id="passTileBar" hidden><i id="passTileFill"></i></span>
       </button>
       <div id="lockerNote" role="status" aria-live="polite"></div>
     </div>
-    <label class="sens" for="sensRange">
-      <span>MOUSE SENSITIVITY</span>
-      <input type="range" id="sensRange" min="0.4" max="2.8" step="0.05" value="1">
-      <b id="sensVal">1.00×</b>
-    </label>
-    <label class="listed look-invert" for="invertY">
-      <input type="checkbox" id="invertY">
-      <span>INVERT LOOK (Y)</span>
-    </label>
+    <!-- The gear exists only in the wide layout. Everywhere else — a phone,
+         and the pause card — these two controls stay in the column they have
+         always been in, because the pause card is where they matter most and
+         a setting behind a popover on a paused game is a setting nobody
+         finds. -->
+    <button class="mini-btn menu-gear" id="menuGear" type="button"
+            aria-expanded="false" aria-controls="menuSettings" aria-label="Look settings">⚙</button>
+    <div class="menu-settings" id="menuSettings">
+      <label class="sens" for="sensRange">
+        <span>MOUSE SENSITIVITY</span>
+        <input type="range" id="sensRange" min="0.4" max="2.8" step="0.05" value="1">
+        <b id="sensVal">1.00×</b>
+      </label>
+      <label class="listed look-invert" for="invertY">
+        <input type="checkbox" id="invertY">
+        <span>INVERT LOOK (Y)</span>
+      </label>
+    </div>
     <div class="mode-picker setup-only" id="modePicker" role="group" aria-labelledby="modePickerLabel">
       <span class="mode-picker-label" id="modePickerLabel">MATCH MODE</span>
       <div class="mode-options">
@@ -1201,30 +1439,57 @@ body.touch .touch-keys{display:flex}
         </button>
       </div>
     </div>
-    <div class="menu-actions">
-      <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
-      <button class="menu-btn" id="play">SOLO</button>
+    <!-- What the player is wearing, drawn once by the locker's display case
+         into a still picture. Hidden until there is one: a browser that
+         cannot give the store a WebGL context simply does not get this, and
+         the layout closes over the gap. -->
+    <div class="menu-hero setup-only" id="menuHero" hidden>
+      <img id="menuHeroImg" alt="" aria-hidden="true">
     </div>
-    <div class="rooms setup-only">
-      <div class="rooms-head">
-        <span>ROOMS</span>
-        <button class="mini-btn" id="refreshRooms">REFRESH</button>
+    <div class="menu-launch">
+      <div class="menu-actions">
+        <!-- The captions are the two halves of #menuNote, moved next to the
+             button each half is about. They are siblings and not children of
+             the buttons because #play's label is rewritten with textContent —
+             RESUME, ENTER MATCH — which would take a child element with it. -->
+        <div class="menu-act setup-only">
+          <button class="menu-btn" id="quickPlay">PLAY</button>
+          <small class="menu-act-cap">A ROOM WITH PEOPLE IN IT</small>
+        </div>
+        <div class="menu-act">
+          <button class="menu-btn" id="play">SOLO</button>
+          <small class="menu-act-cap setup-only">YOU AND EIGHT BOTS</small>
+        </div>
       </div>
-      <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
+      <div class="rooms setup-only">
+        <div class="rooms-head">
+          <span>ROOMS</span>
+          <button class="mini-btn" id="refreshRooms">REFRESH</button>
+        </div>
+        <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
+      </div>
+      <button class="mini-btn room-toggle setup-only" id="roomToggle" type="button" aria-expanded="false" aria-controls="roomOptions">CREATE OR JOIN A ROOM</button>
+      <div id="roomOptions" class="setup-only" hidden>
+        <div class="join-row">
+          <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
+          <button class="mini-btn" id="joinGame">JOIN</button>
+        </div>
+        <div class="opt-row">
+          <button class="mini-btn" id="hostGame">CREATE ROOM</button>
+          <label class="listed" for="roomPublic">
+            <input type="checkbox" id="roomPublic" checked>
+            <span>LIST IT PUBLICLY</span>
+          </label>
+        </div>
+      </div>
     </div>
-    <button class="mini-btn room-toggle setup-only" id="roomToggle" type="button" aria-expanded="false" aria-controls="roomOptions">CREATE OR JOIN A ROOM</button>
-    <div id="roomOptions" class="setup-only" hidden>
-      <div class="join-row">
-        <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
-        <button class="mini-btn" id="joinGame">JOIN</button>
-      </div>
-      <div class="opt-row">
-        <button class="mini-btn" id="hostGame">CREATE ROOM</button>
-        <label class="listed" for="roomPublic">
-          <input type="checkbox" id="roomPublic" checked>
-          <span>LIST IT PUBLICLY</span>
-        </label>
-      </div>
+    <!-- The next few rungs of the season, drawn from the same mirrored ladder
+         the pass screen uses. Tier numbers, because that is what the ladder is
+         counted in — the strip is a shortcut into the pass, not a second
+         version of it. -->
+    <div class="menu-season setup-only" id="menuSeason" hidden>
+      <div class="season-head"><span>SEASON&nbsp;1</span><small>NEXT REWARDS</small></div>
+      <ol class="season-track" id="seasonTrack"></ol>
     </div>
     <div id="menuNote">PLAY finds you a room with people in it. SOLO is you and eight bots.</div>
     <a class="mini-btn social setup-only" id="twitterLink" href="https://x.com/luckeyfaraday"
@@ -14818,6 +15083,9 @@ function storeEquip(id, type) {
   else EQUIPPED.weapons[where.slot] = EQUIPPED.weapons[where.slot] === id ? null : id;
   storeSaveEquipped();
   storeRenderGrid();
+  /* The character on the title screen is whoever is being worn, so a change
+     made behind the panel has to reach the picture standing in front of it. */
+  menuHudRenderHero();
   if (typeof SFX === 'object' && SFX) SFX.ui();
 }
 
@@ -15568,12 +15836,19 @@ function stageClearSlots() {
 
 /* One item, one picture, or null. Everything is put back afterwards by the
    caller — this leaves the renderer at the thumbnail's size and the stage
-   stands empty. */
-function stageDrawThumb(id, type) {
-  const where = stageKindOf(id, type);
+   stands empty.
+
+   `size` is the card's 256x160 unless somebody asks for another; the title
+   screen's character wants a tall frame. A null `id` means the default of
+   its kind, which is the one thing stageKindOf cannot answer — it reads an
+   id, and a default does not have one. */
+function stageDrawThumb(id, type, size) {
+  const where = id === null ? { kind: 'character' } : stageKindOf(id, type);
   if (!where || !STAGE.renderer || !STAGE.thumbPivot || !STAGE.thumbCam) return null;
   const node = stagePreviewNode(where.kind, where.slot, id);
   if (!node) return null;
+  const drawW = size && size.w > 0 ? size.w : STAGE_THUMB_W;
+  const drawH = size && size.h > 0 ? size.h : STAGE_THUMB_H;
 
   const canvas = (STAGE.renderer && STAGE.renderer.domElement) || STAGE.canvas;
   if (!canvas || typeof canvas.toDataURL !== 'function') return null;
@@ -15596,11 +15871,14 @@ function stageDrawThumb(id, type) {
       minY: 0, maxY: node.userData.pnHeight,
       halfZ: node.userData.pnFlat
     };
+    /* Framing reads the lens, so the shape of the picture has to be set
+       before it is framed and not after. */
+    STAGE.thumbCam.aspect = drawW / drawH;
     stageFrame(STAGE.thumbCam, stageStillBounds(pivot) || swept, 0);
     if (typeof STAGE.thumbCam.updateProjectionMatrix === 'function')
       STAGE.thumbCam.updateProjectionMatrix();
 
-    STAGE.renderer.setSize(STAGE_THUMB_W, STAGE_THUMB_H, false);
+    STAGE.renderer.setSize(drawW, drawH, false);
     STAGE.renderer.render(STAGE.scene, STAGE.thumbCam);
     url = canvas.toDataURL('image/png');
     if (typeof url !== 'string' || url.length < 32) url = null;
@@ -15901,6 +16179,9 @@ function storeRenderAccount() {
       ? 'Signed in as ' + ACCOUNT.user.displayName
       : 'Skins for your guns and your fighter, and effects for your shots.';
   }
+  /* Signing out takes the season with it — the tier badge and the reward
+     strip are read out of an account, and there is no longer one. */
+  menuHudRender();
 }
 
 /* What the panel lists. The relay's catalog when there is one, the six we
@@ -16564,6 +16845,9 @@ function battlepassRender() {
   battlepassRenderCta();
   battlepassRenderLadder();
   bpRetick();
+  /* The title screen tells the same season twice — a tier badge and the
+     next rungs — so whatever moved the ladder has moved those too. */
+  menuHudRender();
 }
 
 function battlepassRenderSeason() {
@@ -16906,6 +17190,221 @@ function battlepassShow(open) {
      re-asked when somebody is paying attention to it. */
   if (storeSignedIn()) storeRefreshCatalog();
 }
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   The parts of the corner layout that are not already on the page: the
+   tier badge beside the callsign, the pass tile's progress bar, the next
+   rungs of the season, and the character standing in the middle.
+
+   Every figure is one the game already knows — /battlepass/me for the
+   season, EQUIPPED for the character — and every part puts itself away
+   when its figure is missing rather than drawing a zero. A signed-out
+   player has no tier. They are not on tier 0.
+
+   Which of these are visible at all is the media query's business in
+   00-head.html; this file only decides whether there is anything to
+   show. The one exception is the character, below, which is expensive
+   enough to be worth asking about the window before drawing.
+   ===================================================================== */
+
+/* The picture is a still, so it is drawn once per skin and kept.
+   `undefined` is "not tried yet" and null is "tried, and there is none" —
+   a browser that could not give the store a context is the second, and
+   asking it again every render would not change the answer. */
+const MENU_HUD = { heroId: undefined, heroUrl: null, heroJob: 0 };
+/* Tall, because it is a person standing up. Drawn at twice the size it is
+   shown at so it survives a high-density screen. */
+const MENU_HUD_HERO = { w: 340, h: 520 };
+const MENU_HUD_WIDE = '(min-width:1040px) and (min-height:660px)';
+
+function menuHudEl(id) { return document.getElementById(id); }
+
+/* Making a context and building a model costs more than this picture is
+   worth on a phone, where the layout it belongs to is not the one on
+   screen. Anything that cannot answer gets the picture. */
+function menuHudWide() {
+  if (typeof matchMedia !== 'function') return true;
+  try { return matchMedia(MENU_HUD_WIDE).matches; } catch (e) { return true; }
+}
+
+/* How far the player is from the tier they have reached to the next one.
+   The top of the ladder has no next and reads as full. */
+function menuHudTierFraction(me) {
+  if (me.tier >= BP_REWARDS.length) return 1;
+  const floor = me.tier > 0 ? BP_XP_THRESHOLDS[me.tier - 1] : 0;
+  const span = BP_XP_THRESHOLDS[me.tier] - floor;
+  if (!(span > 0)) return 0;
+  const into = me.xp - floor;
+  return into <= 0 ? 0 : (into >= span ? 1 : into / span);
+}
+
+/* A season that has not opened yet is not a tier the player is on, and a
+   season that has ended is a standing rather than a climb — both are the
+   pass screen's story to tell, not the badge's. */
+function menuHudSeasonMe() {
+  const me = bpMe();
+  if (!me) return null;
+  return bpEffectiveStatus(me, Date.now()) === 'active' ? me : null;
+}
+
+function menuHudRenderTier() {
+  const box = menuHudEl('menuTier');
+  if (!box) return;
+  const me = menuHudSeasonMe();
+  if (!me) { box.hidden = true; return; }
+  box.hidden = false;
+  const num = menuHudEl('menuTierNum');
+  const fill = menuHudEl('menuTierFill');
+  const xp = menuHudEl('menuTierXp');
+  if (num) num.textContent = String(me.tier);
+  if (fill) fill.style.width = Math.round(menuHudTierFraction(me) * 100) + '%';
+  if (!xp) return;
+  if (me.tier >= BP_REWARDS.length) { xp.textContent = 'TOP TIER'; return; }
+  const floor = me.tier > 0 ? BP_XP_THRESHOLDS[me.tier - 1] : 0;
+  xp.textContent = bpNum(me.xp - floor) + ' / ' + bpNum(BP_XP_THRESHOLDS[me.tier] - floor);
+}
+
+function menuHudRenderPassTile() {
+  const bar = menuHudEl('passTileBar');
+  if (!bar) return;
+  const me = menuHudSeasonMe();
+  if (!me) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const fill = menuHudEl('passTileFill');
+  if (fill) fill.style.width = Math.round(menuHudTierFraction(me) * 100) + '%';
+}
+
+/* The five rungs from where the player is standing. Near the top it is the
+   last five instead: "next" has run out, and an empty strip under a season
+   somebody has finished reads as a bug rather than as a compliment. */
+function menuHudSeasonTiers(me) {
+  const top = BP_REWARDS.length;
+  const span = 5;
+  const first = Math.min(Math.max(1, me.tier + 1), Math.max(1, top - span + 1));
+  const out = [];
+  for (let tier = first; tier < first + span && tier <= top; tier++) out.push(tier);
+  return out;
+}
+
+function menuHudRenderSeason() {
+  const box = menuHudEl('menuSeason');
+  const track = menuHudEl('seasonTrack');
+  if (!box || !track) return;
+  const me = menuHudSeasonMe();
+  if (!me) { box.hidden = true; return; }
+  box.hidden = false;
+  track.innerHTML = '';
+  /* The lane the player is actually climbing. Showing the premium reward to
+     somebody without the pass would make the strip an advertisement, and the
+     pass screen is where the offer belongs. */
+  const lane = me.premium ? 'premium' : 'free';
+  for (const tier of menuHudSeasonTiers(me)) {
+    const id = BP_REWARDS[tier - 1][lane];
+    const kind = bpRewardKind(id);
+    const info = kind ? BP_KINDS[kind] : null;
+    const name = bpRewardName(id);
+    const li = document.createElement('li');
+    if (tier <= me.tier) li.className = 'done';
+    /* The same glyphs the pass screen uses, for the same reason it uses
+       them: the reward renderers draw skins, not icons. */
+    li.appendChild(bpText('span', 'season-glyph', info ? info.glyph : '🎁'));
+    li.appendChild(bpText('b', '', String(tier)));
+    li.appendChild(bpText('small', '', name));
+    li.title = 'Tier ' + tier + ': ' + name + (info ? ' (' + info.label + ')' : '');
+    track.appendChild(li);
+  }
+}
+
+/* Borrow the display case, take one picture, put it back. This is what
+   stageMakeThumbs does for the store's cards, in the one shape the cards
+   do not need: tall, and of whatever is being worn rather than of an id
+   on a shelf. */
+function menuHudDrawHero(id) {
+  if (typeof stageInit !== 'function' || !stageInit()) return null;
+  stageClearSlots();                       // the stands may hold a model this needs
+  let url = null;
+  try { url = stageDrawThumb(id, 'character', MENU_HUD_HERO); } catch (e) { url = null; }
+  /* Drawing left the renderer at the picture's size and the stands empty.
+     Re-applying puts both back, and is only worth doing while somebody is
+     looking at the case. */
+  STAGE.w = 0; STAGE.h = 0;
+  if (typeof storeIsOpen === 'function' && storeIsOpen()) stageApply();
+  return url;
+}
+
+function menuHudRenderHero() {
+  const box = menuHudEl('menuHero');
+  const img = menuHudEl('menuHeroImg');
+  if (!box || !img) return;
+  if (!menuHudWide()) { box.hidden = true; return; }
+  const id = (typeof EQUIPPED === 'object' && EQUIPPED && EQUIPPED.character) || null;
+  if (MENU_HUD.heroId === id) { box.hidden = !MENU_HUD.heroUrl; return; }
+  if (MENU_HUD.heroJob) return;            // one is already in flight; it will land
+  /* Off the frame the menu appeared on. A context, a character and a render
+     is not what the first frame of the title screen should be spending. */
+  const run = () => {
+    MENU_HUD.heroJob = 0;
+    MENU_HUD.heroId = id;
+    MENU_HUD.heroUrl = menuHudDrawHero(id);
+    if (MENU_HUD.heroUrl) img.src = MENU_HUD.heroUrl;
+    box.hidden = !MENU_HUD.heroUrl;
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    MENU_HUD.heroJob = requestAnimationFrame(run) || 0;
+    if (!MENU_HUD.heroJob) run();          // rAF answered 0, which is also "no job"
+  } else run();
+}
+
+function menuHudRender() {
+  menuHudRenderTier();
+  menuHudRenderPassTile();
+  menuHudRenderSeason();
+  menuHudRenderHero();
+}
+
+function menuHudSettingsOpen(open) {
+  const gear = menuHudEl('menuGear');
+  const panel = menuHudEl('menuSettings');
+  if (!gear || !panel) return;
+  if (open) panel.setAttribute('data-open', '');
+  else panel.removeAttribute('data-open');
+  gear.setAttribute('aria-expanded', String(!!open));
+}
+
+function menuHudInit() {
+  const gear = menuHudEl('menuGear');
+  const panel = menuHudEl('menuSettings');
+  if (gear && panel) {
+    gear.addEventListener('click', e => {
+      e.stopPropagation();
+      menuHudSettingsOpen(!panel.hasAttribute('data-open'));
+      if (typeof SFX === 'object' && SFX) SFX.ui();
+    });
+    /* A popover with only its own button to close it is a popover people
+       leave open. Anywhere else on the page, and Escape, put it away. */
+    addEventListener('click', e => {
+      if (!panel.hasAttribute('data-open')) return;
+      if (panel.contains(e.target) || gear.contains(e.target)) return;
+      menuHudSettingsOpen(false);
+    });
+    addEventListener('keydown', e => {
+      if (e.code === 'Escape' && panel.hasAttribute('data-open')) menuHudSettingsOpen(false);
+    });
+  }
+  /* Dragging a window wide is the one moment the character can become
+     worth drawing without anything else having happened. */
+  if (typeof matchMedia === 'function') {
+    try {
+      const wide = matchMedia(MENU_HUD_WIDE);
+      const onChange = () => menuHudRenderHero();
+      if (typeof wide.addEventListener === 'function') wide.addEventListener('change', onChange);
+      else if (typeof wide.addListener === 'function') wide.addListener(onChange);
+    } catch (e) {}
+  }
+  menuHudRender();
+}
 </script>
 <script>/* ===== src/90-main.js ===== */
 /* =====================================================================
@@ -17167,6 +17666,10 @@ function boot() {
      yet, not a browser with storage switched off. Every failure inside is
      already handled; this is the guard for the one that is not. */
   try { initStore(); } catch (e) {}
+  /* Its own guard, and after the store rather than inside it: the gear is
+     the only way to the look settings in the wide layout, and a store that
+     threw on the way in must not be what takes them away. */
+  try { menuHudInit(); } catch (e) {}
   const requestedMode = QS.get('mode');
   setGameMode(requestedMode === 'kc' || requestedMode === 'dm' ? requestedMode : 'dm');
 

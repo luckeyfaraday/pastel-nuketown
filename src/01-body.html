@@ -68,42 +68,84 @@
   <div class="online-count" id="onlineCount"></div>
   <div class="online-count" id="matchesCount"></div>
   <div id="menu">
-    <label class="identity setup-only" for="playerName">
-      <span>CALLSIGN</span>
-      <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
-    </label>
-    <div class="locker setup-only" id="locker">
-      <button class="mini-btn locker-btn" id="signIn" type="button">
-        <svg class="gmark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+    <!-- The wide title screen groups these into a card in the top-left corner.
+         Everywhere else — narrow screens, and the pause card — the wrapper is
+         `display:contents` and its children flow into the column exactly as
+         they did before it existed. Every group below works the same way, so
+         the arrangement is one block of CSS and not a second layout to keep
+         in step with this one. -->
+    <div class="menu-topbar setup-only">
+      <label class="identity" for="playerName">
+        <span>CALLSIGN</span>
+        <input id="playerName" maxlength="16" autocomplete="nickname" spellcheck="false" value="PLAYER">
+      </label>
+      <!-- Sign-in moved out of .locker so the wide layout can put who you are
+           beside your callsign and leave the locker row as the two tiles. It
+           keeps .locker-btn / .locker-who, so the narrow row is unchanged. -->
+      <div class="menu-account" id="menuAccount">
+        <button class="mini-btn locker-btn" id="signIn" type="button">
+          <svg class="gmark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
           <path fill="#4285f4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"></path>
           <path fill="#34a853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"></path>
           <path fill="#fbbc05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"></path>
           <path fill="#ea4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"></path>
         </svg>
-        <span>SIGN IN WITH GOOGLE</span>
-      </button>
-      <div class="locker-who" id="lockerWho" hidden>
-        <span class="tag">SIGNED IN</span>
-        <strong id="accountName"></strong>
-        <button class="mini-btn" id="signOut" type="button">SIGN OUT</button>
+          <span>SIGN IN WITH GOOGLE</span>
+        </button>
+        <div class="locker-who" id="lockerWho" hidden>
+          <span class="tag">SIGNED IN</span>
+          <strong id="accountName"></strong>
+          <button class="mini-btn" id="signOut" type="button">SIGN OUT</button>
+        </div>
       </div>
+      <!-- Season tier and the climb to the next one. Every figure on it comes
+           from /battlepass/me, so it stays hidden until there is an answer to
+           draw — which is also what makes it absent for a signed-out player,
+           who has no tier rather than a tier of zero. -->
+      <div class="menu-tier" id="menuTier" hidden>
+        <span class="menu-tier-num"><small>TIER</small><b id="menuTierNum">1</b></span>
+        <span class="menu-tier-bar" id="menuTierBar"><i id="menuTierFill"></i></span>
+        <small class="menu-tier-xp" id="menuTierXp"></small>
+      </div>
+    </div>
+    <!-- The two tiles. `.tile-sub`, `.tile-bar` and `.tile-badge` are drawn
+         only by the wide layout; the narrow row is the pair of buttons it has
+         always been. -->
+    <div class="locker setup-only" id="locker">
       <button class="mini-btn locker-btn locker-store" id="storeOpen" type="button">
         <span aria-hidden="true">🧁</span><span>STORE</span>
+        <small class="tile-sub">CHARACTERS &amp; SKINS</small>
       </button>
       <button class="mini-btn locker-btn locker-pass" id="battlepassOpen" type="button">
         <span aria-hidden="true">🎫</span><span>SEASON&nbsp;1</span>
+        <small class="tile-sub">FIRST LIGHT</small>
+        <!-- No count sits on this tile. The mockup's badge is a number of
+             rewards waiting to be claimed, and there is nothing to claim
+             here: battlepass.mjs grants a tier's rewards as the XP that
+             unlocks it lands, so a badge would be pointing at an action
+             this game does not have. The bar is real. -->
+        <span class="tile-bar" id="passTileBar" hidden><i id="passTileFill"></i></span>
       </button>
       <div id="lockerNote" role="status" aria-live="polite"></div>
     </div>
-    <label class="sens" for="sensRange">
-      <span>MOUSE SENSITIVITY</span>
-      <input type="range" id="sensRange" min="0.4" max="2.8" step="0.05" value="1">
-      <b id="sensVal">1.00×</b>
-    </label>
-    <label class="listed look-invert" for="invertY">
-      <input type="checkbox" id="invertY">
-      <span>INVERT LOOK (Y)</span>
-    </label>
+    <!-- The gear exists only in the wide layout. Everywhere else — a phone,
+         and the pause card — these two controls stay in the column they have
+         always been in, because the pause card is where they matter most and
+         a setting behind a popover on a paused game is a setting nobody
+         finds. -->
+    <button class="mini-btn menu-gear" id="menuGear" type="button"
+            aria-expanded="false" aria-controls="menuSettings" aria-label="Look settings">⚙</button>
+    <div class="menu-settings" id="menuSettings">
+      <label class="sens" for="sensRange">
+        <span>MOUSE SENSITIVITY</span>
+        <input type="range" id="sensRange" min="0.4" max="2.8" step="0.05" value="1">
+        <b id="sensVal">1.00×</b>
+      </label>
+      <label class="listed look-invert" for="invertY">
+        <input type="checkbox" id="invertY">
+        <span>INVERT LOOK (Y)</span>
+      </label>
+    </div>
     <div class="mode-picker setup-only" id="modePicker" role="group" aria-labelledby="modePickerLabel">
       <span class="mode-picker-label" id="modePickerLabel">MATCH MODE</span>
       <div class="mode-options">
@@ -117,30 +159,57 @@
         </button>
       </div>
     </div>
-    <div class="menu-actions">
-      <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
-      <button class="menu-btn" id="play">SOLO</button>
+    <!-- What the player is wearing, drawn once by the locker's display case
+         into a still picture. Hidden until there is one: a browser that
+         cannot give the store a WebGL context simply does not get this, and
+         the layout closes over the gap. -->
+    <div class="menu-hero setup-only" id="menuHero" hidden>
+      <img id="menuHeroImg" alt="" aria-hidden="true">
     </div>
-    <div class="rooms setup-only">
-      <div class="rooms-head">
-        <span>ROOMS</span>
-        <button class="mini-btn" id="refreshRooms">REFRESH</button>
+    <div class="menu-launch">
+      <div class="menu-actions">
+        <!-- The captions are the two halves of #menuNote, moved next to the
+             button each half is about. They are siblings and not children of
+             the buttons because #play's label is rewritten with textContent —
+             RESUME, ENTER MATCH — which would take a child element with it. -->
+        <div class="menu-act setup-only">
+          <button class="menu-btn" id="quickPlay">PLAY</button>
+          <small class="menu-act-cap">A ROOM WITH PEOPLE IN IT</small>
+        </div>
+        <div class="menu-act">
+          <button class="menu-btn" id="play">SOLO</button>
+          <small class="menu-act-cap setup-only">YOU AND EIGHT BOTS</small>
+        </div>
       </div>
-      <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
+      <div class="rooms setup-only">
+        <div class="rooms-head">
+          <span>ROOMS</span>
+          <button class="mini-btn" id="refreshRooms">REFRESH</button>
+        </div>
+        <ul id="roomList"><li class="rooms-empty">Looking for rooms…</li></ul>
+      </div>
+      <button class="mini-btn room-toggle setup-only" id="roomToggle" type="button" aria-expanded="false" aria-controls="roomOptions">CREATE OR JOIN A ROOM</button>
+      <div id="roomOptions" class="setup-only" hidden>
+        <div class="join-row">
+          <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
+          <button class="mini-btn" id="joinGame">JOIN</button>
+        </div>
+        <div class="opt-row">
+          <button class="mini-btn" id="hostGame">CREATE ROOM</button>
+          <label class="listed" for="roomPublic">
+            <input type="checkbox" id="roomPublic" checked>
+            <span>LIST IT PUBLICLY</span>
+          </label>
+        </div>
+      </div>
     </div>
-    <button class="mini-btn room-toggle setup-only" id="roomToggle" type="button" aria-expanded="false" aria-controls="roomOptions">CREATE OR JOIN A ROOM</button>
-    <div id="roomOptions" class="setup-only" hidden>
-      <div class="join-row">
-        <input id="roomCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" aria-label="Room code">
-        <button class="mini-btn" id="joinGame">JOIN</button>
-      </div>
-      <div class="opt-row">
-        <button class="mini-btn" id="hostGame">CREATE ROOM</button>
-        <label class="listed" for="roomPublic">
-          <input type="checkbox" id="roomPublic" checked>
-          <span>LIST IT PUBLICLY</span>
-        </label>
-      </div>
+    <!-- The next few rungs of the season, drawn from the same mirrored ladder
+         the pass screen uses. Tier numbers, because that is what the ladder is
+         counted in — the strip is a shortcut into the pass, not a second
+         version of it. -->
+    <div class="menu-season setup-only" id="menuSeason" hidden>
+      <div class="season-head"><span>SEASON&nbsp;1</span><small>NEXT REWARDS</small></div>
+      <ol class="season-track" id="seasonTrack"></ol>
     </div>
     <div id="menuNote">PLAY finds you a room with people in it. SOLO is you and eight bots.</div>
     <a class="mini-btn social setup-only" id="twitterLink" href="https://x.com/luckeyfaraday"

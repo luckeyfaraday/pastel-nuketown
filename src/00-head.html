@@ -340,6 +340,200 @@ body.touch .sens{display:none}
 #menu.pause{margin-top:28px}
 #menu.pause .setup-only{display:none}
 #menu.pause #menuNote{font-size:14px}
+
+/* =====================================================================
+   THE WIDE TITLE SCREEN
+
+   Above 1040x660 the title stops being one column down the middle and
+   becomes the corners of the screen: who you are top-left, the locker
+   and the pass down the left, the mode and your character in the
+   middle, PLAY bottom-right. It is the same DOM in a different
+   arrangement and not a second menu — every group is `display:contents`
+   until this block hands it a box, so a phone and the pause card below
+   are laid out by the rules above exactly as they were before this
+   existed, and there is no duplicate control to keep in step.
+
+   The switch is the :has() below. A browser without it gets the column,
+   which is the layout this page shipped with, so the fallback needs no
+   thought beyond not styling anything outside here.
+   ===================================================================== */
+.menu-topbar,.menu-account,.menu-settings,.menu-launch,.menu-act{display:contents}
+/* Drawn by the wide layout alone. Kept out of the column from here rather
+   than by the script, so a window dragged narrow puts them away without
+   anything having to watch for it. */
+.tile-sub,.tile-bar,.menu-act-cap,
+.menu-tier,.menu-hero,.menu-season,.menu-gear{display:none}
+
+@media (min-width:1040px) and (min-height:660px){
+  /* Four columns: the rail, the mode card, whatever room is left for the
+     character, and the launch stack. The title sits across the two middle
+     ones, which is what keeps it centred over the character rather than
+     over the screen. */
+  #title:has(#menu:not([hidden]):not(.pause)){
+    display:grid;justify-items:center;align-content:stretch;
+    padding:14px 20px 10px;gap:5px 20px;
+    grid-template-columns:minmax(190px,224px) minmax(184px,220px) minmax(0,1fr) minmax(242px,314px);
+    /* The middle row has a floor because the mode card cannot shrink: at the
+       shortest window this layout runs at, a 1fr row is smaller than the card
+       standing in it and the card would hang over the season strip. The floor
+       is the card's height; a window too short for it scrolls, which #title
+       has always been able to do. */
+    grid-template-rows:auto auto auto auto minmax(184px,1fr) auto auto auto auto auto;
+    /* Every child of #title is named here. One that is not would be placed
+       automatically, in a row of its own invented for it, which is how the
+       key legend ends up on top of the note. */
+    grid-template-areas:
+      "topbar topbar topbar gear"
+      "rail   h1     h1     launch"
+      "rail   sub    sub    launch"
+      "rail   counts counts launch"
+      "rail   mode   hero   launch"
+      "season season online launch"
+      "keys   keys   keys   keys"
+      "note   note   note   note"
+      "status status status status"
+      "social social social social";
+  }
+  /* The two 14px spacers exist to centre a column; a grid does its own. */
+  #title:has(#menu:not([hidden]):not(.pause))::before,
+  #title:has(#menu:not([hidden]):not(.pause))::after{display:none}
+  #title:has(#menu:not([hidden]):not(.pause)) #menu{display:contents}
+  #title:has(#menu:not([hidden]):not(.pause)) h1{grid-area:h1;align-self:end;margin:0}
+  #title:has(#menu:not([hidden]):not(.pause)) .sub{grid-area:sub;margin-top:6px}
+  #title:has(#menu:not([hidden]):not(.pause)) #matchesCount{grid-area:counts}
+  /* Blank below two players by design, and an empty chip is worse than no
+     chip — hence :empty rather than a script deciding. */
+  #title:has(#menu:not([hidden]):not(.pause)) #onlineCount{
+    grid-area:online;align-self:center;margin:0;opacity:1;
+    display:flex;align-items:center;gap:8px;padding:7px 13px 8px;
+    border:2.5px solid var(--ink);border-radius:13px;background:rgba(255,255,255,.7);
+    box-shadow:0 3px 0 var(--ink);color:var(--ink)}
+  #title:has(#menu:not([hidden]):not(.pause)) #onlineCount:empty{display:none}
+  #title:has(#menu:not([hidden]):not(.pause)) #onlineCount::before{
+    content:'';flex:none;width:9px;height:9px;border-radius:50%;
+    background:#5fc38a;border:2px solid var(--ink)}
+  /* The legend is a whole band of the screen it does not need to be. Only
+     the two of these that match the input the player has are ever up. */
+  #title:has(#menu:not([hidden]):not(.pause)) .keys{grid-area:keys;margin-top:2px;gap:6px}
+  #title:has(#menu:not([hidden]):not(.pause)) .keys span{padding:4px 9px 5px;font-size:11px}
+  #title:has(#menu:not([hidden]):not(.pause)) #menuNote{grid-area:note}
+  #title:has(#menu:not([hidden]):not(.pause)) #netStatus{grid-area:status;margin-top:0}
+  #title:has(#menu:not([hidden]):not(.pause)) .social{grid-area:social}
+
+  /* ---------- top-left: callsign, account, tier ---------- */
+  #menu:not(.pause) .menu-topbar{grid-area:topbar;justify-self:start;
+    display:flex;align-items:center;gap:10px}
+  #menu:not(.pause) .menu-topbar .identity{width:auto;flex:0 1 250px}
+  #menu:not(.pause) .menu-topbar .locker-who{flex:0 1 auto}
+  #menu:not(.pause) .menu-tier{display:flex;align-items:center;gap:9px;padding:5px 13px 6px;
+    border:2.5px solid var(--ink);border-radius:14px;background:rgba(255,255,255,.76);
+    box-shadow:0 3px 0 var(--ink)}
+  #menu:not(.pause) .menu-tier[hidden]{display:none}
+  .menu-tier-num{display:flex;align-items:baseline;gap:6px;font-family:var(--disp)}
+  .menu-tier-num small{font-size:9px;font-weight:700;letter-spacing:.13em;color:var(--ink-soft)}
+  .menu-tier-num b{font-size:19px;font-weight:800;letter-spacing:.04em;color:#d4638f}
+  .menu-tier-bar{position:relative;flex:none;width:76px;height:9px;border:2px solid var(--ink);
+    border-radius:6px;background:rgba(74,63,92,.16);overflow:hidden}
+  .menu-tier-bar i{position:absolute;top:0;bottom:0;left:0;width:0;
+    background:linear-gradient(90deg,#ffd0e2,#f79ec0)}
+  .menu-tier-xp{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.05em;
+    color:var(--ink-soft);white-space:nowrap}
+
+  /* ---------- the rail ---------- */
+  #menu:not(.pause) #locker{grid-area:rail;align-self:start;justify-self:stretch;
+    width:auto;flex-direction:column;align-items:stretch;gap:9px;padding:9px;
+    border:2.5px solid var(--ink);border-radius:19px;background:rgba(255,255,255,.6);
+    box-shadow:0 4px 0 var(--ink)}
+  #menu:not(.pause) #locker .locker-btn{flex:0 0 auto;position:relative;
+    display:grid;grid-template-columns:36px minmax(0,1fr);
+    grid-template-areas:"icon name" "icon sub" "bar bar";
+    gap:0 11px;justify-items:start;align-items:center;
+    padding:10px 12px 11px;text-align:left;white-space:normal;font-size:13px}
+  #menu:not(.pause) #locker .locker-btn>span:first-child{grid-area:icon;align-self:center;
+    display:flex;align-items:center;justify-content:center;width:36px;height:36px;font-size:19px;
+    border:2px solid var(--ink);border-radius:11px;background:rgba(255,255,255,.72)}
+  #menu:not(.pause) #locker .locker-btn>span:nth-child(2){grid-area:name;letter-spacing:.09em}
+  #menu:not(.pause) #locker .tile-sub{grid-area:sub;display:block;font-family:var(--ui);
+    font-size:9px;font-weight:800;letter-spacing:.1em;color:var(--ink-soft)}
+  #menu:not(.pause) #locker .tile-bar{grid-area:bar;display:block;position:relative;
+    width:100%;height:8px;margin-top:7px;border:2px solid var(--ink);border-radius:6px;
+    background:rgba(74,63,92,.16);overflow:hidden}
+  #menu:not(.pause) #locker .tile-bar[hidden]{display:none}
+  .tile-bar i{position:absolute;top:0;bottom:0;left:0;width:0;
+    background:linear-gradient(90deg,#ffd0e2,#f79ec0)}
+  #menu:not(.pause) #lockerNote{font-size:11px;text-align:center}
+
+  /* ---------- the mode card ---------- */
+  #menu:not(.pause) #modePicker{grid-area:mode;align-self:center;justify-self:stretch;
+    width:auto;padding:11px 12px 12px;border:2.5px solid var(--ink);border-radius:19px;
+    background:rgba(255,255,255,.66);box-shadow:0 4px 0 var(--ink)}
+  #menu:not(.pause) #modePicker .mode-options{grid-template-columns:minmax(0,1fr);gap:7px}
+  #menu:not(.pause) #modePicker .mode-option{min-height:54px}
+
+  /* ---------- the character ---------- */
+  #menu:not(.pause) .menu-hero{grid-area:hero;justify-self:center;align-self:stretch;
+    display:flex;align-items:flex-end;justify-content:center;min-height:0;
+    width:100%;overflow:hidden;pointer-events:none}
+  #menu:not(.pause) .menu-hero[hidden]{display:none}
+  /* Bounded by the row and not by the viewport: a picture measured against
+     vh stands up through the title on a short window, and the title is the
+     one thing on this screen it must not cover. */
+  .menu-hero img{max-width:100%;max-height:100%;
+    filter:drop-shadow(0 15px 20px rgba(74,63,92,.28))}
+
+  /* ---------- the launch stack ---------- */
+  #menu:not(.pause) .menu-launch{grid-area:launch;align-self:center;justify-self:stretch;
+    display:flex;flex-direction:column;gap:10px;width:100%}
+  /* Source order puts the buttons first because that is the order a phone
+     and the pause card want them in. Here the room browser reads first and
+     PLAY is the last thing before the corner. */
+  #menu:not(.pause) .menu-launch .rooms{order:1;width:100%}
+  #menu:not(.pause) .menu-launch .room-toggle{order:2;width:100%}
+  #menu:not(.pause) .menu-launch #roomOptions{order:3;width:100%}
+  #menu:not(.pause) .menu-launch .menu-actions{order:4;
+    flex-direction:column;align-items:stretch;gap:9px;width:100%}
+  #menu:not(.pause) .menu-act{display:flex;flex-direction:column;align-items:stretch;gap:3px}
+  #menu:not(.pause) .menu-act .menu-btn{width:100%;padding-left:12px;padding-right:12px}
+  #menu:not(.pause) .menu-act-cap{display:block;text-align:center;font-family:var(--disp);
+    font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--ink-soft)}
+  #menu:not(.pause) .menu-launch #roomList{max-height:min(168px,22vh)}
+
+  /* ---------- the season strip ---------- */
+  #menu:not(.pause) .menu-season{grid-area:season;justify-self:stretch;align-self:end;
+    display:block;width:100%;padding:8px 12px 10px;border:2.5px solid var(--ink);
+    border-radius:16px;background:rgba(255,255,255,.6);box-shadow:0 3px 0 var(--ink)}
+  #menu:not(.pause) .menu-season[hidden]{display:none}
+  .season-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+    margin-bottom:7px;font-family:var(--disp);font-size:11px;font-weight:700;
+    letter-spacing:.14em;color:var(--ink-soft)}
+  .season-track{list-style:none;display:flex;align-items:stretch;gap:8px}
+  .season-track li{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;
+    gap:2px;padding:5px 4px 6px;border:2px solid rgba(74,63,92,.55);border-radius:12px;
+    background:rgba(255,255,255,.58)}
+  /* The pass screen's glyphs, for the reason it uses them: what the game
+     can draw is a skin on a model, and a rung of a ladder is not the place
+     to stand one up. */
+  .season-glyph{font-size:19px;line-height:1.1}
+  .season-track li b{font-family:var(--disp);font-size:11px;font-weight:800;color:var(--ink)}
+  .season-track li small{font-family:var(--ui);font-size:8px;font-weight:800;letter-spacing:.09em;
+    color:var(--ink-soft);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    max-width:100%}
+  /* Reached, and still yours to take. Same pink as the badge that counts it. */
+  .season-track li.ready{border-color:var(--ink);background:linear-gradient(180deg,#ffe4ef,#ffc2d8)}
+  .season-track li.done{border-color:var(--ink);background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+
+  /* ---------- the gear ---------- */
+  #menu:not(.pause) .menu-gear{grid-area:gear;justify-self:end;align-self:start;
+    display:flex;align-items:center;justify-content:center;
+    width:46px;height:46px;padding:0;font-size:19px;border-radius:15px}
+  #menu:not(.pause) .menu-settings{position:absolute;top:70px;right:20px;z-index:3;
+    display:flex;flex-direction:column;gap:10px;width:268px;padding:13px 15px 14px;
+    border:2.5px solid var(--ink);border-radius:17px;background:#fff8f0;
+    box-shadow:0 5px 0 var(--ink),0 14px 28px rgba(74,63,92,.26)}
+  #menu:not(.pause) .menu-settings:not([data-open]){display:none}
+  #menu:not(.pause) .menu-settings .sens,
+  #menu:not(.pause) .menu-settings .look-invert{width:100%}
+}
 #lobby{width:min(440px,calc(100vw - 30px));margin-top:22px;padding:18px 20px 20px;pointer-events:auto}
 .lobby-head,.roster-title,.lobby-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .lobby-head>div{display:flex;align-items:baseline;gap:10px}
@@ -437,7 +631,9 @@ body.touch .sens{display:none}
 .locker-btn{flex:1 1 auto;min-width:0}
 #signIn{background:#fff}
 .gmark{width:15px;height:15px;flex:none}
-.locker-store{flex:0 0 auto;background:linear-gradient(180deg,#f3e9ff,#d4c5f9)}
+/* The two tiles share the row now that sign-in has its own, so they divide
+   it rather than sitting against the left edge with the width going spare. */
+.locker-store{flex:1 1 auto;background:linear-gradient(180deg,#f3e9ff,#d4c5f9)}
 .locker-who{flex:1 1 175px;display:flex;align-items:center;gap:8px;min-width:0;
   padding:4px 6px 4px 12px;border:2.5px solid var(--ink);border-radius:12px;
   background:rgba(255,255,255,.76);box-shadow:0 3px 0 var(--ink)}
@@ -686,7 +882,7 @@ body.touch .sens{display:none}
    whole ladder without the card ever growing wider than the window.
    ===================================================================== */
 /* The title-screen entry, butter-yellow the way the store button is lilac. */
-.locker-pass{flex:0 0 auto;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
+.locker-pass{flex:1 1 auto;background:linear-gradient(180deg,#fff6d6,#ffe08a)}
 #battlepass{z-index:37}                /* over #store (36); the two never open together by design */
 .bp-card{width:min(720px,calc(100vw - 16px));max-height:calc(100vh - 30px);padding:15px 17px 17px;
   display:flex;flex-direction:column;gap:10px;pointer-events:auto;overflow:hidden}
