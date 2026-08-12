@@ -755,6 +755,98 @@ test('the premium pass offer only opens checkout for an available catalog item',
   assert.equal(ctx.__get('bpCatalogProduct().available'), true);
 });
 
+/* The page and the relay deploy separately, so at any moment the relay may be
+   selling for Stripe prices, for Pastels, or — mid-rollout — the page may be
+   the new one and the relay the old. On 2026-08-11 the wallet page went live
+   against a relay still answering with prices and no currency fields, and the
+   whole store went quiet: every BUY read `currencyAvailable: undefined` and
+   rendered disabled, and the pass offer rendered live but returned silently
+   on click. Nothing failed, because the tests of the day asked whether the
+   offer resolved and not where pressing it went. These ask where it goes. */
+const MONEY_CATALOG = { items: [{
+  id: 'battlepass-season-1-premium',
+  displayName: 'Season 1 Premium Pass',
+  type: 'battlepass',
+  productKind: 'battlepass',
+  available: true,
+  price: { unitAmount: 999, currency: 'usd' }
+}] };
+
+const PASTELS_CATALOG = { items: [{
+  id: 'battlepass-season-1-premium',
+  displayName: 'Season 1 Premium Pass',
+  type: 'battlepass',
+  productKind: 'battlepass',
+  available: false,
+  price: null,
+  currencyPrice: 1200,
+  currencyAvailable: true
+}] };
+
+async function pressedPassBuyWith(catalog) {
+  const ctx = makeStore({
+    reply: url => url === RELAY + '/shop/checkout'
+      ? { status: 200, body: { url: 'https://checkout.stripe.com/c/pay/abc' } }
+      : (url === RELAY + '/shop/purchase'
+        ? { status: 200, body: { purchased: true, balance: 3800 } }
+        : { status: 200, body: { userId: 'u1', email: 'p@e.com', displayName: 'P', entitlements: [] } })
+  });
+  ctx.localStorage.setItem('pastel-nuketown-token', JSON.stringify({
+    token: 'GOOD', origin: RELAY, expiresAt: 0
+  }));
+  ctx.initStore();
+  await settle();
+  assert.equal(ctx.storeSignedIn(), true);
+
+  ctx.__get(`ACCOUNT.items = storeCleanCatalog(${JSON.stringify(catalog)})`);
+  ctx.__get('ACCOUNT.balance = 5000');
+  ctx.battlepassBuy();
+  await settle();
+  await settle();
+  return ctx;
+}
+
+test('the pass button takes whichever checkout the relay is actually selling in', async () => {
+  const money = await pressedPassBuyWith(MONEY_CATALOG);
+  assert.deepEqual(
+    money.calls.filter(c => c.url === RELAY + '/shop/checkout').length, 1,
+    'a relay selling the pass for money must send the player to Stripe');
+  assert.equal(money.calls.filter(c => c.url === RELAY + '/shop/purchase').length, 0);
+  assert.deepEqual(money.location.assigned, ['https://checkout.stripe.com/c/pay/abc']);
+
+  const pastels = await pressedPassBuyWith(PASTELS_CATALOG);
+  assert.equal(
+    pastels.calls.filter(c => c.url === RELAY + '/shop/purchase').length, 1,
+    'a relay selling the pass for Pastels must spend them rather than open Stripe');
+  assert.equal(pastels.calls.filter(c => c.url === RELAY + '/shop/checkout').length, 0);
+  assert.deepEqual(pastels.location.assigned, []);
+});
+
+test('an item the relay is selling is never priced or drawn as unbuyable', () => {
+  const ctx = makeStore();
+  const clean = catalog => ctx.__get(`storeCleanCatalog(${JSON.stringify(catalog)})`)[0];
+
+  const money = clean(MONEY_CATALOG);
+  assert.equal(ctx.storePayWith(money), 'money');
+  assert.equal(ctx.storePriceOf(money), '$9.99');
+
+  const pastels = clean(PASTELS_CATALOG);
+  assert.equal(ctx.storePayWith(pastels), 'currency');
+  assert.equal(ctx.storePriceOf(pastels), '✦ 1,200');
+
+  /* Listed and sold in neither is the one case that is genuinely not for
+     sale, and the only one allowed to disable the button. */
+  const withdrawn = clean({ items: [Object.assign({}, MONEY_CATALOG.items[0],
+    { available: false, price: null })] });
+  assert.equal(ctx.storePayWith(withdrawn), null);
+  assert.equal(ctx.storePriceOf(withdrawn), '');
+
+  /* And the pass is the one listed product this side has no local entry for,
+     so it is the one that showed a raw id in the case. */
+  assert.equal(money.name, 'Season 1 Premium Pass');
+  assert.equal(ctx.storeKindLabel(money.id, money.type, money.productKind), 'BATTLE PASS');
+});
+
 test('editing localStorage alone cannot present an unowned item as equipped', () => {
   const ctx = makeStore();
   ctx.localStorage.setItem('pastel-nuketown-equipped', JSON.stringify({

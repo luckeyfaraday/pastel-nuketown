@@ -799,8 +799,16 @@ function storeCleanCatalog(body) {
     const known = STORE_BY_ID.get(entry.id);
     items.push({
       id: entry.id,
+      /* `displayName` is what the relay actually calls this field. Every
+         cosmetic is in STORE_BY_ID and so was named from there whatever the
+         relay sent, which is why the pass — the one listed product this side
+         has no entry for — was the only card that ever showed a raw id. */
       name: typeof entry.name === 'string' && entry.name.trim()
-        ? entry.name.trim().slice(0, 40) : (known ? known.name : entry.id),
+        ? entry.name.trim().slice(0, 40)
+        : (known ? known.name
+          : (typeof entry.displayName === 'string' && entry.displayName.trim()
+            ? entry.displayName.trim().slice(0, 40) : entry.id)),
+      productKind: entry.productKind === 'battlepass' ? 'battlepass' : 'cosmetic',
       type: entry.type === 'weapon' || entry.type === 'character' ||
         entry.type === 'effect'
         ? entry.type : (known ? known.type : ''),
@@ -970,6 +978,36 @@ function storeCheckoutURL(raw) {
   const host = url.hostname.toLowerCase();
   const known = STORE_CHECKOUT_HOSTS.some(allowed => host === allowed || host.endsWith('.' + allowed));
   return known ? url.href : null;
+}
+
+/* Which checkout an item can take: 'currency' when the relay is selling it
+   for Pastels, 'money' when it is selling it for a Stripe price, null when it
+   is not selling it at all.
+
+   Both are read, because the page and the relay deploy separately and a page
+   that assumes one of them is a store that cannot take money. On 2026-08-11
+   the wallet build went live on a relay still answering with Stripe prices
+   and no currency fields; every BUY read `currencyAvailable: undefined`,
+   rendered disabled, and the pass offer became a button that silently
+   returned. Whichever half of the wallet rollout is ahead of the other, one
+   of these two routes is open. */
+function storePayWith(item) {
+  if (!item) return null;
+  if (item.currencyAvailable === true && Number.isSafeInteger(item.currencyPrice))
+    return 'currency';
+  return item.available === true ? 'money' : null;
+}
+
+function storeCheckout(item) {
+  const route = storePayWith(item);
+  if (route === 'currency') storeSpend(item.id);
+  else if (route === 'money') storeBuy(item.id);
+}
+
+function storePriceOf(item) {
+  return storePayWith(item) === 'currency'
+    ? storeCurrencyText(item.currencyPrice)
+    : storePriceText(item.price);
 }
 
 function storeBuy(id) {
@@ -1893,7 +1931,8 @@ function stageApply() {
   const nameEl = stageEl('stageName');
   const kindEl = stageEl('stageKind');
   if (nameEl) nameEl.textContent = name;
-  if (kindEl) kindEl.textContent = id ? storeKindLabel(id, listed ? listed.type : '') : '';
+  if (kindEl) kindEl.textContent = id
+    ? storeKindLabel(id, listed ? listed.type : '', listed ? listed.productKind : '') : '';
 
   const showing = stageHasContent();
   const empty = stageEl('stageEmpty');
@@ -2057,7 +2096,8 @@ function storeDisplayItems() {
   }));
 }
 
-function storeKindLabel(id, type) {
+function storeKindLabel(id, type, productKind) {
+  if (productKind === 'battlepass') return 'BATTLE PASS';
   const where = storeSlotOf(id, type);
   if (!where) return 'SKIN';
   if (where.kind === 'character') return 'CHARACTER SKIN';
@@ -2128,19 +2168,25 @@ function storeRenderGrid() {
 
     const kind = document.createElement('div');
     kind.className = 'skind';
-    kind.textContent = storeKindLabel(item.id, item.type);
+    kind.textContent = storeKindLabel(item.id, item.type, item.productKind);
     pick.appendChild(kind);
 
     const foot = document.createElement('div');
     foot.className = 'sfoot';
     const price = document.createElement('span');
     price.className = 'sprice';
-    price.textContent = owned ? 'OWNED' : (
-      item.currencyPrice !== null && item.currencyPrice !== undefined
-        ? storeCurrencyText(item.currencyPrice)
-        : storePriceText(item.price)
-    );
+    price.textContent = owned ? 'OWNED' : storePriceOf(item);
     foot.appendChild(price);
+
+    /* The pass is sold here as well as on its own screen, and it is the one
+       product in the case that is not worn. Owned, it has no EQUIP to offer,
+       so it gets the OWNED above and no dead control beside it. */
+    const wearable = !!storeSlotOf(item.id, item.type);
+    if (inside && owned && !wearable) {
+      card.appendChild(foot);
+      grid.appendChild(card);
+      continue;
+    }
 
     const act = document.createElement('button');
     act.className = 'mini-btn';
@@ -2156,9 +2202,9 @@ function storeRenderGrid() {
       act.addEventListener('click', () => storeEquip(item.id, item.type));
     } else {
       act.textContent = ACCOUNT.checkingOut ? 'WAIT…' : 'BUY';
-      act.disabled = ACCOUNT.checkingOut || !item.currencyAvailable;
+      act.disabled = ACCOUNT.checkingOut || !storePayWith(item);
       act.setAttribute('aria-label', 'Buy ' + item.name);
-      act.addEventListener('click', () => storeSpend(item.id));
+      act.addEventListener('click', () => storeCheckout(item));
     }
     foot.appendChild(act);
     card.appendChild(foot);
@@ -2595,9 +2641,7 @@ function battlepassRefresh() {
 function bpCatalogProduct() {
   if (!ACCOUNT.items) return null;
   for (const item of ACCOUNT.items)
-    if (item.id === BP_PRODUCT_ID)
-      return item.currencyAvailable === true ||
-        (item.currencyPrice === null && item.available === true) ? item : null;
+    if (item.id === BP_PRODUCT_ID) return storePayWith(item) ? item : null;
   return null;
 }
 
@@ -2622,9 +2666,14 @@ function battlepassBuy() {
   /* The button is only offered when the catalog lists the product, but the
      catalog can change under an open screen; a product that left is not a
      checkout that should start. */
-  if (!bpCatalogProduct()) return;
-  storeSpend(BP_PRODUCT_ID);
-  /* storeSpend set ACCOUNT.checkingOut before returning, so this redraw is
+  const product = bpCatalogProduct();
+  if (!product) return;
+  /* Paid with money, the checkout leaves the page and comes back to it, and
+     the marker is how the return is recognised as one. Paid with Pastels
+     nothing leaves, so there is no return to mark. */
+  if (storePayWith(product) === 'money') bpReturnMark();
+  storeCheckout(product);
+  /* The checkout set ACCOUNT.checkingOut before returning, so this redraw is
      what puts the button on WAIT… until the checkout chain's finally
      redraws it back. */
   battlepassRenderCta();
@@ -2849,10 +2898,9 @@ function battlepassRenderCta() {
   }
 
   box.className = 'bp-cta';
-  /* storePriceText returns '' for the { unitAmount, currency } shape the
-     catalog sends until the display fix lands, so the price is only
-     appended when there is one to append. */
-  const price = storeCurrencyText(product.currencyPrice);
+  /* Whichever of the two the relay is selling it in, and nothing appended at
+     all if it answered with neither a price nor a balance to read. */
+  const price = storePriceOf(product);
   box.appendChild(bpCtaText('Unlock the premium lane',
     'All 25 premium rewards — and the tier-25 grand prize.'));
   const btn = bpButton(
