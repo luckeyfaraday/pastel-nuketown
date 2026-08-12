@@ -2563,6 +2563,54 @@ test('a signed-out load does not ask the relay for a season nobody owns', async 
   assert.equal(ctx.calls.filter(c => c.url.endsWith('/battlepass/me')).length, 0);
 });
 
+test('a landscape phone keeps the wordmark legibly the wordmark', () => {
+  /* 2.9vw was 25px on an 873-point phone. Baloo 2 is a display face and at
+     25px it flattens out — the reported symptom was "why is the mobile font
+     different", and the font is not different: it measures as Baloo 2 at every
+     width. It was simply small enough to stop looking like itself. */
+  const short = mediaBlock('@media (min-width:640px) and (max-height:480px){', '#title.hud');
+  assert.ok(short, 'the short-screen rules are gone from src/00-head.html');
+  const h1 = short.match(/#title\.hud h1\{font-size:clamp\((\d+)px,([\d.]+)vw,(\d+)px\)/);
+  assert.ok(h1, 'the short-screen wordmark no longer sets a clamped size');
+  assert.ok(Number(h1[1]) >= 26,
+    'the wordmark floor is back under the size where the lettering stops reading');
+  /* The slope matters as much as the floor: the floor only bites under about
+     650 points of width, and the phones in question are wider than that. */
+  const atTypicalPhone = Math.max(Number(h1[1]), 873 * Number(h1[2]) / 100);
+  assert.ok(atTypicalPhone >= 32,
+    'an 873-point phone draws the wordmark at only ' + Math.round(atTypicalPhone) + 'px');
+});
+
+test('the short-screen economy is the column\'s, not the corner layout\'s', () => {
+  /* The tagline, the counts and the social link are dropped at 430 points of
+     height. That was written for the column — one stack down the middle, where
+     everything charges the stack its own height. The HUD is corners: the counts
+     sit in the top-right cell beside the gear, in a row already sized by the
+     player card opposite them, and the social link is absolutely positioned in
+     the bottom-left and has never taken part in the layout. Hiding those two
+     bought no height and cost the player the matches-played count — the one
+     number on the title screen that says somebody else is here.
+
+     So the rules are scoped to the column. If the `:not(.hud)` comes off, a
+     landscape phone silently loses its furniture again. */
+  const shortest = mediaBlock('@media(max-height:430px){');
+  assert.ok(shortest, 'the 430-point rules are gone from src/00-head.html');
+  /* Read as selectors rather than as substrings: `.sub{display:none}` is a
+     substring of the scoped rule too, so a text search cannot tell the fix
+     from the bug. */
+  const selectors = shortest.split('}')
+    .map(rule => rule.slice(0, rule.indexOf('{')).trim())
+    .filter(Boolean)
+    .flatMap(list => list.split(',').map(one => one.trim()));
+
+  for (const sel of ['.sub', '.online-count', '.social']) {
+    assert.ok(shortest.includes('#title:not(.hud) ' + sel + '{display:none}'),
+      sel + ' is hidden on a short screen without asking which layout is on');
+    assert.ok(!selectors.includes(sel),
+      sel + ' is still hidden unscoped, which reaches the wide layout too');
+  }
+});
+
 test('the wide title screen still goes away when the match starts', () => {
   /* The bug this closes: `.screen.off{display:none}` is two classes and
      `#title.hud` is an id and a class, so the wide layout quietly outranked

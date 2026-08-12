@@ -810,8 +810,17 @@ body.touch .sens{display:none}
   #title.hud #modePicker{gap:6px}
   #title.hud .mode-swap{min-height:32px;padding:6px 10px 7px;font-size:10px}
   /* The wordmark takes a fifth of a 406-point window at the size it wants.
-     It is a caption up here, not the subject. */
-  #title.hud h1{font-size:clamp(20px,2.9vw,32px);padding-bottom:14px}
+     It is a caption up here, not the subject.
+
+     But 2.9vw is 25px on an 873-point phone, and Baloo 2 is a display face:
+     at 25px, with the tracking scaled down to match, the round shapes flatten
+     and it stops reading as the wordmark — it reads as a page that failed to
+     load its font. It did not; the family measures the same at every width.
+     A caption still has to be legibly the same lettering as the thing it
+     captions, so both the floor and the slope come up. Still a third of what
+     a desktop draws, and the row is `auto`: what this takes comes out of the
+     character, which is the one thing on this screen with room to give. */
+  #title.hud h1{font-size:clamp(26px,4vw,42px);padding-bottom:14px}
   #title.hud .sub{font-size:9px;letter-spacing:.28em}
   #title.hud #menuNote{font-size:10px;max-width:44ch}
   /* The gap under the player card is headroom for the relay's status line,
@@ -884,9 +893,25 @@ body.touch .sens{display:none}
 @media(max-height:430px){
   #title{padding-top:8px}
   #title h1{font-size:38px}
-  #title .sub{display:none}
-  .online-count{display:none}
-  .social{display:none}       /* landscape phone: the card is already over budget */
+  /* These three predate the wide layout and are scoped to the column they were
+     written for. The column is one stack down the middle of the window, so
+     everything in it costs the stack its own height and the tagline, the
+     counts and the social link are the cheapest things to drop.
+
+     The HUD is corners. `.hud-meta` is the top-right cell beside the gear and
+     the row is sized by the player card opposite it, so the counts fall in a
+     space that is already there; `.social` is absolutely positioned in the
+     bottom-left and has never taken part in the layout at all. Hiding those
+     two buys nothing and costs the player the thing they came back to see —
+     how many matches this game has played is the one number on the screen
+     saying somebody else is here. Only the tagline sits in the middle column
+     and genuinely charges rent, and even that is 9px here.
+
+     So: the column keeps the economy it was given, and the layout with room
+     keeps its furniture. */
+  #title:not(.hud) .sub{display:none}
+  #title:not(.hud) .online-count{display:none}
+  #title:not(.hud) .social{display:none}
   .identity{padding-top:3px;padding-bottom:3px}
   .menu-btn{padding-top:8px;padding-bottom:10px}
   .menu-btn.alt,#menu:not(.pause) #play{padding-top:8px;padding-bottom:10px}
