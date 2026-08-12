@@ -5,11 +5,6 @@ import {
   STORE_PRODUCTS,
   STORE_PRODUCTS_BY_ID
 } from './cosmetics.mjs';
-import {
-  CURRENCY_PACKS,
-  CURRENCY_PACKS_BY_ID,
-  GAME_CURRENCY
-} from './currency.mjs';
 import { HttpError } from './http-utils.mjs';
 
 function requireString(value, label) {
@@ -82,8 +77,6 @@ export function createShopService(options) {
   if (typeof fetchImpl !== 'function') throw new Error('The shop needs fetch().');
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const priceIds = options.priceIds || {};
-  const currencyPriceIds = options.currencyPriceIds || {};
-  const currencyOnly = options.currencyOnly === true;
   const stripeApiBase = options.stripeApiBase || 'https://api.stripe.com/v1';
   const webhookToleranceSeconds = options.webhookToleranceSeconds || 300;
   const priceCacheMs = options.priceCacheMs || 5 * 60 * 1000;
@@ -188,7 +181,7 @@ export function createShopService(options) {
       const priceId = priceIds[product.id];
       let price = null;
       let available = false;
-      if (!currencyOnly && typeof priceId === 'string' && priceId) {
+      if (typeof priceId === 'string' && priceId) {
         try {
           const stripePrice = await loadPrice(priceId);
           /* A price Stripe answered for counts as reachable whether or not the
@@ -215,11 +208,6 @@ export function createShopService(options) {
         productKind: product.type === 'battlepass' ? 'battlepass' : 'cosmetic',
         available,
         price,
-        ...(currencyOnly ? {
-          currencyPrice: product.currencyPrice,
-          currencyAvailable: Number.isSafeInteger(product.currencyPrice) &&
-            product.currencyPrice > 0
-        } : {}),
         ...(userId ? { owned: owned.has(product.id) } : {})
       };
     }));
@@ -227,113 +215,7 @@ export function createShopService(options) {
     return items;
   }
 
-  async function wallet(userId) {
-    const packs = await Promise.all(CURRENCY_PACKS.map(async (pack) => {
-      const priceId = currencyPriceIds[pack.id];
-      let price = null;
-      let available = false;
-      if (typeof priceId === 'string' && priceId) {
-        try {
-          const stripePrice = await loadPrice(priceId);
-          available = stripePrice.active !== false;
-          if (available) {
-            price = {
-              unitAmount: stripePrice.unit_amount,
-              currency: stripePrice.currency
-            };
-          }
-        } catch (error) {
-          warnAboutPrice(priceId, pack.id, error);
-        }
-      }
-      return {
-        id: pack.id,
-        displayName: pack.displayName,
-        amount: pack.amount,
-        available,
-        price
-      };
-    }));
-    return {
-      currency: GAME_CURRENCY,
-      balance: db.currencyBalance(userId),
-      packs
-    };
-  }
-
-  async function currencyCheckout(userId, packId) {
-    const pack = CURRENCY_PACKS_BY_ID.get(packId);
-    if (!pack)
-      throw new HttpError(400, 'unknown_currency_pack', 'That currency pack does not exist.');
-    const priceId = currencyPriceIds[pack.id];
-    if (typeof priceId !== 'string' || !priceId)
-      throw new HttpError(409, 'currency_pack_unavailable', 'That currency pack is not available.');
-    const stripePrice = await loadPrice(priceId);
-    if (stripePrice.active === false)
-      throw new HttpError(409, 'currency_pack_unavailable', 'That currency pack is not available.');
-
-    const form = new URLSearchParams({
-      mode: 'payment',
-      'line_items[0][price]': priceId,
-      'line_items[0][quantity]': '1',
-      success_url: `${appOrigin.replace(/\/$/, '')}/?checkout=success`,
-      cancel_url: `${appOrigin.replace(/\/$/, '')}/?checkout=cancelled`,
-      client_reference_id: userId,
-      'metadata[purchase_type]': 'currency_pack',
-      'metadata[user_id]': userId,
-      'metadata[currency_pack_id]': pack.id,
-      'payment_intent_data[metadata][purchase_type]': 'currency_pack',
-      'payment_intent_data[metadata][user_id]': userId,
-      'payment_intent_data[metadata][currency_pack_id]': pack.id
-    });
-    const version = db.currencyTopupVersion(userId, pack.id);
-    const identity = `pastel-nuketown-currency\0${userId}\0${pack.id}`;
-    const idempotencyKey = createHash('sha256')
-      .update(version === 0 ? identity : `${identity}\0${version}`, 'utf8')
-      .digest('hex');
-    const session = await stripeRequest('/checkout/sessions', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        'idempotency-key': idempotencyKey
-      },
-      body: form
-    });
-    if (!session || typeof session.url !== 'string' || !session.url.startsWith('https://'))
-      throw new HttpError(502, 'stripe_unavailable', 'Stripe did not return a checkout URL.');
-    return { url: session.url };
-  }
-
-  function purchaseWithCurrency(userId, cosmeticId) {
-    const product = STORE_PRODUCTS_BY_ID.get(cosmeticId);
-    if (!product)
-      throw new HttpError(400, 'unknown_cosmetic', 'That cosmetic does not exist.');
-    if (!Number.isSafeInteger(product.currencyPrice) || product.currencyPrice <= 0)
-      throw new HttpError(409, 'cosmetic_unavailable', 'That cosmetic is not available for purchase.');
-    const purchasedAt = now();
-    const result = db.purchaseWithCurrency({
-      userId,
-      cosmeticId: product.id,
-      amount: product.currencyPrice,
-      purchasedAt,
-      apply: () => onEntitlementGranted(userId, product.id, purchasedAt)
-    });
-    if (!result.purchased) {
-      if (result.reason === 'already_owned')
-        throw new HttpError(409, 'already_owned', 'You already own that cosmetic.');
-      throw new HttpError(409, 'insufficient_funds', 'You do not have enough Pastels.');
-    }
-    return {
-      purchased: true,
-      cosmeticId: product.id,
-      balance: result.balance,
-      rewardsUnlocked: result.rewardsUnlocked
-    };
-  }
-
   async function checkout(userId, cosmeticId) {
-    if (currencyOnly)
-      throw new HttpError(410, 'direct_checkout_disabled', 'Items are purchased with Pastels.');
     const cosmetic = STORE_PRODUCTS_BY_ID.get(cosmeticId);
     if (!cosmetic)
       throw new HttpError(400, 'unknown_cosmetic', 'That cosmetic does not exist.');
@@ -402,27 +284,6 @@ export function createShopService(options) {
     const cosmeticId = typeof metadata.cosmetic_id === 'string'
       ? metadata.cosmetic_id
       : null;
-    if (metadata.purchase_type === 'currency_pack') {
-      const pack = CURRENCY_PACKS_BY_ID.get(metadata.currency_pack_id);
-      const checkoutSessionId = stripeReference(object.id);
-      if (!userId || !db.getUser(userId) || !pack || !checkoutSessionId)
-        return { action: 'ignored' };
-      const credited = db.creditCurrencyTopup({
-        userId,
-        packId: pack.id,
-        amount: pack.amount,
-        checkoutSessionId,
-        paymentIntentId: stripeReference(object.payment_intent),
-        creditedAt: now()
-      });
-      return {
-        action: credited.credited ? 'currency_credited' : 'ignored',
-        userId,
-        packId: pack.id,
-        amount: credited.credited ? pack.amount : 0,
-        balance: credited.balance
-      };
-    }
     /* Old or hand-built Stripe objects should be acknowledged, but they must
        never mint an item outside this catalog or for a user that does not
        exist. Retrying such an event forever cannot make it safer. */
@@ -491,12 +352,6 @@ export function createShopService(options) {
   function revokedCharge(object) {
     const purchase = purchaseOfCharge(object);
     const revokedAt = now();
-    const currency = db.reverseCurrencyTopup({
-      paymentIntentId: purchase.paymentIntentId,
-      reversedAt: revokedAt
-    });
-    if (currency.reversed)
-      return { action: 'currency_reversed', count: 1, ...currency };
     const rewardsRevoked = [];
     const revoked = db.revokePurchase({
       paymentIntentId: purchase.paymentIntentId,
@@ -529,12 +384,6 @@ export function createShopService(options) {
     const purchase = purchaseOfCharge(object);
     if (refundedInFull(purchase.charge)) return { action: 'ignored' };
     const restoredAt = now();
-    const currency = db.restoreCurrencyTopup({
-      paymentIntentId: purchase.paymentIntentId,
-      restoredAt
-    });
-    if (currency.restored)
-      return { action: 'currency_restored', count: 1, ...currency };
     const rewardsRestored = [];
     const restored = db.restorePurchase({
       paymentIntentId: purchase.paymentIntentId,
@@ -645,12 +494,5 @@ export function createShopService(options) {
       applyWebhookEvent(event));
   }
 
-  return {
-    catalog,
-    wallet,
-    checkout,
-    currencyCheckout,
-    purchaseWithCurrency,
-    webhook
-  };
+  return { catalog, checkout, webhook };
 }
