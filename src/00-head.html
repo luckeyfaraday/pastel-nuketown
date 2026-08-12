@@ -970,14 +970,6 @@ body.touch .sens{display:none}
 .store-sub{margin-top:4px;font-family:var(--disp);font-size:11px;font-weight:600;letter-spacing:.05em;
   color:var(--ink-soft);overflow-wrap:anywhere}
 #storeClose{flex:none;min-height:44px}
-#storeWallet{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;
-  border:2px solid var(--ink);border-radius:12px;background:rgba(255,248,224,.76)}
-#storeWallet[hidden]{display:none}
-.wallet-balance{display:flex;flex-direction:column;gap:1px;flex:none;font-family:var(--disp)}
-.wallet-balance span{font-size:8px;font-weight:700;letter-spacing:.14em;color:var(--ink-soft)}
-.wallet-balance b{font-size:17px;letter-spacing:.04em}
-#storePacks{display:flex;justify-content:flex-end;gap:6px;min-width:0;overflow-x:auto;padding:2px}
-#storePacks .mini-btn{flex:none;min-height:38px;padding:6px 9px 7px;font-size:9px;white-space:nowrap}
 #storeNote{font-family:var(--disp);font-size:12px;font-weight:600;letter-spacing:.035em;
   color:#4f7389;text-align:center}
 #storeNote[data-kind="error"]{color:#b8406a}
@@ -1095,10 +1087,6 @@ body.touch .sens{display:none}
    draw a ring around the whole card. */
 .store-card:focus{outline:none}
 .store-card:focus-visible{outline:3px solid #d4638f;outline-offset:3px}
-@media(max-width:460px){
-  #storeWallet{align-items:flex-start;flex-direction:column}
-  #storePacks{width:100%;justify-content:flex-start}
-}
 
 /* A phone in portrait: two columns is the narrowest a card can be and still
    fit a name, and one column would put BUY six scrolls apart. */
