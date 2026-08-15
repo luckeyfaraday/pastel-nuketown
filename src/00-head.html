@@ -363,6 +363,12 @@ body.touch .sens{display:none}
   font-family:var(--disp);font-size:14px}
 #roster li i{width:17px;height:17px;border:2px solid var(--ink);border-radius:5px}
 #roster li b{font-size:10px;letter-spacing:.1em;color:var(--ink-soft)}
+/* Sits between the roster and the clock, the two things it depends on: which
+   map the room can agree on, and when it lands. Quieter than the room code —
+   it is information, not the thing you read out to a friend. */
+.lobby-map{display:flex;align-items:baseline;justify-content:center;gap:9px;margin-top:13px}
+.lobby-map small{font-family:var(--disp);font-size:11px;letter-spacing:.14em;color:var(--ink-soft)}
+#lobbyMap{font-family:var(--disp);font-size:16px;letter-spacing:.11em;color:var(--ink)}
 #lobbyCountdown{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:15px;
   font-family:var(--disp);font-size:13px;font-weight:700;letter-spacing:.05em;color:#4f7389;text-align:center}
 #lobbyCountdown[hidden]{display:none}

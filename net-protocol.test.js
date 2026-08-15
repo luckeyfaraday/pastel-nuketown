@@ -165,14 +165,14 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 10);
+  assert.equal(Protocol.VERSION, 11);
   assert.equal(Protocol.MAX_PLAYERS, 9);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
 
-test('v10 envelopes are accepted and the breaking v9 envelope is refused', () => {
+test('v11 envelopes are accepted and the breaking v10 envelope is refused', () => {
   assert.equal(Protocol.sanitizeInput(validInput(), -1, -1).ok, true);
-  const old = Protocol.sanitizeInput(validInput({ v: 9 }), -1, -1);
+  const old = Protocol.sanitizeInput(validInput({ v: 10 }), -1, -1);
   assert.equal(old.ok, false);
   assert.match(old.error, /version/);
 });
@@ -621,7 +621,7 @@ test('HTTP server serves the game and protocol while rejecting other paths', asy
   assert.equal(missing.status, 404);
 });
 
-test('relay fixes the room map and refuses incompatible or v9 peers before seating them',
+test('relay fixes the room map and refuses incompatible or v10 peers before seating them',
     async (t) => {
   let nextId = 0;
   const { relay, port } = await startRelay(t, {
@@ -637,7 +637,7 @@ test('relay fixes the room map and refuses incompatible or v9 peers before seati
 
   old.send({ t: 'create', v: 9, name: 'Old Host' });
   assert.equal((await old.next('error')).code, 'version');
-  assert.equal(relay.rooms.size, 0, 'a v9 peer must not create or enter a v10 room');
+  assert.equal(relay.rooms.size, 0, 'a v10 peer must not create or enter a v11 room');
 
   host.send({
     t: 'create', v: Protocol.VERSION, name: 'Host', map: 'terminal',
@@ -661,6 +661,130 @@ test('relay fixes the room map and refuses incompatible or v9 peers before seati
   });
   assert.equal((await compatible.next('room')).map, 'terminal');
   assert.equal(relay.rooms.get(roomReply.room).members.size, 2);
+});
+
+test('a room rotates to the next map between rounds', async (t) => {
+  let nextId = 0;
+  const { relay, port } = await startRelay(t, {
+    idFactory: () => `rotate-peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 0
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+
+  host.send({
+    t: 'create', v: Protocol.VERSION, name: 'Host',
+    map: 'nuketown', maps: ['nuketown', 'terminal']
+  });
+  const room = await host.next('room');
+  await host.next('members');
+  const epoch = room.authorityEpoch;
+
+  guest.send({
+    t: 'join', v: Protocol.VERSION, room: room.room, name: 'Guest',
+    maps: ['nuketown', 'terminal']
+  });
+  await guest.next('room');
+  assert.equal((await guest.next('members')).nextMap, 'nuketown',
+    'the first round is played on the map the room was created on');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: epoch });
+  const first = await guest.next('start');
+  assert.equal(first.round, 1);
+  assert.equal(first.map, 'nuketown');
+
+  /* A drop-in lands mid-round, where the only honest forecast is none: the
+     map it is joining is already in the handshake it just received. */
+  const dropIn = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await dropIn.opened;
+  dropIn.send({
+    t: 'join', v: Protocol.VERSION, room: room.room, name: 'Late',
+    maps: ['nuketown', 'terminal']
+  });
+  assert.equal((await dropIn.next('room')).map, 'nuketown');
+  assert.equal((await dropIn.next('members')).nextMap, null,
+    'a round in progress has no next map to announce');
+  /* The same broadcast reached everyone already seated, so take it off the
+     guest's queue before waiting for the one that follows the round. */
+  await guest.next('members');
+
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: epoch, round: 1, winner: null
+  });
+  await guest.next('lobby');
+  assert.equal((await guest.next('members')).nextMap, 'terminal',
+    'the lobby says where the next round lands before it starts');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: epoch });
+  const second = await guest.next('start');
+  assert.equal(second.round, 2);
+  assert.equal(second.map, 'terminal', 'the round after the first moves on');
+  assert.equal(relay.rooms.get(room.room).map, 'terminal',
+    'and the room moves with it, so snapshots are measured against the new map');
+
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: epoch, round: 2, winner: null
+  });
+  await guest.next('lobby');
+  await guest.next('members');
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: epoch });
+  assert.equal((await guest.next('start')).map, 'nuketown',
+    'the pool is a loop, not a queue that runs out');
+});
+
+test('rotation skips a map somebody in the room cannot build', async (t) => {
+  let nextId = 0;
+  const { relay, port } = await startRelay(t, {
+    idFactory: () => `skip-peer-${++nextId}`,
+    roomRandom: () => 0,
+    autoStartMs: 0
+  });
+
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const guest = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([host.opened, guest.opened]);
+
+  host.send({
+    t: 'create', v: Protocol.VERSION, name: 'Host',
+    map: 'nuketown', maps: ['nuketown', 'terminal']
+  });
+  const room = await host.next('room');
+  await host.next('members');
+  const epoch = room.authorityEpoch;
+
+  /* An older page: it can play the room's map, so it is welcome, but the
+     room must not rotate somewhere it cannot follow. */
+  guest.send({
+    t: 'join', v: Protocol.VERSION, room: room.room, name: 'Older Page',
+    maps: ['nuketown']
+  });
+  await guest.next('room');
+  await guest.next('members');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: epoch });
+  assert.equal((await host.next('start')).map, 'nuketown');
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: epoch, round: 1, winner: null
+  });
+  assert.equal((await host.next('members')).nextMap, 'nuketown',
+    'the rotation is worth less than the player it would strand');
+
+  host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: epoch });
+  assert.equal((await host.next('start')).map, 'nuketown');
+  assert.equal(relay.rooms.get(room.room).map, 'nuketown');
+
+  host.send({
+    t: 'lobby', v: Protocol.VERSION, authorityEpoch: epoch, round: 2, winner: null
+  });
+  await host.next('members');
+  guest.ws.close();
+  const alone = await host.next(
+    (message) => message.t === 'members' && message.members.length === 1);
+  assert.equal(alone.nextMap, 'terminal',
+    'and resumes the moment the room can follow it again');
 });
 
 test('room relay enforces authoritative rounds for start, input, snapshots, events, and lobby', async (t) => {
@@ -721,6 +845,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     v: Protocol.VERSION,
     authorityEpoch: 1,
     round: 1,
+    map: 'nuketown',
     members: [
       { id: 'peer-1', name: 'Host', role: 'host', slot: 0 },
       { id: 'peer-2', name: 'Guest', role: 'guest', slot: 1 }

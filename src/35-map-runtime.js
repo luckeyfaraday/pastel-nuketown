@@ -52,9 +52,11 @@ function setActiveMap(id) {
    ===================================================================== */
 let MAP_ROTATE_PENDING = false;
 
-/* Only in solo. In a room the map is the host's to announce — a guest that
-   rotated on its own would be playing different geometry from everyone
-   else, which is the whole failure the handshake exists to prevent. */
+/* Only in solo. A room rotates as well, but the relay announces it and every
+   page adopts it out of the round-start message — the relay is what decides a
+   round has begun, so it is also what decides what the round is played on. A
+   peer that rotated on its own instead would be playing different geometry
+   from everyone else, which is the whole failure the handshake prevents. */
 function mapRotationIsOurs() {
   return typeof NET !== 'object' || !NET || NET.mode === 'solo';
 }

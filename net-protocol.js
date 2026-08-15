@@ -14,7 +14,14 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  /* 10: map identity crosses the room handshake and authoritative state. A
+  /* 11: the room's map can change between rounds, so it is announced with
+     every round start rather than fixed at the handshake. A version 10 peer
+     reads a start message with no map in it, keeps the world it already has,
+     and then rejects every snapshot of the new round as belonging to another
+     map — a lobby of frozen screens nobody can explain. The field is only
+     safe to add alongside a peer that knows to rebuild on it.
+
+     10: map identity crosses the room handshake and authoritative state. A
      version 9 peer would ignore it, validate Terminal positions against
      Nuketown bounds, and then play a different world from the room, so the
      two versions must never share a room.
@@ -44,7 +51,7 @@
      version 5 host receiving a mid-round roster change seats nobody, and the
      arrival becomes a ghost sending input no authority ever applies. Refusing
      the handshake is the only honest outcome, so old and new must not mix. */
-  var VERSION = 10;
+  var VERSION = 11;
   /* Nine seats, because nine is how many combatants the match runs. Any
      smaller and the shortfall is made up with bots no matter how popular the
      room gets, which is the one thing a full room should not have to do. */

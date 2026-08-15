@@ -836,6 +836,14 @@ export function createRelayServer(options = {}) {
       t: 'members',
       v: Protocol.VERSION,
       members: memberList(room),
+      /* What a round starting now would be played on, so the lobby can say so
+         instead of leaving the swap to be discovered at the whistle. A
+         forecast rather than a promise: it is computed from the roster, and
+         the roster is exactly what changes between here and the start, which
+         is why it rides the roster message and is recomputed every time.
+         Withheld mid-round, where the only honest answer is the map already
+         being played. */
+      nextMap: room.started ? null : upcomingMap(room),
       autoStartIn: autoStartRemaining(room)
     });
 
@@ -900,8 +908,53 @@ export function createRelayServer(options = {}) {
     return Math.max(0, room.autoStartAt - Date.now());
   }
 
+  /* ---- map rotation ------------------------------------------------------
+
+     Between rounds the room moves to the next map, the way a solo session
+     already does. The relay announces it because the relay is what starts
+     rounds: a host whose page is asleep gets started without, and a room
+     whose map could only move when its host was awake would sit on one map
+     for exactly the hosts least likely to notice.
+
+     The order is the host's announced catalog, in the order it sent it. The
+     relay still never learns what a map *is* — it walks a list of opaque ids
+     and checks that everyone here claimed the one it lands on — so a page
+     that adds a third map rotates through it with no relay deploy at all. */
+  function everyMemberSupports(room, id) {
+    for (const member of room.members.values())
+      if (!member.supportedMaps.includes(id)) return false;
+    return true;
+  }
+
+  /* The map the next round will use. Before the first round that is simply
+     the map the room was created on: rotation is what happens *between*
+     rounds, and nobody has played anything yet. */
+  function upcomingMap(room) {
+    if (room.round < 1) return room.map;
+    const pool = room.host ? room.host.supportedMaps : [];
+    const at = pool.indexOf(room.map);
+    /* A host that cannot build the room's own map is a migration that should
+       not have happened, not a rotation decision. Leave the room where it is
+       and let the round start; the snapshot checks will speak up if it is
+       really wrong. */
+    if (at === -1) return room.map;
+    /* Stops one short of a lap, so the answer is never the map already up and
+       a pool of one never rotates. Skipping a map nobody else can build keeps
+       a room playable with mixed pages rather than dropping whoever is
+       behind — the rotation is not worth a player. */
+    for (let step = 1; step < pool.length; step++) {
+      const candidate = pool[(at + step) % pool.length];
+      if (everyMemberSupports(room, candidate)) return candidate;
+    }
+    return room.map;
+  }
+
   function startRound(room) {
     clearAutoStart(room);
+    /* Before the round number moves, and never once it has: room.map is what
+       every snapshot in the round about to start is measured against, here
+       and on every page in the room. */
+    room.map = upcomingMap(room);
     room.started = true;
     room.round++;
     room.latestSnapshot = null;
@@ -933,6 +986,7 @@ export function createRelayServer(options = {}) {
       v: Protocol.VERSION,
       authorityEpoch: room.authorityEpoch,
       round: room.round,
+      map: room.map,
       members: memberList(room)
     }, true);
   }
@@ -995,7 +1049,9 @@ export function createRelayServer(options = {}) {
     peer.slot = claimSlot(room);
     peer.userId = identity.userId;
     peer.cosmetics = Protocol.sanitizeCosmetics(identity.cosmetics, catalogAcceptsCosmetic);
-    peer.supportedMaps = new Set(supportedMaps);
+    /* Kept in the order the page sent it rather than as a set, because for the
+       host that order is the rotation — see upcomingMap(). */
+    peer.supportedMaps = supportedMaps.slice();
     peer.lastSeq = -1;
     /* Arriving is activity. A drop-in gets the full grace period to find the
        deploy card, and nobody is judged on time spent before they were here. */
@@ -1829,7 +1885,7 @@ export function createRelayServer(options = {}) {
     peer.name = '';
     peer.userId = null;
     peer.cosmetics = Protocol.sanitizeCosmetics(null);
-    peer.supportedMaps = new Set();
+    peer.supportedMaps = [];
     peer.lastSeq = -1;
   }
 
@@ -1898,7 +1954,7 @@ export function createRelayServer(options = {}) {
     const attempted = room.migrating ? room.migrating.attempted : new Set();
     for (const peer of room.members.values()) {
       if (peer.role === 'guest' && peer.alive &&
-          peer.supportedMaps.has(room.map) && !attempted.has(peer.id)) return peer;
+          peer.supportedMaps.includes(room.map) && !attempted.has(peer.id)) return peer;
     }
     return null;
   }
@@ -2103,7 +2159,7 @@ export function createRelayServer(options = {}) {
       room: null,
       slot: -1,
       cosmetics: Protocol.sanitizeCosmetics(null),
-      supportedMaps: new Set(),
+      supportedMaps: [],
       lastSeq: -1,
       alive: true,
       cleanedUp: false,

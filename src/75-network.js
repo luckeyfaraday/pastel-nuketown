@@ -116,6 +116,7 @@ const NET = {
   members: [],
   authorityEpoch: 0,
   round: 0,
+  nextMap: null,                // what the relay says the next round is on
   wanted: null,
   manualClose: false,
   starting: false,
@@ -908,6 +909,21 @@ function netRenderMembers() {
   }
   const count = document.getElementById('rosterCount');
   if (count) count.textContent = NET.members.length + ' / ' + (NETP ? NETP.MAX_PLAYERS : 9);
+  netRenderLobbyMap();
+}
+
+/* The lobby's answer to the title screen's MAP card: a readout of where the
+   next round lands, so a room that is about to change map says so before it
+   does it. Falls back to the map underfoot, which is what the next round uses
+   when there is nothing else in the pool everybody can build. */
+function netRenderLobbyMap() {
+  const el = document.getElementById('lobbyMap');
+  if (!el) return;
+  const id = NET.nextMap || netActiveMapId();
+  let spec = null;
+  try { spec = id ? MAPS.get(id) : null; } catch (error) {}
+  const meta = (spec && spec.meta) || {};
+  el.textContent = meta.name || (id ? id.toUpperCase() : '—');
 }
 
 function netResetTransport() {
@@ -925,6 +941,7 @@ function netResetTransport() {
   NET.members = [];
   NET.authorityEpoch = 0;
   NET.round = 0;
+  NET.nextMap = null;
   NET.wanted = null;
   NET.starting = false;
   NET.inputSeq = 0;
@@ -1192,6 +1209,11 @@ function netHandleWire(raw) {
     const members = netCleanMembers(msg.members);
     if (!netIsMultiplayer() || !members || !members.some(member => member.id === NET.id)) return;
     NET.members = members;
+    /* An unknown id here is not worth ending a session over: it is a forecast
+       for a round that has not started, and the start message is where a map
+       this page cannot build actually becomes a problem. Forget it instead,
+       and the lobby falls back to naming the map it is standing in. */
+    NET.nextMap = netKnownMapId(msg.nextMap);
     netRenderMembers();
     netUpdateAutoStart(msg.autoStartIn);
     if (NET.phase === 'migrating' && netIsHost()) {
@@ -1218,8 +1240,21 @@ function netHandleWire(raw) {
         msg.authorityEpoch !== NET.authorityEpoch ||
         msg.round <= NET.round || !members ||
         !members.some(member => member.id === NET.id)) return;
+    /* The world is rebuilt before the round is accepted, never after. Every
+       snapshot in it is validated against the map this page is standing in,
+       so a page that starts the round on last round's geometry does not play
+       one bad frame — it rejects the entire round and freezes. The relay only
+       rotates to a map everyone announced, so failing here means this page
+       cannot build a map it said it could; ending the session says so, where
+       staying would leave a player watching a lobby that never starts. */
+    const map = netKnownMapId(msg.map);
+    if (!map || !netAdoptMap(map)) {
+      netEndSession('This round uses a map this page cannot build. Reload to continue.');
+      return;
+    }
     NET.round = msg.round;
     NET.members = members;
+    NET.nextMap = null;
     NET.starting = false;
     netBeginMatch();
     return;
