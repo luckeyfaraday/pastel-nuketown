@@ -297,6 +297,9 @@ body.touch .sens{display:none}
 .mode-picker-label{display:block;margin-bottom:6px;font-family:var(--disp);font-size:11px;font-weight:700;
   letter-spacing:.14em;color:var(--ink-soft)}
 .mode-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+/* The map row is however many maps are in the pool plus ROTATE, so it sizes
+   itself rather than assuming the mode row's two. */
+.map-options{grid-template-columns:repeat(auto-fit,minmax(92px,1fr));margin-top:8px}
 .mode-option{min-width:0;min-height:50px;padding:6px 7px 7px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:2px;white-space:normal;line-height:1.05;font-size:11px}
 .mode-option span{font-weight:800;letter-spacing:.06em}
@@ -694,13 +697,15 @@ body.touch .sens{display:none}
 #title.hud #modePicker{grid-area:mode;align-self:end;justify-self:center;
   width:min(clamp(300px,44vw,760px),100%);display:flex;flex-direction:column;
   gap:8px;text-align:center;padding-bottom:2px}
-/* The two cards sit side by side; CHANGE MODE stays under BOTH of them
-   rather than beside them, because it belongs to the mode and the map has
-   no control at all. Hence a row wrapper instead of turning the picker
-   itself into a row, which swept the button into the same line. */
-.card-row{display:contents}
-#title.hud .card-row{display:flex;flex-direction:row;align-items:stretch;gap:10px}
-#title.hud .card-row>.mode-card{flex:1 1 0;min-width:0}
+/* The two cards sit side by side, and each one now owns a button, so the
+   swaps ride in a row of their own that lines up under them. Row wrappers
+   rather than turning the picker itself into a row, which swept every child
+   into the same line. Both are display:contents outside the wide layout, so
+   the narrow column is untouched. */
+.card-row,.swap-row{display:contents}
+#title.hud .card-row,#title.hud .swap-row{display:flex;flex-direction:row;
+  align-items:stretch;gap:10px}
+#title.hud .card-row>.mode-card,#title.hud .swap-row>.mode-swap{flex:1 1 0;min-width:0}
 #title.hud .mode-picker-label{display:none}
 #title.hud .mode-options{position:absolute;width:1px;height:1px;overflow:hidden;
   clip-path:inset(50%);white-space:nowrap}
@@ -1818,14 +1823,15 @@ body.touch .touch-keys{display:flex}
         <small class="mode-card-goal" id="modeCardGoal">25 KILLS</small>
         <small class="mode-card-blurb" id="modeCardBlurb">Everyone for themselves. Be the last one standing.</small>
       </div>
-      <!-- The map is a rotation, not a choice, so this card is a readout and
-           not a control: no buttons under it, nothing to press. It says what
-           you are about to play, which is the only question it can answer. -->
+      <!-- The map is a choice now, the same as the mode: a card reading the
+           live state with controls under it. The goal line carries which of
+           the two you are looking at — UP NEXT when the rotation is picking,
+           SELECTED once you have. -->
       <div class="mode-card map-card" id="mapCard" data-map="nuketown" aria-hidden="true">
         <span class="mode-card-tag">MAP</span>
         <i class="mode-card-art"></i>
         <b class="mode-card-name" id="mapCardName">NUKETOWN</b>
-        <small class="mode-card-goal">UP NEXT</small>
+        <small class="mode-card-goal" id="mapCardGoal">UP NEXT</small>
         <small class="mode-card-blurb" id="mapCardBlurb">Two houses, one street, nowhere to hide.</small>
       </div>
       </div>
@@ -1839,7 +1845,16 @@ body.touch .touch-keys{display:flex}
           <small>20 CONFIRMS</small>
         </button>
       </div>
-      <button class="mini-btn mode-swap" id="modeSwap" type="button">CHANGE MODE</button>
+      <!-- Filled from the map registry at boot rather than written out here:
+           the pool is the registry's business, and a third map should not
+           mean a third button to remember. Empty until then, and it stays
+           empty on a page whose map runtime never loaded, which is exactly
+           the page that must not offer to switch maps. -->
+      <div class="mode-options map-options" id="mapOptions" role="group" aria-label="MAP"></div>
+      <div class="swap-row">
+        <button class="mini-btn mode-swap" id="modeSwap" type="button">CHANGE MODE</button>
+        <button class="mini-btn mode-swap" id="mapSwap" type="button">CHANGE MAP</button>
+      </div>
     </div>
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
@@ -6436,15 +6451,27 @@ function buildTerminalGeometry(ctx) {
      the Nuketown bus uses for its roof curve. */
   const CZ = 12.0, CR = 2.2;                        // centreline z, radius
   const cy = 4.3;                                   // fuselage axis height
+  /* Port and starboard are mirror images, so everything below is given as a
+     pair of SIGNED offsets off the centreline and sorted on the way in. */
+  const zbox = (x0, x1, y0, y1, oa, ob, color, opts) =>
+    B.box([x0, y0, CZ + Math.min(oa, ob)], [x1, y1, CZ + Math.max(oa, ob)], color, opts);
   H.ngonPrism(B, 'x', -12, 24, cy, CZ, CR, 14, C(TPAL.hull), 0.22);
   // nose cone and tail cone, tapered by two shorter prisms
   H.ngonPrism(B, 'x', 24, 26.4, cy, CZ, CR * 0.62, 14, C(TPAL.hull), 0.22);
   H.ngonPrism(B, 'x', -14.2, -12, cy + 0.5, CZ, CR * 0.55, 14, C(TPAL.hull), 0.22);
-  // cheatline: the one stripe that makes it read as an airliner
-  B.box([-13, cy - 0.55, CZ - CR - 0.04], [25, cy - 0.1, CZ + CR + 0.04],
-        C(TPAL.livery), { noEdge: true });
-  B.box([-13, cy - 1.0, CZ - CR - 0.03], [25, cy - 0.62, CZ + CR + 0.03],
-        C(TPAL.liveryB), { noEdge: true });
+  /* Cheatline: the one stripe that makes it read as an airliner. A SKIN on
+     each flank, never one box across the section — the cabin is walkable at
+     F1 and a full-width stripe lands as an opaque deck 0.9m above the floor
+     the player is standing on. From inside, that stripe was the floor, and
+     everything under it (your feet, pickups, the bottom half of every body)
+     was hidden behind it. The outer edges are where they were, so nothing
+     about the silhouette from outside changes. */
+  for (const dir of [-1, 1]) {
+    zbox(-13, 25, cy - 0.55, cy - 0.1, dir * (CR - 0.15), dir * (CR + 0.04),
+         C(TPAL.livery), { noEdge: true });
+    zbox(-13, 25, cy - 1.0, cy - 0.62, dir * (CR - 0.30), dir * (CR + 0.03),
+         C(TPAL.liveryB), { noEdge: true });
+  }
   // cabin windows
   for (let x = -8; x < 22; x += 1.9)
     for (const zz of [CZ - CR - 0.05, CZ + CR - 0.09])
@@ -6457,6 +6484,55 @@ function buildTerminalGeometry(ctx) {
                                 [-6, -3, CZ + CR - 0.1]])
     B.box([dx0 - 0.08, F1 - 0.05, zz - 0.06], [dx1 + 0.08, 5.5, zz + 0.16],
           C(TPAL.hallTrim));
+
+  /* ---- cabin liner ----------------------------------------------------
+     The hull above is a one-sided shell with no inner faces, and the spec's
+     cabin boxes are collision-only — the 'fuselage' case up top draws
+     nothing — so without this the cabin renders as open air: you stand on
+     nothing at F1 and see the whole map straight through the aircraft,
+     while everyone outside is looking at a solid plane. The cabin is a
+     walkable platform with three exits and it is where the jet bridge
+     lands, so it has to be an actual room.
+
+     None of it can sit on the spec's AABB. That is 2.2 half-width at every
+     height and the hull is a 14-gon of the same radius, so the hull is down
+     to 1.84 by the time you reach the door headers and a wall out there
+     punches straight through the curve. LZ comes off the camera instead:
+     collision stops a player 0.38 short of the AABB, so an eye never gets
+     past 1.52 off the centreline, and 1.75 keeps the wall clear of the view
+     while staying inside the hull. */
+  const LI = 1.70, LO = 1.78;                       // liner inner face, outer envelope
+  const LCY = 5.35;                                 // ceiling underside
+  /* Floor pan, plus a sill at each exit closing the strip out to whatever
+     the door lands on — wing root, jet bridge deck, airstairs, all at
+     |z - CZ| = 2.0. Stop there and not at the AABB: the wing tops are also
+     at F1, and an overlap would be two coplanar faces fighting. */
+  zbox(-6, 22, F1 - 0.06, F1, -1.9, 1.9, C(TPAL.slab), { top: C(0xfdf3ea) });
+  for (const [dx0, dx1, dir] of [[4, 8, -1], [14, 18, -1], [4, 8, 1], [-6, -3, 1]])
+    zbox(dx0, dx1, F1 - 0.06, F1, dir * 1.9, dir * 2.0, C(TPAL.slab), { top: C(0xfdf3ea) });
+  /* Side walls carry the openings the spec punched, and the ceiling doubles
+     as their header, so a gap reads as a door from the inside too. */
+  for (const [dir, runs, doors] of [
+    [-1, [[-6, 4], [8, 14], [18, 22]], [[4, 8], [14, 18]]],
+    [1,  [[-3, 4], [8, 22]],           [[-6, -3], [4, 8]]]
+  ]) {
+    for (const [wx0, wx1] of runs)
+      zbox(wx0, wx1, F1, LCY, dir * LI, dir * LO, C(TPAL.hall));
+    // and the windows again on the inner face: the outer ones are set in the
+    // hull, which is now behind this wall. Proud of it, or the two faces are
+    // coplanar and fight.
+    for (let x = -5.4; x < 21; x += 1.9)
+      if (!doors.some(d => x + 0.62 > d[0] && x < d[1]))
+        zbox(x, x + 0.62, cy + 0.42, cy + 0.86, dir * (LI - 0.02), dir * LI,
+             C(TPAL.pane), { noEdge: true });
+  }
+  for (const bx of [-6, 21.9])                      // aft and forward bulkheads
+    zbox(bx, bx + 0.1, F1, LCY, -LI, LI, C(TPAL.hallTrim));
+  /* The ceiling runs out to the walls' outer face, or the seam between them
+     is a slot you can see the sky through — the hull over it is culled from
+     in here. LCY is as high as that full width fits: the 14-gon has closed
+     to 1.78 by y = 5.5, and the crown is not a place to find that out. */
+  zbox(-6, 22, LCY, LCY + 0.08, -LO, LO, C(TPAL.hall));
 
   /* wings, raked toward the tip. solid() indexes its eight corners by bit —
      bit0 = x, bit1 = y, bit2 = z — so the near-z plane must be 0..3 and the
@@ -6492,14 +6568,24 @@ function buildTerminalGeometry(ctx) {
   }
 
   /* ================= JET BRIDGE ================= */
+  /* The deck first. The spec's 'bridge' boxes are collision-only like the
+     plane's, so CROSSING 3 — the map's signature chokepoint — was a walkway
+     you crossed on nothing but the ribs, with the hall floor 3.3m below you
+     through the gap. It runs out to the fuselage rather than stopping at the
+     spec's z = 9.8, so the step into the cabin lands on the plane's door
+     sill instead of a slot. */
+  B.box([14, F1 - 0.3, -9], [18, F1, CZ - 2.0], C(TPAL.slab), { top: C(0xfdf3ea) });
   // a ribbed tube on the deck the spec already made walkable
   for (let z = -8.6; z < 9.6; z += 1.5)
     H.arcBand(B, 'z', z, z + 0.36, 16.0, F1 + 0.05, 1.98, 2.16, 0, Math.PI, 10,
               C(TPAL.hallTrim), true);
   H.arcBand(B, 'z', -9, 9.8, 16.0, F1 + 0.05, 1.92, 2.02, 0, Math.PI, 12,
             C(TPAL.hall), true);
-  B.box([15.4, 0, -2.1], [16.6, F1, -0.7], C(TPAL.steel));      // support column
-  B.box([15.0, F1 - 0.32, -2.4], [17.0, F1, -0.4], C(TPAL.hallTrim));
+  /* The column itself is the spec's 'metal' solid, drawn with everything
+     else up top; the second one that used to stand here shared both of its
+     x planes and the pair fought all the way up. This is just the capital,
+     tucked under the deck it carries so no face is coplanar with either. */
+  B.box([15.0, F1 - 0.62, -2.4], [17.0, F1 - 0.25, -0.4], C(TPAL.hallTrim));
 
   /* ================= INTERIOR DRESSING ================= */
   // gate signage hanging off the mezzanine edge — the hall's only hot colour
@@ -6835,18 +6921,25 @@ function setActiveMap(id) {
 }
 
 /* =====================================================================
-   ROTATION
-   Map selection is a rotation, not a pick: a match ends and the next map
-   in the pool loads. Nobody chooses, so both maps actually get played and
-   the title screen keeps one card instead of a third control.
+   ROTATION, AND THE PICK THAT OUTRANKS IT
+   The default is a rotation: a match ends and the next map in the pool
+   loads, so both maps actually get played without anyone deciding. A
+   player who does want to decide pins one from the MAP card, and a pin
+   wins — a setting that quietly moved after every match would not be a
+   setting. ROTATE is one of the picker's choices rather than a separate
+   switch, so releasing the pin is the same gesture as making it.
 
    The swap is DEFERRED rather than done in endMatch, because endMatch
    leaves you standing in the map reading the scoreboard — rebuilding the
    world underneath that is the one moment it must not happen. The flag is
    spent by whichever comes first: returning to the title (so the card
    shows what is next) or pressing REMATCH straight from the over screen.
+
+   The pin is session state, like the match mode: neither is persisted, so
+   a reload starts both of them fresh.
    ===================================================================== */
 let MAP_ROTATE_PENDING = false;
+let MAP_PINNED_ID = null;             // null = rotate
 
 /* Only in solo. A room rotates as well, but the relay announces it and every
    page adopts it out of the round-start message — the relay is what decides a
@@ -6861,21 +6954,53 @@ function queueMapRotation() {
   if (mapRotationIsOurs()) MAP_ROTATE_PENDING = true;
 }
 
+/* A map whose render hook throws rolls back inside setActiveMap, so a broken
+   map costs the swap rather than the session. */
+function applyMapId(id) {
+  try { return setActiveMap(id) === true; } catch (error) { return false; }
+}
+
+/* Everything that can move the map as the title comes back up, in the one
+   order that is correct: a pin always wins, and the rotation only fires when
+   there is nothing pinned. One entry, so no caller can get that order wrong.
+
+   A pin outlives a room — the relay's map was adopted over the top of it —
+   so this is also where the choice comes back once the session is ours
+   again. Until then nothing moves: rebuilding the world under a room is the
+   failure the whole handshake exists to prevent. */
 function applyPendingMapRotation() {
-  if (!MAP_ROTATE_PENDING) return false;
+  const pending = MAP_ROTATE_PENDING;
   MAP_ROTATE_PENDING = false;
-  if (!mapRotationIsOurs() || typeof MAPS.nextId !== 'function') return false;
+  if (!mapRotationIsOurs()) return false;
+  if (MAP_PINNED_ID) return applyMapId(MAP_PINNED_ID);
+  if (!pending || typeof MAPS.nextId !== 'function') return false;
   const next = MAPS.nextId(ACTIVE_MAP_ID);
   if (next === ACTIVE_MAP_ID) return false;
-  /* A map whose render hook throws rolls back inside setActiveMap, so a
-     broken map costs the rotation rather than the session. */
-  try { return setActiveMap(next); } catch (error) { return false; }
+  return applyMapId(next);
+}
+
+function pinnedMapId() { return MAP_PINNED_ID; }
+
+/* The picker's one way in. `null` releases the pin and hands the map back to
+   the rotation from wherever it is standing. Swapping the world on the spot
+   is safe from here and nowhere else: the picker only exists on the title
+   screen, which is the same moment the deferred rotation waits for. */
+function chooseMapId(id) {
+  if (!mapRotationIsOurs()) return false;
+  MAP_ROTATE_PENDING = false;
+  if (id === null || id === undefined) { MAP_PINNED_ID = null; return true; }
+  if (!MAPS.get(id)) return false;
+  if (!applyMapId(id)) return false;
+  MAP_PINNED_ID = id;
+  return true;
 }
 
 /* Explicit assignments keep the API stable even though the implementation
    lives in a classic script with shared top-level lexical bindings. */
 globalThis.setActiveMap = setActiveMap;
 globalThis.activeMapId = activeMapId;
+globalThis.chooseMapId = chooseMapId;
+globalThis.pinnedMapId = pinnedMapId;
 </script>
 <script>/* ===== src/40-weapons.js ===== */
 /* =====================================================================
@@ -19450,6 +19575,74 @@ function syncMapCard() {
      stale name on the card is worse than an ugly one. */
   if (name) name.textContent = meta.name || id.toUpperCase();
   if (blurb) blurb.textContent = meta.blurb || '';
+  syncMapPicker();
+}
+
+/* Every map in the pool, then ROTATE. Built from the registry so a third map
+   arrives with a button already under it, and the null id at the end is the
+   release rather than a fourth kind of control. */
+function mapPickerOptions() {
+  const ids = (typeof MAPS === 'object' && MAPS && typeof MAPS.ids === 'function')
+    ? MAPS.ids() : [];
+  const options = ids.map(id => {
+    const spec = MAPS.get(id);
+    const meta = (spec && spec.meta) || {};
+    return { id: id, label: meta.name || id.toUpperCase() };
+  });
+  options.push({ id: null, label: 'ROTATE', hint: 'IN TURN' });
+  return options;
+}
+
+/* The map controls, kept in step with the pin the same way the mode buttons
+   are kept in step with G.mode: read from the live state, never set from
+   whichever click happened to cause it. */
+function syncMapPicker() {
+  const box = document.getElementById('mapOptions');
+  const swap = document.getElementById('mapSwap');
+  if (!box) return;
+
+  /* In a room the relay decides what the next round is played on, so there
+     is nothing here to press and the card goes back to being the readout it
+     used to be. Same question the rotation asks, from the same function. */
+  const ours = typeof mapRotationIsOurs !== 'function' || mapRotationIsOurs();
+  const options = ours && typeof chooseMapId === 'function' ? mapPickerOptions() : [];
+  box.hidden = options.length === 0;
+  if (swap) swap.hidden = options.length === 0;
+
+  if (box.children.length !== options.length) {
+    box.textContent = '';
+    for (const option of options) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'mini-btn mode-option';
+      /* '' rather than absent for ROTATE: dataset gives back undefined for a
+         missing attribute and '' for an empty one, and the pressed check
+         below needs the two to stay distinguishable from a real id. */
+      button.dataset.map = option.id || '';
+      const label = document.createElement('span');
+      label.textContent = option.label;
+      button.appendChild(label);
+      if (option.hint) {
+        const hint = document.createElement('small');
+        hint.textContent = option.hint;
+        button.appendChild(hint);
+      }
+      button.addEventListener('click', () => chooseMap(option.id));
+      box.appendChild(button);
+    }
+  }
+
+  const pinned = typeof pinnedMapId === 'function' ? pinnedMapId() : null;
+  for (const button of box.children)
+    button.setAttribute('aria-pressed', String((button.dataset.map || null) === pinned));
+  const goal = document.getElementById('mapCardGoal');
+  if (goal) goal.textContent = pinned ? 'SELECTED' : 'UP NEXT';
+}
+
+function chooseMap(id) {
+  if (typeof chooseMapId !== 'function' || !chooseMapId(id)) return;
+  if (typeof SFX === 'object' && SFX) SFX.ui();
+  syncMapCard();
 }
 
 /* =====================================================================
@@ -19525,6 +19718,18 @@ function boot() {
   if (swap) swap.addEventListener('click', () => {
     chooseMode(G.mode === 'kc' ? 'dm' : 'kc');
     if (typeof SFX === 'object' && SFX) SFX.ui();
+  });
+  /* The map card's button. More than two things to land on, so it steps
+     through them from wherever the pin is — ROTATE is a stop on that loop
+     like any map, which is how you get back to it without a second button.
+     The real controls are the buttons syncMapPicker builds; this presses
+     one of them, so there is still a single path in. */
+  const mapSwap = document.getElementById('mapSwap');
+  if (mapSwap) mapSwap.addEventListener('click', () => {
+    const options = mapPickerOptions();
+    const pinned = typeof pinnedMapId === 'function' ? pinnedMapId() : null;
+    const at = options.findIndex(option => option.id === pinned);
+    chooseMap(options[(at + 1) % options.length].id);
   });
   syncModePicker();
   syncMapCard();

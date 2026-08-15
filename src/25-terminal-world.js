@@ -171,15 +171,27 @@ function buildTerminalGeometry(ctx) {
      the Nuketown bus uses for its roof curve. */
   const CZ = 12.0, CR = 2.2;                        // centreline z, radius
   const cy = 4.3;                                   // fuselage axis height
+  /* Port and starboard are mirror images, so everything below is given as a
+     pair of SIGNED offsets off the centreline and sorted on the way in. */
+  const zbox = (x0, x1, y0, y1, oa, ob, color, opts) =>
+    B.box([x0, y0, CZ + Math.min(oa, ob)], [x1, y1, CZ + Math.max(oa, ob)], color, opts);
   H.ngonPrism(B, 'x', -12, 24, cy, CZ, CR, 14, C(TPAL.hull), 0.22);
   // nose cone and tail cone, tapered by two shorter prisms
   H.ngonPrism(B, 'x', 24, 26.4, cy, CZ, CR * 0.62, 14, C(TPAL.hull), 0.22);
   H.ngonPrism(B, 'x', -14.2, -12, cy + 0.5, CZ, CR * 0.55, 14, C(TPAL.hull), 0.22);
-  // cheatline: the one stripe that makes it read as an airliner
-  B.box([-13, cy - 0.55, CZ - CR - 0.04], [25, cy - 0.1, CZ + CR + 0.04],
-        C(TPAL.livery), { noEdge: true });
-  B.box([-13, cy - 1.0, CZ - CR - 0.03], [25, cy - 0.62, CZ + CR + 0.03],
-        C(TPAL.liveryB), { noEdge: true });
+  /* Cheatline: the one stripe that makes it read as an airliner. A SKIN on
+     each flank, never one box across the section — the cabin is walkable at
+     F1 and a full-width stripe lands as an opaque deck 0.9m above the floor
+     the player is standing on. From inside, that stripe was the floor, and
+     everything under it (your feet, pickups, the bottom half of every body)
+     was hidden behind it. The outer edges are where they were, so nothing
+     about the silhouette from outside changes. */
+  for (const dir of [-1, 1]) {
+    zbox(-13, 25, cy - 0.55, cy - 0.1, dir * (CR - 0.15), dir * (CR + 0.04),
+         C(TPAL.livery), { noEdge: true });
+    zbox(-13, 25, cy - 1.0, cy - 0.62, dir * (CR - 0.30), dir * (CR + 0.03),
+         C(TPAL.liveryB), { noEdge: true });
+  }
   // cabin windows
   for (let x = -8; x < 22; x += 1.9)
     for (const zz of [CZ - CR - 0.05, CZ + CR - 0.09])
@@ -192,6 +204,55 @@ function buildTerminalGeometry(ctx) {
                                 [-6, -3, CZ + CR - 0.1]])
     B.box([dx0 - 0.08, F1 - 0.05, zz - 0.06], [dx1 + 0.08, 5.5, zz + 0.16],
           C(TPAL.hallTrim));
+
+  /* ---- cabin liner ----------------------------------------------------
+     The hull above is a one-sided shell with no inner faces, and the spec's
+     cabin boxes are collision-only — the 'fuselage' case up top draws
+     nothing — so without this the cabin renders as open air: you stand on
+     nothing at F1 and see the whole map straight through the aircraft,
+     while everyone outside is looking at a solid plane. The cabin is a
+     walkable platform with three exits and it is where the jet bridge
+     lands, so it has to be an actual room.
+
+     None of it can sit on the spec's AABB. That is 2.2 half-width at every
+     height and the hull is a 14-gon of the same radius, so the hull is down
+     to 1.84 by the time you reach the door headers and a wall out there
+     punches straight through the curve. LZ comes off the camera instead:
+     collision stops a player 0.38 short of the AABB, so an eye never gets
+     past 1.52 off the centreline, and 1.75 keeps the wall clear of the view
+     while staying inside the hull. */
+  const LI = 1.70, LO = 1.78;                       // liner inner face, outer envelope
+  const LCY = 5.35;                                 // ceiling underside
+  /* Floor pan, plus a sill at each exit closing the strip out to whatever
+     the door lands on — wing root, jet bridge deck, airstairs, all at
+     |z - CZ| = 2.0. Stop there and not at the AABB: the wing tops are also
+     at F1, and an overlap would be two coplanar faces fighting. */
+  zbox(-6, 22, F1 - 0.06, F1, -1.9, 1.9, C(TPAL.slab), { top: C(0xfdf3ea) });
+  for (const [dx0, dx1, dir] of [[4, 8, -1], [14, 18, -1], [4, 8, 1], [-6, -3, 1]])
+    zbox(dx0, dx1, F1 - 0.06, F1, dir * 1.9, dir * 2.0, C(TPAL.slab), { top: C(0xfdf3ea) });
+  /* Side walls carry the openings the spec punched, and the ceiling doubles
+     as their header, so a gap reads as a door from the inside too. */
+  for (const [dir, runs, doors] of [
+    [-1, [[-6, 4], [8, 14], [18, 22]], [[4, 8], [14, 18]]],
+    [1,  [[-3, 4], [8, 22]],           [[-6, -3], [4, 8]]]
+  ]) {
+    for (const [wx0, wx1] of runs)
+      zbox(wx0, wx1, F1, LCY, dir * LI, dir * LO, C(TPAL.hall));
+    // and the windows again on the inner face: the outer ones are set in the
+    // hull, which is now behind this wall. Proud of it, or the two faces are
+    // coplanar and fight.
+    for (let x = -5.4; x < 21; x += 1.9)
+      if (!doors.some(d => x + 0.62 > d[0] && x < d[1]))
+        zbox(x, x + 0.62, cy + 0.42, cy + 0.86, dir * (LI - 0.02), dir * LI,
+             C(TPAL.pane), { noEdge: true });
+  }
+  for (const bx of [-6, 21.9])                      // aft and forward bulkheads
+    zbox(bx, bx + 0.1, F1, LCY, -LI, LI, C(TPAL.hallTrim));
+  /* The ceiling runs out to the walls' outer face, or the seam between them
+     is a slot you can see the sky through — the hull over it is culled from
+     in here. LCY is as high as that full width fits: the 14-gon has closed
+     to 1.78 by y = 5.5, and the crown is not a place to find that out. */
+  zbox(-6, 22, LCY, LCY + 0.08, -LO, LO, C(TPAL.hall));
 
   /* wings, raked toward the tip. solid() indexes its eight corners by bit —
      bit0 = x, bit1 = y, bit2 = z — so the near-z plane must be 0..3 and the
@@ -227,14 +288,24 @@ function buildTerminalGeometry(ctx) {
   }
 
   /* ================= JET BRIDGE ================= */
+  /* The deck first. The spec's 'bridge' boxes are collision-only like the
+     plane's, so CROSSING 3 — the map's signature chokepoint — was a walkway
+     you crossed on nothing but the ribs, with the hall floor 3.3m below you
+     through the gap. It runs out to the fuselage rather than stopping at the
+     spec's z = 9.8, so the step into the cabin lands on the plane's door
+     sill instead of a slot. */
+  B.box([14, F1 - 0.3, -9], [18, F1, CZ - 2.0], C(TPAL.slab), { top: C(0xfdf3ea) });
   // a ribbed tube on the deck the spec already made walkable
   for (let z = -8.6; z < 9.6; z += 1.5)
     H.arcBand(B, 'z', z, z + 0.36, 16.0, F1 + 0.05, 1.98, 2.16, 0, Math.PI, 10,
               C(TPAL.hallTrim), true);
   H.arcBand(B, 'z', -9, 9.8, 16.0, F1 + 0.05, 1.92, 2.02, 0, Math.PI, 12,
             C(TPAL.hall), true);
-  B.box([15.4, 0, -2.1], [16.6, F1, -0.7], C(TPAL.steel));      // support column
-  B.box([15.0, F1 - 0.32, -2.4], [17.0, F1, -0.4], C(TPAL.hallTrim));
+  /* The column itself is the spec's 'metal' solid, drawn with everything
+     else up top; the second one that used to stand here shared both of its
+     x planes and the pair fought all the way up. This is just the capital,
+     tucked under the deck it carries so no face is coplanar with either. */
+  B.box([15.0, F1 - 0.62, -2.4], [17.0, F1 - 0.25, -0.4], C(TPAL.hallTrim));
 
   /* ================= INTERIOR DRESSING ================= */
   // gate signage hanging off the mezzanine edge — the hall's only hot colour

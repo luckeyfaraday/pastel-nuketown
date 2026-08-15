@@ -190,14 +190,15 @@
         <small class="mode-card-goal" id="modeCardGoal">25 KILLS</small>
         <small class="mode-card-blurb" id="modeCardBlurb">Everyone for themselves. Be the last one standing.</small>
       </div>
-      <!-- The map is a rotation, not a choice, so this card is a readout and
-           not a control: no buttons under it, nothing to press. It says what
-           you are about to play, which is the only question it can answer. -->
+      <!-- The map is a choice now, the same as the mode: a card reading the
+           live state with controls under it. The goal line carries which of
+           the two you are looking at — UP NEXT when the rotation is picking,
+           SELECTED once you have. -->
       <div class="mode-card map-card" id="mapCard" data-map="nuketown" aria-hidden="true">
         <span class="mode-card-tag">MAP</span>
         <i class="mode-card-art"></i>
         <b class="mode-card-name" id="mapCardName">NUKETOWN</b>
-        <small class="mode-card-goal">UP NEXT</small>
+        <small class="mode-card-goal" id="mapCardGoal">UP NEXT</small>
         <small class="mode-card-blurb" id="mapCardBlurb">Two houses, one street, nowhere to hide.</small>
       </div>
       </div>
@@ -211,7 +212,16 @@
           <small>20 CONFIRMS</small>
         </button>
       </div>
-      <button class="mini-btn mode-swap" id="modeSwap" type="button">CHANGE MODE</button>
+      <!-- Filled from the map registry at boot rather than written out here:
+           the pool is the registry's business, and a third map should not
+           mean a third button to remember. Empty until then, and it stays
+           empty on a page whose map runtime never loaded, which is exactly
+           the page that must not offer to switch maps. -->
+      <div class="mode-options map-options" id="mapOptions" role="group" aria-label="MAP"></div>
+      <div class="swap-row">
+        <button class="mini-btn mode-swap" id="modeSwap" type="button">CHANGE MODE</button>
+        <button class="mini-btn mode-swap" id="mapSwap" type="button">CHANGE MAP</button>
+      </div>
     </div>
     <div class="menu-actions">
       <button class="menu-btn setup-only" id="quickPlay">PLAY</button>
