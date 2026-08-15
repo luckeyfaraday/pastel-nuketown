@@ -3,10 +3,28 @@
    ===================================================================== */
 'use strict';
 
-const MAP = globalThis.NUKETOWN_MAP;
-const AI  = globalThis.NUKETOWN_AI;
-
+const AI = globalThis.NUKETOWN_AI;
+/* Legacy embedders load mapspec.js and selected engine parts directly. Keep
+   that supported while the browser build uses the shared registry module. */
+const MAPS = globalThis.NUKETOWN_MAPS || Object.freeze({
+  DEFAULT_ID: 'nuketown',
+  get: function (id) { return id === 'nuketown' ? globalThis.NUKETOWN_MAP : null; },
+  ids: function () { return ['nuketown']; }
+});
 const QS = new URLSearchParams(location.search);
+const REQUESTED_MAP_ID = QS.get('map');
+let ACTIVE_MAP_ID = MAPS.DEFAULT_ID;
+let MAP = MAPS.get(ACTIVE_MAP_ID);
+if (REQUESTED_MAP_ID) {
+  const requestedMap = MAPS.get(REQUESTED_MAP_ID);
+  if (requestedMap) {
+    ACTIVE_MAP_ID = REQUESTED_MAP_ID;
+    MAP = requestedMap;
+  } else {
+    console.warn('[nuketown] Unknown map "' + REQUESTED_MAP_ID +
+                 '"; using default "' + MAPS.DEFAULT_ID + '".');
+  }
+}
 const AUTOSTART = QS.has('autostart');
 
 /* ---------- fatal error surface (a blank pastel screen tells us nothing) */
@@ -629,7 +647,7 @@ void main(){
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-function buildSky() {
+function buildSky(parent) {
   const sunDir = sunLight.position.clone().normalize();
   const mat = new THREE.ShaderMaterial({
     vertexShader: SKY_VS, fragmentShader: SKY_FS,
@@ -649,7 +667,7 @@ function buildSky() {
      viewport and is immediately painted over. Worth ~25% of the frame
      under software rendering. */
   sky.frustumCulled = false; sky.renderOrder = 100;
-  scene.add(sky);
+  parent.add(sky);
 
   // ---- puffy clouds: clusters of soft billboards ----
   const cv = document.createElement('canvas'); cv.width = cv.height = 128;
@@ -680,6 +698,6 @@ function buildSky() {
     }
     clouds.add(cluster);
   }
-  scene.add(clouds);
+  parent.add(clouds);
   return { sky, clouds };
 }

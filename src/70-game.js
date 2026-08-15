@@ -402,6 +402,7 @@ function setupMatch() {
 }
 
 function initAI() {
+  G.nav = null;
   try {
     if (!AI || typeof AI.buildNav !== 'function') throw new Error('NUKETOWN_AI missing');
     G.nav = AI.buildNav(MAP);

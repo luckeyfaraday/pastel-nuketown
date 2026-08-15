@@ -4,7 +4,7 @@
    so the whole town is two draw calls.
    ===================================================================== */
 
-const WORLD = { group: null, mannequins: [], props: [], sky: null };
+const WORLD = { group: null, mannequins: [], props: [], sky: null, staticMesh: null, chunks: [] };
 
 /* ---- small geometry helpers layered on GeoBuilder ---- */
 function ngonPrism(B, axis, c0, c1, cu, cv, r, sides, color, rot) {
@@ -135,11 +135,9 @@ function windowPanel(B, o) {
   mk(u0, u1, (v0 + v1) / 2 - 0.04, (v0 + v1) / 2 + 0.04, d0, d1, frame);  // mullion
 }
 
-/* ---------------------------------------------------------------- */
-function buildWorld() {
-  const B = new GeoBuilder();
-  const grp = new THREE.Group();
-
+/* Nuketown's visible geometry. It is invoked only by the map's render hook;
+   buildWorld itself knows only the generic hook contract below. */
+function buildNuketownGeometry(B) {
   /* ================= GROUND ================= */
   const sand = C(PAL.sand), sandD = C(PAL.sandDeep);
   // far enough that its edge is always past fog-far, so the horizon is clean
@@ -510,24 +508,104 @@ function buildWorld() {
     box(-2.8, F1 + 1.5, -17.78, -1.0, F1 + 2.5, -17.72, C(A ? 0xffb7c5 : 0xa8dcf0)); // poster
   }
 
-  /* Chunk along the street axis so looking one way culls the other end.
-     The ground slab lands in the middle chunk; its bounding sphere is huge,
-     so that chunk simply never culls — which is correct, you always see it. */
-  const CUTS = [-16, -5, 5, 16];
-  const meshes = B.meshChunks(CUTS);
-  const lineSets = B.lineChunks(CUTS, 0.42);
-  for (const m of meshes) grp.add(m);
-  for (const l of lineSets) grp.add(l);
-  scene.add(grp);
-  WORLD.group = grp;
-  WORLD.staticMesh = meshes[0];
-  WORLD.chunks = meshes;
+}
 
+function buildNuketownDecorations() {
   buildMannequins();
-  WORLD.sky = buildSky();
+  WORLD.sky = buildSky(WORLD.group);
   buildDustMotes();
   buildMagic();
+}
+
+/* Render hooks receive stable primitives rather than engine globals. A future
+   map may author directly into `builder` and `group`; the two Nuketown helper
+   callbacks exist only to keep today's dressing byte-for-byte equivalent. */
+function mapRenderContext(builder, group) {
+  return {
+    map: MAP,
+    builder: builder,
+    group: group,
+    color: C,
+    colorScale: Cx,
+    palette: PAL,
+    helpers: {
+      ngonPrism: ngonPrism,
+      arcBand: arcBand,
+      domeY: domeY,
+      bevelBox: bevelBox,
+      scallopEdge: scallopEdge,
+      gable: gable,
+      windowPanel: windowPanel
+    },
+    nuketownGeometry: function () { buildNuketownGeometry(builder); },
+    nuketownDecorations: buildNuketownDecorations
+  };
+}
+
+function buildWorld() {
+  const render = MAP.render;
+  if (!render || typeof render.buildGeometry !== 'function')
+    throw new Error('Map "' + ACTIVE_MAP_ID + '" has no render.buildGeometry hook');
+
+  const B = new GeoBuilder();
+  const grp = new THREE.Group();
+  WORLD.group = grp;
+  WORLD.mannequins = [];
+  WORLD.props = [];
+  MAGIC.groups.length = 0;
+  MAGIC.sites.length = 0;
+
+  const context = mapRenderContext(B, grp);
+  render.buildGeometry(context);
+
+  /* Maps choose their own chunk boundaries. An empty list is valid and emits
+     one static mesh; no map inherits Nuketown's street-axis cuts. */
+  const cuts = Array.isArray(render.chunkCuts) ? render.chunkCuts : [];
+  const meshes = B.meshChunks(cuts);
+  const lineSets = B.lineChunks(cuts, 0.42);
+  for (const m of meshes) grp.add(m);
+  for (const l of lineSets) grp.add(l);
+  WORLD.staticMesh = meshes[0] || null;
+  WORLD.chunks = meshes;
+
+  if (typeof render.buildDecorations === 'function') render.buildDecorations(context);
+  scene.add(grp);
   return grp;
+}
+
+function disposeWorld() {
+  const grp = WORLD.group;
+  if (!grp) return;
+  scene.remove(grp);
+
+  const geometries = new Set();
+  const materials = new Set();
+  const textures = new Set();
+  grp.traverse(function (obj) {
+    if (obj.geometry) geometries.add(obj.geometry);
+    const list = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
+    for (const material of list) {
+      materials.add(material);
+      for (const key in material) {
+        const value = material[key];
+        if (value && value.isTexture) textures.add(value);
+      }
+    }
+  });
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
+  for (const texture of textures) texture.dispose();
+
+  WORLD.group = null;
+  WORLD.mannequins = [];
+  WORLD.props = [];
+  WORLD.sky = null;
+  WORLD.staticMesh = null;
+  WORLD.chunks = [];
+  MAGIC.groups.length = 0;
+  MAGIC.sites.length = 0;
+  MOTES = null;
+  MOTE_TEX = null;
 }
 
 /* =====================================================================
@@ -590,7 +668,7 @@ function magicPoints(n, tex, size, opacity) {
   });
   const p = new THREE.Points(g, m);
   p.frustumCulled = false;
-  scene.add(p);
+  WORLD.group.add(p);
   return { pts: p, n: n, items: [] };
 }
 
@@ -692,7 +770,7 @@ function buildMannequins() {
       g.position.set(s * x, 0, s * z);
       g.rotation.y = yaw + (s < 0 ? Math.PI : 0);
       g.userData = { spin: 0, lean: 0, base: g.rotation.y, hp: 3 };
-      scene.add(g);
+      WORLD.group.add(g);
       WORLD.mannequins.push(g);
       i++;
     }
@@ -733,7 +811,7 @@ function buildDustMotes() {
   MOTES = new THREE.Points(g, mat);
   MOTES.frustumCulled = false;
   MOTES.userData = { ph, base: pos.slice(0), tint: col.slice(0) };
-  scene.add(MOTES);
+  WORLD.group.add(MOTES);
 }
 function updateMotes(t) {
   if (!MOTES) return;
