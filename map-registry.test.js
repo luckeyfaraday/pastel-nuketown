@@ -5,15 +5,26 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const nuketown = require('./mapspec.js');
+const terminal = require('./terminal-mapspec.js');
 const maps = require('./map-registry.js');
 const runtimeSource = fs.readFileSync('./src/35-map-runtime.js', 'utf8');
 
-test('shared map registry exposes Nuketown as the sole default map', () => {
+test('shared map registry exposes the rotation pool, Nuketown first', () => {
   assert.equal(maps.DEFAULT_ID, 'nuketown');
-  assert.deepEqual(maps.ids(), ['nuketown']);
+  assert.deepEqual(maps.ids(), ['nuketown', 'terminal']);
   assert.equal(maps.get('nuketown'), nuketown);
-  assert.equal(maps.get('terminal'), null);
+  assert.equal(maps.get('terminal'), terminal);
+  assert.equal(maps.get('bogus'), null);
   assert.equal(maps.get(null), null);
+});
+
+test('the rotation is a cycle and always lands on a real map', () => {
+  assert.equal(maps.nextId('nuketown'), 'terminal');
+  assert.equal(maps.nextId('terminal'), 'nuketown');
+  // An id nobody recognises must still yield something playable rather than
+  // stalling the rotation on the map that is already loaded.
+  assert.equal(maps.nextId('bogus'), 'nuketown');
+  for (const id of maps.ids()) assert.ok(maps.get(maps.nextId(id)));
 });
 
 test('legacy mapspec exports and renderer extension remain compatible', () => {
