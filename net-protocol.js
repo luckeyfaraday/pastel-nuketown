@@ -14,7 +14,12 @@
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  /* 9: player-selected cosmetics cross the room handshake and snapshots. The
+  /* 10: map identity crosses the room handshake and authoritative state. A
+     version 9 peer would ignore it, validate Terminal positions against
+     Nuketown bounds, and then play a different world from the room, so the
+     two versions must never share a room.
+
+     9: player-selected cosmetics cross the room handshake and snapshots. The
      jersey is still seat identity, but a version 8 host cannot carry the
      separate appearance metadata through a snapshot or a migration, so the
      two versions must never share a room. Shot effects joined that payload
@@ -39,13 +44,15 @@
      version 5 host receiving a mid-round roster change seats nobody, and the
      arrival becomes a ghost sending input no authority ever applies. Refusing
      the handshake is the only honest outcome, so old and new must not mix. */
-  var VERSION = 9;
+  var VERSION = 10;
   /* Nine seats, because nine is how many combatants the match runs. Any
      smaller and the shortfall is made up with bots no matter how popular the
      room gets, which is the one thing a full room should not have to do. */
   var MAX_PLAYERS = 9;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
+  var MAX_MAP_ID_LENGTH = 40;
+  var MAX_SUPPORTED_MAPS = 32;
   var ROOM_CODE_LENGTH = 6;
   var ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   var MAX_ROOM_LIST = 50;
@@ -120,6 +127,35 @@
       .trim();
 
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
+  }
+
+  /* Map ids are protocol data, but the map catalog belongs to the page. Keep
+     the wire shape small and inert here, then let callers provide the catalog
+     predicate that turns a well-formed id into a known one. */
+  function cleanMapId(value, accepts) {
+    if (typeof value !== 'string' || value.length < 1 ||
+        value.length > MAX_MAP_ID_LENGTH ||
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return null;
+    if (typeof accepts !== 'function') return value;
+    try {
+      return accepts(value) ? value : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function cleanMapIds(value, accepts) {
+    if (!Array.isArray(value) || value.length < 1 ||
+        value.length > MAX_SUPPORTED_MAPS) return [];
+    var seen = Object.create(null);
+    var clean = [];
+    for (var i = 0; i < value.length; i++) {
+      var id = cleanMapId(value[i], accepts);
+      if (!id || seen[id]) return [];
+      seen[id] = true;
+      clean.push(id);
+    }
+    return clean;
   }
 
   /* A seat in the room, reserved by the relay and held until its occupant
@@ -216,7 +252,8 @@
   /* A host change is a server-authored authority transition. Validate the
      complete roster here so clients change roles only when the epoch and the
      cancelled-round barrier both move forward together. */
-  function sanitizeHostChanged(message, localId, previousEpoch, previousRound) {
+  function sanitizeHostChanged(message, localId, previousEpoch, previousRound,
+      acceptsMap) {
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       return result(false, null, 'host change must be an object');
     }
@@ -226,6 +263,8 @@
     if (message.v !== VERSION) {
       return result(false, null, 'unsupported protocol version');
     }
+    var map = cleanMapId(message.map, acceptsMap);
+    if (!map) return result(false, null, 'map is invalid or unsupported');
 
     var priorEpoch = isAuthorityEpoch(previousEpoch) ? previousEpoch : 0;
     if (!isAuthorityEpoch(message.authorityEpoch) ||
@@ -306,6 +345,7 @@
       v: VERSION,
       authorityEpoch: message.authorityEpoch,
       round: message.round,
+      map: map,
       host: message.host,
       members: members
     };
@@ -317,6 +357,9 @@
     return result(true, change, null);
   }
 
+  /* Map is intentionally not repeated in this per-player handoff. The room's
+     host-changed envelope and both cached world images already pin it; this
+     message contributes only the promoted host's missing input counters. */
   function sanitizeAuthorityState(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message) ||
         message.t !== 'authority-state' || message.v !== VERSION ||
@@ -805,6 +848,8 @@
     MAX_PLAYERS: MAX_PLAYERS,
     MAX_MESSAGE_BYTES: MAX_MESSAGE_BYTES,
     MAX_PLAYER_NAME_LENGTH: MAX_PLAYER_NAME_LENGTH,
+    MAX_MAP_ID_LENGTH: MAX_MAP_ID_LENGTH,
+    MAX_SUPPORTED_MAPS: MAX_SUPPORTED_MAPS,
     ROOM_CODE_LENGTH: ROOM_CODE_LENGTH,
     ROOM_CODE_ALPHABET: ROOM_CODE_ALPHABET,
     MAX_ROOM_LIST: MAX_ROOM_LIST,
@@ -818,6 +863,8 @@
     MAX_INTERP_SNAPSHOTS: MAX_INTERP_SNAPSHOTS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    cleanMapId: cleanMapId,
+    cleanMapIds: cleanMapIds,
     validSlot: validSlot,
     cleanCosmeticId: cleanCosmeticId,
     sanitizeCosmetics: sanitizeCosmetics,

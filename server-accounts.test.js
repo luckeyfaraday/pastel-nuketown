@@ -160,7 +160,9 @@ test('account routing leaves relay HTTP, upgrades, and persisted match counts in
   socket.emit('message', Buffer.from(JSON.stringify({
     t: 'create',
     v: Protocol.VERSION,
-    name: 'Host'
+    name: 'Host',
+    map: 'nuketown',
+    maps: ['nuketown']
   })));
   const roomsAfter = await requestRelay(relay, '/rooms');
   assert.equal(roomsAfter.json().matches, 1);

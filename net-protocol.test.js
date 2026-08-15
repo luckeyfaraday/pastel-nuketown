@@ -58,6 +58,7 @@ function validCheckpoint(actorIds, overrides) {
     round: 1,
     tick: 60,
     time: 1,
+    map: 'nuketown',
     manifestVersion: 1,
     actors: actorIds.map((netId, index) => ({
       netId,
@@ -115,7 +116,19 @@ function websocketClient(url) {
     ws,
     opened: once(ws, 'open'),
     send(message) {
-      ws.send(JSON.stringify(message));
+      let outgoing = message;
+      if ((message.t === 'create' || message.t === 'join') &&
+          !Object.hasOwn(message, 'maps')) {
+        outgoing = { ...outgoing, maps: ['nuketown'] };
+      }
+      if (message.t === 'create' && !Object.hasOwn(message, 'map')) {
+        outgoing = { ...outgoing, map: 'nuketown' };
+      }
+      if ((message.t === 'snapshot' || message.t === 'checkpoint') &&
+          !Object.hasOwn(message, 'map')) {
+        outgoing = { ...outgoing, map: 'nuketown' };
+      }
+      ws.send(JSON.stringify(outgoing));
     },
     next
   };
@@ -152,14 +165,14 @@ async function startRelay(t, options = {}) {
 test('exports one frozen API to CommonJS and globalThis', () => {
   assert.equal(globalThis.NUKETOWN_PROTOCOL, Protocol);
   assert.ok(Object.isFrozen(Protocol));
-  assert.equal(Protocol.VERSION, 9);
+  assert.equal(Protocol.VERSION, 10);
   assert.equal(Protocol.MAX_PLAYERS, 9);
   assert.deepEqual(Protocol.ALLOWED_WEAPONS, ['smg', 'shotgun', 'rifle']);
 });
 
-test('v9 envelopes are accepted and the breaking v8 envelope is refused', () => {
+test('v10 envelopes are accepted and the breaking v9 envelope is refused', () => {
   assert.equal(Protocol.sanitizeInput(validInput(), -1, -1).ok, true);
-  const old = Protocol.sanitizeInput(validInput({ v: 8 }), -1, -1);
+  const old = Protocol.sanitizeInput(validInput({ v: 9 }), -1, -1);
   assert.equal(old.ok, false);
   assert.match(old.error, /version/);
 });
@@ -214,12 +227,27 @@ test('normalizes human-entered room codes and cleans display names', () => {
   );
 });
 
+test('map ids are bounded, inert, and optionally whitelisted', () => {
+  const known = new Set(['nuketown', 'terminal']);
+  assert.equal(Protocol.cleanMapId('terminal', id => known.has(id)), 'terminal');
+  assert.equal(Protocol.cleanMapId('unknown', id => known.has(id)), null);
+  assert.equal(Protocol.cleanMapId('Terminal'), null);
+  assert.equal(Protocol.cleanMapId('x'.repeat(Protocol.MAX_MAP_ID_LENGTH + 1)), null);
+  assert.deepEqual(
+    Protocol.cleanMapIds(['nuketown', 'terminal'], id => known.has(id)),
+    ['nuketown', 'terminal']
+  );
+  assert.deepEqual(Protocol.cleanMapIds(['nuketown', 'nuketown']), []);
+  assert.deepEqual(Protocol.cleanMapIds(['nuketown', 'unknown'], id => known.has(id)), []);
+});
+
 test('validates host promotion as a forward-only authority transition', () => {
   const changed = Protocol.sanitizeHostChanged({
     t: 'host-changed',
     v: Protocol.VERSION,
     authorityEpoch: 2,
     round: 3,
+    map: 'nuketown',
     host: 'peer-2',
     members: [
       { id: 'peer-2', name: ' New Host ', role: 'host', slot: 0 },
@@ -233,6 +261,7 @@ test('validates host promotion as a forward-only authority transition', () => {
     v: Protocol.VERSION,
     authorityEpoch: 2,
     round: 3,
+    map: 'nuketown',
     host: 'peer-2',
     members: [
       { id: 'peer-2', name: 'New Host', role: 'host', slot: 0 },
@@ -244,6 +273,7 @@ test('validates host promotion as a forward-only authority transition', () => {
     [{ t: 'snapshot' }, 'type'],
     [{ authorityEpoch: 1 }, 'authorityEpoch'],
     [{ round: 2 }, 'round'],
+    [{ map: 'unknown' }, 'map'],
     [{ host: 'missing' }, 'host'],
     [{ members: [{ id: 'peer-2', name: 'Host', role: 'guest', slot: 0 }] }, 'roster'],
     [{ members: [{ id: 'peer-2', name: 'Host', role: 'host', slot: 0 }] }, 'roster'],
@@ -266,6 +296,7 @@ test('validates host promotion as a forward-only authority transition', () => {
     v: Protocol.VERSION,
     authorityEpoch: 2,
     round: 3,
+    map: 'nuketown',
     host: 'peer-2',
     members: [
       { id: 'peer-2', name: 'Host', role: 'host', slot: 0 },
@@ -274,7 +305,8 @@ test('validates host promotion as a forward-only authority transition', () => {
   };
   for (const [override, expected] of invalid) {
     const checked = Protocol.sanitizeHostChanged(
-      { ...base, ...override }, 'peer-3', 1, 2);
+      { ...base, ...override }, 'peer-3', 1, 2,
+      id => id === 'nuketown');
     assert.equal(checked.ok, false);
     assert.match(checked.error, new RegExp(expected));
   }
@@ -589,6 +621,48 @@ test('HTTP server serves the game and protocol while rejecting other paths', asy
   assert.equal(missing.status, 404);
 });
 
+test('relay fixes the room map and refuses incompatible or v9 peers before seating them',
+    async (t) => {
+  let nextId = 0;
+  const { relay, port } = await startRelay(t, {
+    idFactory: () => `map-peer-${++nextId}`,
+    roomRandom: () => 0
+  });
+
+  const old = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const host = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const incompatible = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  const compatible = websocketClient(`ws://127.0.0.1:${port}/ws`);
+  await Promise.all([old.opened, host.opened, incompatible.opened, compatible.opened]);
+
+  old.send({ t: 'create', v: 9, name: 'Old Host' });
+  assert.equal((await old.next('error')).code, 'version');
+  assert.equal(relay.rooms.size, 0, 'a v9 peer must not create or enter a v10 room');
+
+  host.send({
+    t: 'create', v: Protocol.VERSION, name: 'Host', map: 'terminal',
+    maps: ['nuketown', 'terminal']
+  });
+  const roomReply = await host.next('room');
+  assert.equal(roomReply.map, 'terminal');
+  await host.next('members');
+
+  incompatible.send({
+    t: 'join', v: Protocol.VERSION, room: roomReply.room, name: 'Old Map Page',
+    maps: ['nuketown']
+  });
+  assert.equal((await incompatible.next('error')).code, 'unsupported-map');
+  assert.equal(relay.rooms.get(roomReply.room).members.size, 1,
+    'an incompatible page must be refused before it takes a seat');
+
+  compatible.send({
+    t: 'join', v: Protocol.VERSION, room: roomReply.room, name: 'Guest',
+    maps: ['terminal']
+  });
+  assert.equal((await compatible.next('room')).map, 'terminal');
+  assert.equal(relay.rooms.get(roomReply.room).members.size, 2);
+});
+
 test('room relay enforces authoritative rounds for start, input, snapshots, events, and lobby', async (t) => {
   let nextId = 0;
   const { port } = await startRelay(t, {
@@ -610,6 +684,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     role: 'host',
     authorityEpoch: 1,
     round: 0,
+    map: 'nuketown',
     started: false,
     members: [{ id: 'peer-1', name: 'Host', role: 'host', slot: 0 }],
     autoStartIn: null
@@ -657,6 +732,13 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
   ]);
   assert.deepEqual(hostStart, expectedStart);
   assert.deepEqual(guestStart, expectedStart);
+
+  host.send({
+    t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1, round: 1,
+    tick: 0, time: 0, map: 'terminal', eventSeq: 0, manifestVersion: 1,
+    actors: []
+  });
+  assert.equal((await host.next('error')).code, 'invalid-map-state');
 
   host.send({ t: 'start', v: Protocol.VERSION, authorityEpoch: 1 });
   assert.equal((await host.next('error')).code, 'already-started');
@@ -709,6 +791,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     round: 1,
     tick: 7,
     time: 0.12,
+    map: 'nuketown',
     eventSeq: 0,
     manifestVersion: 1,
     actors: [],
@@ -816,6 +899,7 @@ test('room relay enforces authoritative rounds for start, input, snapshots, even
     v: Protocol.VERSION,
     authorityEpoch: 2,
     round: 3,
+    map: 'nuketown',
     host: 'peer-2',
     members: [{ id: 'peer-2', name: 'Guest', role: 'host', slot: 1 }]
   });
@@ -992,6 +1076,7 @@ test('relay promotes from independently fresh snapshot and checkpoint caches wit
   assert.equal(changeForHost.seamless, true);
   assert.equal(changeForHost.round, 1, 'the live round must not advance');
   assert.equal(changeForHost.authorityEpoch, 2);
+  assert.equal(changeForHost.map, 'nuketown');
   assert.equal(changeForHost.snapshot.tick, 100);
   assert.equal(changeForHost.checkpoint.tick, 101,
     'newer slow state should be combined with the latest pose');

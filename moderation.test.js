@@ -86,7 +86,12 @@ async function admin(relay, route, body, token = ADMIN_TOKEN) {
 
 async function enter(clientSocket, message) {
   await clientSocket.opened;
-  clientSocket.send({ v: Protocol.VERSION, ...message });
+  clientSocket.send({
+    v: Protocol.VERSION,
+    maps: ['nuketown'],
+    ...(message.t === 'create' ? { map: 'nuketown' } : {}),
+    ...message
+  });
   return clientSocket.next('room');
 }
 
