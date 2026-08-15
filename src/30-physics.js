@@ -4,8 +4,12 @@
    a broadphase we'd have to debug. Measured well under a millisecond.
    ===================================================================== */
 
-const SOLIDS = MAP.solids;
-const ACT = MAP.actor;               // {radius, height, eye, step}
+let SOLIDS = MAP.solids;
+let ACT = MAP.actor;                 // {radius, height, eye, step}
+function bindPhysicsMap(map) {
+  SOLIDS = map.solids;
+  ACT = map.actor;
+}
 const GRAVITY = 26.0;
 const JUMP_V  = 8.4;
 const _moveProbe = { x: 0, y: 0, z: 0 };

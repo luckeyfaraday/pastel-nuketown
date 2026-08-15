@@ -209,6 +209,19 @@
     levels: [0, F1],
     consts: { W: W, H0: H0, SLAB: SLAB, F1: F1, H1: H1, ROOF: ROOF },
     // canonical player/bot collision cylinder + eye height
-    actor: { radius: 0.38, height: 1.8, eye: 1.62, step: 0.55 }
+    actor: { radius: 0.38, height: 1.8, eye: 1.62, step: 0.55 },
+    /* Card copy travels with the map, so adding one to the rotation does
+       not mean editing a lookup table in the menu as well. */
+    meta: { name: 'NUKETOWN', blurb: 'Two houses, one street, nowhere to hide.' },
+    /* Optional renderer extension. The collision/nav contract above stays
+       renderer-free; a map supplies its visible world through these hooks.
+       The context exposes `builder`, colour/palette helpers, `group`, and the
+       current `map`. Nuketown delegates to its existing renderer so requiring
+       this file from Node remains side-effect free. */
+    render: {
+      chunkCuts: [-16, -5, 5, 16],
+      buildGeometry: function (context) { context.nuketownGeometry(); },
+      buildDecorations: function (context) { context.nuketownDecorations(); }
+    }
   };
 });

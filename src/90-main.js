@@ -253,6 +253,26 @@ function chooseMode(mode) {
   syncModePicker(setGameMode(mode));
 }
 
+/* The MAP card, filled the same way the mode card is: read off the live
+   state rather than set from wherever the change happened, so there is one
+   place to keep in step. Copy comes from the map's own `meta`, so adding a
+   map to the rotation does not mean editing a table in here too. */
+function syncMapCard() {
+  const card = document.getElementById('mapCard');
+  if (!card) return;
+  const id = typeof activeMapId === 'function' ? activeMapId() : 'nuketown';
+  const spec = (typeof MAPS === 'object' && MAPS && typeof MAPS.get === 'function')
+    ? MAPS.get(id) : null;
+  const meta = (spec && spec.meta) || {};
+  card.dataset.map = id;
+  const name = document.getElementById('mapCardName');
+  const blurb = document.getElementById('mapCardBlurb');
+  /* Fall back to the id rather than leaving the last map's name showing: a
+     stale name on the card is worse than an ugly one. */
+  if (name) name.textContent = meta.name || id.toUpperCase();
+  if (blurb) blurb.textContent = meta.blurb || '';
+}
+
 /* =====================================================================
    BOOT
    ===================================================================== */
@@ -328,6 +348,7 @@ function boot() {
     if (typeof SFX === 'object' && SFX) SFX.ui();
   });
   syncModePicker();
+  syncMapCard();
 
   requestAnimationFrame(frame);
   if (AUTOSTART) startMatch();

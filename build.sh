@@ -33,6 +33,13 @@ trap 'rm -f "$TMP"' EXIT
   printf '.hud-scene,.mode-card-art{background-image:url("data:image/webp;base64,'
   base64 -w0 art/nuketown-street.webp
   printf '")}\n'
+  # The MAP card carries a strip of whichever map is up next, keyed off the
+  # card's data-map. Same reasoning as above: a second file in art/, inlined,
+  # so the relay still serves exactly two paths and the entry stays one
+  # self-contained index.html. 25 KB of WebP is ~34 KB of base64.
+  printf '#mapCard[data-map="terminal"] .mode-card-art{background-image:url("data:image/webp;base64,'
+  base64 -w0 art/terminal-apron.webp
+  printf '")}\n'
   echo '</style>'
 
   echo '<body>'
@@ -59,13 +66,13 @@ trap 'rm -f "$TMP"' EXIT
   echo '}'
   echo '</script>'
 
-  for f in mapspec.js bots.js net-protocol.js; do
+  for f in mapspec.js terminal-mapspec.js map-registry.js bots.js net-protocol.js; do
     echo "<script>/* ===== $f ===== */"
     cat "$f"
     echo '</script>'
   done
 
-  for f in src/10-core.js src/20-world.js src/30-physics.js src/40-weapons.js \
+  for f in src/10-core.js src/20-world.js src/25-terminal-world.js src/30-physics.js src/35-map-runtime.js src/40-weapons.js \
            src/50-actors.js src/60-fx.js src/70-game.js src/72-pickups.js src/75-network.js \
            src/78-touch.js src/80-ui.js src/82-store.js src/90-main.js; do
     echo "<script>/* ===== $f ===== */"

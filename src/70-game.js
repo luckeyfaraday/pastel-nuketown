@@ -402,6 +402,7 @@ function setupMatch() {
 }
 
 function initAI() {
+  G.nav = null;
   try {
     if (!AI || typeof AI.buildNav !== 'function') throw new Error('NUKETOWN_AI missing');
     G.nav = AI.buildNav(MAP);
@@ -654,6 +655,9 @@ function endMatch(winner) {
   G.over = true;
   G.winner = winner;
   G.paused = false;
+  /* Queue only — the swap happens on the way out. You are still standing in
+     this map reading the scoreboard. */
+  if (typeof queueMapRotation === 'function') queueMapRotation();
   document.getElementById('title').classList.add('off');
   const dead = document.getElementById('dead');
   dead.classList.add('off');
@@ -1258,6 +1262,10 @@ function simulate(dt) {
    ===================================================================== */
 function startMatch() {
   SFX.init(); SFX.resume();
+  /* Before setupMatch, which seats everyone on MAP.spawns. REMATCH comes
+     straight here from the over screen without passing through the title,
+     so this is the second of the two places the rotation can land. */
+  if (typeof applyPendingMapRotation === 'function') applyPendingMapRotation();
   setupMatch();
   G.started = true; G.over = false;
   G.paused = false; G.fixedAcc = 0;
@@ -1310,6 +1318,10 @@ function stopMatch() {
      host whose start never landed. Neither may be what greets the next one. */
   const again = document.getElementById('again');
   if (again) { again.disabled = false; again.textContent = 'REMATCH'; }
+  /* The title is back up, so this is where the rotation becomes visible:
+     swap the world, then let the MAP card read the new one off it. */
+  if (typeof applyPendingMapRotation === 'function') applyPendingMapRotation();
+  if (typeof syncMapCard === 'function') syncMapCard();
 }
 
 /* The transport is the caller's business: a player pressing LEAVE has a room
