@@ -271,6 +271,74 @@ function syncMapCard() {
      stale name on the card is worse than an ugly one. */
   if (name) name.textContent = meta.name || id.toUpperCase();
   if (blurb) blurb.textContent = meta.blurb || '';
+  syncMapPicker();
+}
+
+/* Every map in the pool, then ROTATE. Built from the registry so a third map
+   arrives with a button already under it, and the null id at the end is the
+   release rather than a fourth kind of control. */
+function mapPickerOptions() {
+  const ids = (typeof MAPS === 'object' && MAPS && typeof MAPS.ids === 'function')
+    ? MAPS.ids() : [];
+  const options = ids.map(id => {
+    const spec = MAPS.get(id);
+    const meta = (spec && spec.meta) || {};
+    return { id: id, label: meta.name || id.toUpperCase() };
+  });
+  options.push({ id: null, label: 'ROTATE', hint: 'IN TURN' });
+  return options;
+}
+
+/* The map controls, kept in step with the pin the same way the mode buttons
+   are kept in step with G.mode: read from the live state, never set from
+   whichever click happened to cause it. */
+function syncMapPicker() {
+  const box = document.getElementById('mapOptions');
+  const swap = document.getElementById('mapSwap');
+  if (!box) return;
+
+  /* In a room the relay decides what the next round is played on, so there
+     is nothing here to press and the card goes back to being the readout it
+     used to be. Same question the rotation asks, from the same function. */
+  const ours = typeof mapRotationIsOurs !== 'function' || mapRotationIsOurs();
+  const options = ours && typeof chooseMapId === 'function' ? mapPickerOptions() : [];
+  box.hidden = options.length === 0;
+  if (swap) swap.hidden = options.length === 0;
+
+  if (box.children.length !== options.length) {
+    box.textContent = '';
+    for (const option of options) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'mini-btn mode-option';
+      /* '' rather than absent for ROTATE: dataset gives back undefined for a
+         missing attribute and '' for an empty one, and the pressed check
+         below needs the two to stay distinguishable from a real id. */
+      button.dataset.map = option.id || '';
+      const label = document.createElement('span');
+      label.textContent = option.label;
+      button.appendChild(label);
+      if (option.hint) {
+        const hint = document.createElement('small');
+        hint.textContent = option.hint;
+        button.appendChild(hint);
+      }
+      button.addEventListener('click', () => chooseMap(option.id));
+      box.appendChild(button);
+    }
+  }
+
+  const pinned = typeof pinnedMapId === 'function' ? pinnedMapId() : null;
+  for (const button of box.children)
+    button.setAttribute('aria-pressed', String((button.dataset.map || null) === pinned));
+  const goal = document.getElementById('mapCardGoal');
+  if (goal) goal.textContent = pinned ? 'SELECTED' : 'UP NEXT';
+}
+
+function chooseMap(id) {
+  if (typeof chooseMapId !== 'function' || !chooseMapId(id)) return;
+  if (typeof SFX === 'object' && SFX) SFX.ui();
+  syncMapCard();
 }
 
 /* =====================================================================
@@ -346,6 +414,18 @@ function boot() {
   if (swap) swap.addEventListener('click', () => {
     chooseMode(G.mode === 'kc' ? 'dm' : 'kc');
     if (typeof SFX === 'object' && SFX) SFX.ui();
+  });
+  /* The map card's button. More than two things to land on, so it steps
+     through them from wherever the pin is — ROTATE is a stop on that loop
+     like any map, which is how you get back to it without a second button.
+     The real controls are the buttons syncMapPicker builds; this presses
+     one of them, so there is still a single path in. */
+  const mapSwap = document.getElementById('mapSwap');
+  if (mapSwap) mapSwap.addEventListener('click', () => {
+    const options = mapPickerOptions();
+    const pinned = typeof pinnedMapId === 'function' ? pinnedMapId() : null;
+    const at = options.findIndex(option => option.id === pinned);
+    chooseMap(options[(at + 1) % options.length].id);
   });
   syncModePicker();
   syncMapCard();

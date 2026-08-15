@@ -39,18 +39,25 @@ function setActiveMap(id) {
 }
 
 /* =====================================================================
-   ROTATION
-   Map selection is a rotation, not a pick: a match ends and the next map
-   in the pool loads. Nobody chooses, so both maps actually get played and
-   the title screen keeps one card instead of a third control.
+   ROTATION, AND THE PICK THAT OUTRANKS IT
+   The default is a rotation: a match ends and the next map in the pool
+   loads, so both maps actually get played without anyone deciding. A
+   player who does want to decide pins one from the MAP card, and a pin
+   wins — a setting that quietly moved after every match would not be a
+   setting. ROTATE is one of the picker's choices rather than a separate
+   switch, so releasing the pin is the same gesture as making it.
 
    The swap is DEFERRED rather than done in endMatch, because endMatch
    leaves you standing in the map reading the scoreboard — rebuilding the
    world underneath that is the one moment it must not happen. The flag is
    spent by whichever comes first: returning to the title (so the card
    shows what is next) or pressing REMATCH straight from the over screen.
+
+   The pin is session state, like the match mode: neither is persisted, so
+   a reload starts both of them fresh.
    ===================================================================== */
 let MAP_ROTATE_PENDING = false;
+let MAP_PINNED_ID = null;             // null = rotate
 
 /* Only in solo. A room rotates as well, but the relay announces it and every
    page adopts it out of the round-start message — the relay is what decides a
@@ -65,18 +72,50 @@ function queueMapRotation() {
   if (mapRotationIsOurs()) MAP_ROTATE_PENDING = true;
 }
 
+/* A map whose render hook throws rolls back inside setActiveMap, so a broken
+   map costs the swap rather than the session. */
+function applyMapId(id) {
+  try { return setActiveMap(id) === true; } catch (error) { return false; }
+}
+
+/* Everything that can move the map as the title comes back up, in the one
+   order that is correct: a pin always wins, and the rotation only fires when
+   there is nothing pinned. One entry, so no caller can get that order wrong.
+
+   A pin outlives a room — the relay's map was adopted over the top of it —
+   so this is also where the choice comes back once the session is ours
+   again. Until then nothing moves: rebuilding the world under a room is the
+   failure the whole handshake exists to prevent. */
 function applyPendingMapRotation() {
-  if (!MAP_ROTATE_PENDING) return false;
+  const pending = MAP_ROTATE_PENDING;
   MAP_ROTATE_PENDING = false;
-  if (!mapRotationIsOurs() || typeof MAPS.nextId !== 'function') return false;
+  if (!mapRotationIsOurs()) return false;
+  if (MAP_PINNED_ID) return applyMapId(MAP_PINNED_ID);
+  if (!pending || typeof MAPS.nextId !== 'function') return false;
   const next = MAPS.nextId(ACTIVE_MAP_ID);
   if (next === ACTIVE_MAP_ID) return false;
-  /* A map whose render hook throws rolls back inside setActiveMap, so a
-     broken map costs the rotation rather than the session. */
-  try { return setActiveMap(next); } catch (error) { return false; }
+  return applyMapId(next);
+}
+
+function pinnedMapId() { return MAP_PINNED_ID; }
+
+/* The picker's one way in. `null` releases the pin and hands the map back to
+   the rotation from wherever it is standing. Swapping the world on the spot
+   is safe from here and nowhere else: the picker only exists on the title
+   screen, which is the same moment the deferred rotation waits for. */
+function chooseMapId(id) {
+  if (!mapRotationIsOurs()) return false;
+  MAP_ROTATE_PENDING = false;
+  if (id === null || id === undefined) { MAP_PINNED_ID = null; return true; }
+  if (!MAPS.get(id)) return false;
+  if (!applyMapId(id)) return false;
+  MAP_PINNED_ID = id;
+  return true;
 }
 
 /* Explicit assignments keep the API stable even though the implementation
    lives in a classic script with shared top-level lexical bindings. */
 globalThis.setActiveMap = setActiveMap;
 globalThis.activeMapId = activeMapId;
+globalThis.chooseMapId = chooseMapId;
+globalThis.pinnedMapId = pinnedMapId;

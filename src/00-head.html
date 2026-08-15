@@ -295,6 +295,9 @@ body.touch .sens{display:none}
 .mode-picker-label{display:block;margin-bottom:6px;font-family:var(--disp);font-size:11px;font-weight:700;
   letter-spacing:.14em;color:var(--ink-soft)}
 .mode-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+/* The map row is however many maps are in the pool plus ROTATE, so it sizes
+   itself rather than assuming the mode row's two. */
+.map-options{grid-template-columns:repeat(auto-fit,minmax(92px,1fr));margin-top:8px}
 .mode-option{min-width:0;min-height:50px;padding:6px 7px 7px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:2px;white-space:normal;line-height:1.05;font-size:11px}
 .mode-option span{font-weight:800;letter-spacing:.06em}
@@ -692,13 +695,15 @@ body.touch .sens{display:none}
 #title.hud #modePicker{grid-area:mode;align-self:end;justify-self:center;
   width:min(clamp(300px,44vw,760px),100%);display:flex;flex-direction:column;
   gap:8px;text-align:center;padding-bottom:2px}
-/* The two cards sit side by side; CHANGE MODE stays under BOTH of them
-   rather than beside them, because it belongs to the mode and the map has
-   no control at all. Hence a row wrapper instead of turning the picker
-   itself into a row, which swept the button into the same line. */
-.card-row{display:contents}
-#title.hud .card-row{display:flex;flex-direction:row;align-items:stretch;gap:10px}
-#title.hud .card-row>.mode-card{flex:1 1 0;min-width:0}
+/* The two cards sit side by side, and each one now owns a button, so the
+   swaps ride in a row of their own that lines up under them. Row wrappers
+   rather than turning the picker itself into a row, which swept every child
+   into the same line. Both are display:contents outside the wide layout, so
+   the narrow column is untouched. */
+.card-row,.swap-row{display:contents}
+#title.hud .card-row,#title.hud .swap-row{display:flex;flex-direction:row;
+  align-items:stretch;gap:10px}
+#title.hud .card-row>.mode-card,#title.hud .swap-row>.mode-swap{flex:1 1 0;min-width:0}
 #title.hud .mode-picker-label{display:none}
 #title.hud .mode-options{position:absolute;width:1px;height:1px;overflow:hidden;
   clip-path:inset(50%);white-space:nowrap}
