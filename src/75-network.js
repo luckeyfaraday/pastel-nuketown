@@ -67,32 +67,27 @@ const NET_QUICK_RETRY_ERRORS = [
   'room-not-found', 'room-full', 'room-migrating', 'unsupported-map'
 ];
 
-/* Delete-on-integration shim: the multi-map registry lands on another branch.
-   Until then this worktree has exactly one map, and these guards keep it
-   runnable without inventing a second registry here. */
+/* A map id is protocol data; the catalog that gives it meaning is the page's.
+   These adapt the shared registry to the wire: what this page can play, a
+   received id checked against that, and what is on screen right now. Read
+   through MAPS rather than the module global, so the legacy-embedder registry
+   10-core falls back to — a stub holding one map — answers here too. */
 function netKnownMapIds() {
-  if (typeof NUKETOWN_MAPS === 'object' && NUKETOWN_MAPS &&
-      typeof NUKETOWN_MAPS.ids === 'function') {
-    try {
-      const ids = NETP.cleanMapIds(NUKETOWN_MAPS.ids());
-      if (ids.length) return ids;
-    } catch (error) {}
+  try {
+    return NETP.cleanMapIds(MAPS.ids());
+  } catch (error) {
+    return [];
   }
-  return ['nuketown'];
 }
 
 function netKnownMapId(value) {
   return NETP.cleanMapId(value, id => {
-    if (typeof NUKETOWN_MAPS === 'object' && NUKETOWN_MAPS &&
-        typeof NUKETOWN_MAPS.get === 'function') {
-      try { return !!NUKETOWN_MAPS.get(id); } catch (error) { return false; }
-    }
-    return id === 'nuketown';
+    try { return !!MAPS.get(id); } catch (error) { return false; }
   });
 }
 
 function netActiveMapId() {
-  let id = 'nuketown';
+  let id = MAPS.DEFAULT_ID;
   if (typeof activeMapId === 'function') {
     try { id = activeMapId(); } catch (error) { return null; }
   }
@@ -102,13 +97,16 @@ function netActiveMapId() {
 function netAdoptMap(id) {
   const clean = netKnownMapId(id);
   if (!clean) return false;
-  if (typeof setActiveMap !== 'function') return clean === 'nuketown';
+  /* Without the map runtime the world cannot be rebuilt, so the only room
+     this page can honestly enter is one already on the map it booted with. */
+  if (typeof setActiveMap !== 'function') return clean === netActiveMapId();
   try {
     return setActiveMap(clean) === true && netActiveMapId() === clean;
   } catch (error) {
     return false;
   }
 }
+
 const NET = {
   mode: 'solo',                 // solo | connecting | host | guest
   phase: 'idle',                // idle | connecting | lobby | playing
