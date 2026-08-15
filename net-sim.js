@@ -377,6 +377,7 @@ function createLink(clock, opts) {
         v: NETP.VERSION,
         authorityEpoch: authorityEpoch,
         round: latestSnapshot.round,
+        map: latestSnapshot.map,
         host: GUEST_ID,
         members: members,
         seamless: true,

@@ -63,7 +63,52 @@ const NET_LAG_OFFSET_SLACK = 0.05;
    candidate can fill, close, or start changing host in the moment between the
    poll that offered it and the socket that dials it; that is the next
    candidate's turn, not a failure to report. */
-const NET_QUICK_RETRY_ERRORS = ['room-not-found', 'room-full', 'room-migrating'];
+const NET_QUICK_RETRY_ERRORS = [
+  'room-not-found', 'room-full', 'room-migrating', 'unsupported-map'
+];
+
+/* Delete-on-integration shim: the multi-map registry lands on another branch.
+   Until then this worktree has exactly one map, and these guards keep it
+   runnable without inventing a second registry here. */
+function netKnownMapIds() {
+  if (typeof NUKETOWN_MAPS === 'object' && NUKETOWN_MAPS &&
+      typeof NUKETOWN_MAPS.ids === 'function') {
+    try {
+      const ids = NETP.cleanMapIds(NUKETOWN_MAPS.ids());
+      if (ids.length) return ids;
+    } catch (error) {}
+  }
+  return ['nuketown'];
+}
+
+function netKnownMapId(value) {
+  return NETP.cleanMapId(value, id => {
+    if (typeof NUKETOWN_MAPS === 'object' && NUKETOWN_MAPS &&
+        typeof NUKETOWN_MAPS.get === 'function') {
+      try { return !!NUKETOWN_MAPS.get(id); } catch (error) { return false; }
+    }
+    return id === 'nuketown';
+  });
+}
+
+function netActiveMapId() {
+  let id = 'nuketown';
+  if (typeof activeMapId === 'function') {
+    try { id = activeMapId(); } catch (error) { return null; }
+  }
+  return netKnownMapId(id);
+}
+
+function netAdoptMap(id) {
+  const clean = netKnownMapId(id);
+  if (!clean) return false;
+  if (typeof setActiveMap !== 'function') return clean === 'nuketown';
+  try {
+    return setActiveMap(clean) === true && netActiveMapId() === clean;
+  } catch (error) {
+    return false;
+  }
+}
 const NET = {
   mode: 'solo',                 // solo | connecting | host | guest
   phase: 'idle',                // idle | connecting | lobby | playing
@@ -946,11 +991,19 @@ function netConnect(kind, requestedRoom, quickPlan) {
 
   const listedEl = document.getElementById('roomPublic');
   const listed = !listedEl || !!listedEl.checked;
+  const map = netActiveMapId();
+  const maps = netKnownMapIds();
+  if (!map || maps.indexOf(map) === -1) {
+    netStatus('The selected map is not supported by this page.', 'error');
+    netSetMenuBusy(false);
+    return;
+  }
 
   netResetTransport();
   NET.mode = 'connecting';
   NET.phase = 'connecting';
-  NET.wanted = { kind, name, room, listed, cosmetics: netEquippedCosmetics() };
+  NET.wanted = { kind, name, room, listed, map, maps,
+    cosmetics: netEquippedCosmetics() };
   /* Reinstalled after the reset: a quick-play run outlives the individual
      connection attempts it is made of. */
   NET.quick = quickPlan || null;
@@ -980,7 +1033,7 @@ function netConnect(kind, requestedRoom, quickPlan) {
     const w = NET.wanted;
     const hello = {
       t: w.kind, v: NETP.VERSION, room: w.room, name: w.name,
-      listed: w.listed, cosmetics: w.cosmetics
+      listed: w.listed, map: w.map, maps: w.maps, cosmetics: w.cosmetics
     };
     const authToken = netAuthTokenForSocket(socketURL);
     if (authToken) hello.authToken = authToken;
@@ -1029,12 +1082,34 @@ function netHandleWire(raw) {
   if (msg.t === 'room') {
     const members = netCleanMembers(msg.members);
     const room = NETP.normalizeRoomCode(msg.room);
-    if (NET.phase !== 'connecting' || typeof msg.id !== 'string' || !msg.id ||
+    const map = netKnownMapId(msg.map);
+    if (NET.phase === 'connecting' && !map) {
+      netResetTransport();
+      netShowMainMenu();
+      netStatus('This room uses a map this page does not support. Reload it to continue.',
+        'error');
+      netSetMenuBusy(false);
+      return;
+    }
+    if (NET.phase !== 'connecting' || msg.v !== NETP.VERSION ||
+        typeof msg.id !== 'string' || !msg.id ||
         msg.id.length > 80 || room.length !== 6 ||
+        !map ||
         !NETP.isAuthorityEpoch(msg.authorityEpoch) ||
         (msg.role !== 'host' && msg.role !== 'guest') || !members ||
         !members.some(member => member.id === msg.id && member.role === msg.role)) {
       if (NET.socket) try { NET.socket.close(1008, 'invalid room handshake'); } catch (e) {}
+      return;
+    }
+    /* Geometry must move before any mid-round snapshot can arrive and validate
+       its actor positions against MAP.bounds. An unsupported room is refused,
+       never interpreted as the default map. */
+    if (!netAdoptMap(map)) {
+      netResetTransport();
+      netShowMainMenu();
+      netStatus('This room uses a map this page does not support. Reload it to continue.',
+        'error');
+      netSetMenuBusy(false);
       return;
     }
     if (NET.connectTimer) clearTimeout(NET.connectTimer);
@@ -1078,9 +1153,18 @@ function netHandleWire(raw) {
     if (!netIsMultiplayer()) return;
     const previousEpoch = NET.authorityEpoch;
     const checked = NETP.sanitizeHostChanged(
-      msg, NET.id, NET.authorityEpoch, NET.round);
-    if (!checked.ok) return;
+      msg, NET.id, NET.authorityEpoch, NET.round,
+      id => !!netKnownMapId(id));
+    if (!checked.ok) {
+      if (typeof checked.error === 'string' && checked.error.indexOf('map') !== -1)
+        netEndSession('Host migration named a map this page does not support.');
+      return;
+    }
     const change = checked.value;
+    if (change.map !== netActiveMapId()) {
+      netEndSession('The room changed to an incompatible map. Reconnect to continue.');
+      return;
+    }
     NET.authorityEpoch = change.authorityEpoch;
     NET.round = change.round;
     NET.members = change.members;
@@ -1638,6 +1722,8 @@ function netBeginSeamlessMigration(change, previousEpoch) {
       !netValidCheckpoint(checkpoint) ||
       checkpoint.authorityEpoch !== sourceEpoch ||
       checkpoint.round !== change.round ||
+      change.map !== snapshot.map ||
+      checkpoint.map !== snapshot.map ||
       checkpoint.mode !== snapshot.mode ||
       checkpoint.manifestVersion !== snapshot.manifestVersion) return false;
   const metadata = netCheckpointMetadata(checkpoint);
@@ -1954,6 +2040,7 @@ function netSendCheckpoint() {
     tick: G.tick,
     time: G.time,
     mode: G.mode,
+    map: netActiveMapId(),
     manifestVersion: NET.manifestVersion,
     actors: G.actors.map(netPackCheckpointActor),
     /* The unchanged relay validates the legacy checkpoint event list itself.
@@ -2126,6 +2213,7 @@ function netAfterSimulation(dt, force) {
       tick: G.tick,
       time: G.time,
       mode: G.mode,
+      map: netActiveMapId(),
       eventSeq: NET.eventSeq,
       manifestVersion: NET.manifestVersion,
       actors: G.actors.map(netPackActor),
@@ -2348,6 +2436,7 @@ function netValidSnapshot(message) {
       !Number.isSafeInteger(message.eventSeq) || message.eventSeq < 0 ||
       !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
       (message.mode !== 'dm' && message.mode !== 'kc') ||
+      message.map !== netActiveMapId() ||
       typeof message.over !== 'boolean' ||
       !Array.isArray(message.actors) || message.actors.length < 1 ||
       message.actors.length > 16 ||
@@ -2380,6 +2469,7 @@ function netValidCheckpoint(message) {
       !Number.isSafeInteger(message.tick) || message.tick < 0 ||
       !netFiniteIn(message.time, 0, 100_000_000) ||
       (message.mode !== 'dm' && message.mode !== 'kc') ||
+      message.map !== netActiveMapId() ||
       !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
       !Array.isArray(message.actors) || message.actors.length < 1 ||
       message.actors.length > 16 ||

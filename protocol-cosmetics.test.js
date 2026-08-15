@@ -37,8 +37,8 @@ class FakeWebSocket extends EventEmitter {
   }
 }
 
-test('protocol v9 treats cosmetic fields as soft, slot-aware metadata', () => {
-  assert.equal(Protocol.VERSION, 9);
+test('protocol v10 keeps cosmetic fields as soft, slot-aware metadata', () => {
+  assert.equal(Protocol.VERSION, 10);
 
   const accepts = (id, kind, slot) =>
     (id === 'char-midnight' && kind === 'character' && slot === null) ||
@@ -58,8 +58,8 @@ test('protocol v9 treats cosmetic fields as soft, slot-aware metadata', () => {
 
   /* A shot effect rides the same payload. It is written only when there is
      one, so the shape a default-dressed player produces is exactly what it
-     was before effects existed — which is the whole reason this is still
-     version 9 and not version 10. */
+     was before effects existed — which is why the effect itself needed no
+     version bump after the v9 cosmetic contract. */
   assert.deepEqual(Protocol.sanitizeCosmetics({
     character: 'char-midnight', effect: 'fx-starfall'
   }, accepts), {
@@ -145,6 +145,8 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
       t: 'create',
       v: Protocol.VERSION,
       name: 'Host',
+      map: 'nuketown',
+      maps: ['nuketown'],
       authToken: session.token,
       cosmetics: {
         character: 'char-midnight',
@@ -163,6 +165,7 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
       v: Protocol.VERSION,
       room,
       name: 'Guest',
+      maps: ['nuketown'],
       authToken: 'not-a-live-session-token',
       cosmetics: {
         character: 'char-cloudknight',
@@ -188,7 +191,7 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
     host.message({
       t: 'snapshot', v: Protocol.VERSION, authorityEpoch: 1, round: 1,
       tick: 60, time: 1, eventSeq: 0, manifestVersion: 1,
-      mode: 'dm', over: false, winner: null, donuts: [],
+      mode: 'dm', map: 'nuketown', over: false, winner: null, donuts: [],
       actors: [
         {
           netId: 'peer-host', human: true,
@@ -224,7 +227,7 @@ test('the relay derives roster and snapshot cosmetics from database entitlements
 
     host.message({
       t: 'checkpoint', v: Protocol.VERSION, authorityEpoch: 1, round: 1,
-      tick: 60, time: 1, mode: 'dm', manifestVersion: 1,
+      tick: 60, time: 1, mode: 'dm', map: 'nuketown', manifestVersion: 1,
       actors: [
         { netId: 'peer-host', controller: 'local', human: true, skill: 'normal', ammoBy: {} },
         { netId: 'peer-guest', controller: 'remote', human: true, skill: 'normal', ammoBy: {} }

@@ -555,7 +555,7 @@ test('one malformed donut rejects its whole snapshot before any state is applied
     'the valid donut beside the malformed one must not be half-applied');
 });
 
-test('snapshot validation enforces donut capacity, mode, and actor references', () => {
+test('snapshot and checkpoint validation enforce map identity and world state', () => {
   const match = SIM.createMatch({ latencyMs: 5, seed: 20, mode: 'kc' });
   spawnDonutForGuest(match);
   const base = structuredClone(match.link.latestSnapshot());
@@ -582,6 +582,18 @@ test('snapshot validation enforces donut capacity, mode, and actor references', 
     'deathmatch snapshots cannot smuggle kill-confirmed pickups');
   dmWithDonut.donuts = [];
   assert.strictEqual(accepted(dmWithDonut), true);
+
+  const wrongMap = structuredClone(base);
+  wrongMap.map = 'terminal';
+  assert.strictEqual(accepted(wrongMap), false,
+    'a snapshot for another map must be refused before its bounds are trusted');
+
+  const checkpoint = structuredClone(match.link.latestCheckpoint());
+  checkpoint.map = 'terminal';
+  match.guest.context.__wrongMapCheckpoint = JSON.stringify(checkpoint);
+  assert.strictEqual(match.guest.get(
+    'netValidCheckpoint(JSON.parse(__wrongMapCheckpoint))'), false,
+    'a checkpoint for another map must not become migration state');
 
   const foreignOwner = structuredClone(base);
   foreignOwner.donuts[0].owner = 99_999;

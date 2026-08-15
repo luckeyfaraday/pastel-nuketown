@@ -986,7 +986,7 @@ export function createRelayServer(options = {}) {
     return `"${peer.name}" (${peer.id.slice(0, 8)}, seat ${peer.slot})`;
   }
 
-  function enterRoom(peer, room, role, name, identity) {
+  function enterRoom(peer, room, role, name, identity, supportedMaps) {
     if (peer.joinTimer) clearTimeout(peer.joinTimer);
     peer.joinTimer = null;
     peer.name = name;
@@ -995,6 +995,7 @@ export function createRelayServer(options = {}) {
     peer.slot = claimSlot(room);
     peer.userId = identity.userId;
     peer.cosmetics = Protocol.sanitizeCosmetics(identity.cosmetics, catalogAcceptsCosmetic);
+    peer.supportedMaps = new Set(supportedMaps);
     peer.lastSeq = -1;
     /* Arriving is activity. A drop-in gets the full grace period to find the
        deploy card, and nobody is judged on time spent before they were here. */
@@ -1039,6 +1040,7 @@ export function createRelayServer(options = {}) {
       role: peer.role,
       authorityEpoch: peer.room.authorityEpoch,
       round: peer.room.round,
+      map: peer.room.map,
       started: peer.room.started,
       members: memberList(peer.room),
       autoStartIn: autoStartRemaining(peer.room)
@@ -1049,6 +1051,15 @@ export function createRelayServer(options = {}) {
     const name = Protocol.cleanPlayerName(message.name);
     if (!name) {
       sendError(peer, 'invalid-name', 'Choose a player name.');
+      return;
+    }
+    const supportedMaps = Protocol.cleanMapIds(message.maps);
+    const map = Protocol.cleanMapId(
+      message.map,
+      (id) => supportedMaps.includes(id)
+    );
+    if (!map) {
+      sendError(peer, 'invalid-map', 'Choose a supported map before creating a room.');
       return;
     }
     const identity = approvedIdentity(message);
@@ -1066,6 +1077,7 @@ export function createRelayServer(options = {}) {
 
     const room = {
       code,
+      map,
       host: null,
       members: new Map(),
       started: false,
@@ -1090,7 +1102,7 @@ export function createRelayServer(options = {}) {
       listed: message.listed !== false
     };
     rooms.set(code, room);
-    enterRoom(peer, room, 'host', name, identity);
+    enterRoom(peer, room, 'host', name, identity, supportedMaps);
     roomReply(peer);
     broadcastMembers(room);
   }
@@ -1101,6 +1113,11 @@ export function createRelayServer(options = {}) {
       sendError(peer, 'invalid-name', 'Choose a player name.');
       return;
     }
+    const supportedMaps = Protocol.cleanMapIds(message.maps);
+    if (!supportedMaps.length) {
+      sendError(peer, 'invalid-map', 'This page did not provide a valid map catalog. Reload it.');
+      return;
+    }
     const identity = approvedIdentity(message);
     if (rejectBannedIdentity(peer, name, identity)) return;
 
@@ -1108,6 +1125,11 @@ export function createRelayServer(options = {}) {
     const room = rooms.get(code);
     if (!room) {
       sendError(peer, 'room-not-found', 'That room does not exist.');
+      return;
+    }
+    if (!supportedMaps.includes(room.map)) {
+      sendError(peer, 'unsupported-map',
+        'This page does not support the map used by that room. Reload it to continue.');
       return;
     }
     /* A started room is joinable now. The one state that is not is a room
@@ -1124,7 +1146,7 @@ export function createRelayServer(options = {}) {
       return;
     }
 
-    enterRoom(peer, room, 'guest', name, identity);
+    enterRoom(peer, room, 'guest', name, identity, supportedMaps);
     /* Before either reply: the arrival is the second body that starts the
        clock, and both messages are meant to carry the clock's answer. */
     scheduleAutoStart(room);
@@ -1685,6 +1707,12 @@ export function createRelayServer(options = {}) {
       if (!hasCurrentAuthority(peer, message)) return;
       if (peer.room.migrating) return;
       if (!peer.room.started || message.round !== peer.room.round) return;
+      if ((message.t === 'snapshot' || message.t === 'checkpoint') &&
+          message.map !== peer.room.map) {
+        sendError(peer, 'invalid-map-state',
+          'Match state does not match the room map.');
+        return;
+      }
       if (message.t === 'snapshot' &&
           (!Number.isSafeInteger(message.tick) || !Number.isFinite(message.time) ||
            !Number.isSafeInteger(message.eventSeq) ||
@@ -1801,6 +1829,7 @@ export function createRelayServer(options = {}) {
     peer.name = '';
     peer.userId = null;
     peer.cosmetics = Protocol.sanitizeCosmetics(null);
+    peer.supportedMaps = new Set();
     peer.lastSeq = -1;
   }
 
@@ -1849,6 +1878,7 @@ export function createRelayServer(options = {}) {
     const snapshot = room.latestSnapshot;
     const checkpoint = room.latestCheckpoint;
     if (!snapshot || !checkpoint ||
+        snapshot.map !== room.map || checkpoint.map !== room.map ||
         snapshot.authorityEpoch !== room.authorityEpoch ||
         checkpoint.authorityEpoch !== room.authorityEpoch ||
         snapshot.round !== room.round || checkpoint.round !== room.round ||
@@ -1867,7 +1897,8 @@ export function createRelayServer(options = {}) {
   function nextMigrationCandidate(room) {
     const attempted = room.migrating ? room.migrating.attempted : new Set();
     for (const peer of room.members.values()) {
-      if (peer.role === 'guest' && peer.alive && !attempted.has(peer.id)) return peer;
+      if (peer.role === 'guest' && peer.alive &&
+          peer.supportedMaps.has(room.map) && !attempted.has(peer.id)) return peer;
     }
     return null;
   }
@@ -1919,6 +1950,7 @@ export function createRelayServer(options = {}) {
       v: Protocol.VERSION,
       authorityEpoch: room.authorityEpoch,
       round: room.round,
+      map: room.map,
       host: nextHost.id,
       members: memberList(room)
     }, true);
@@ -1947,6 +1979,7 @@ export function createRelayServer(options = {}) {
       v: Protocol.VERSION,
       authorityEpoch: room.authorityEpoch,
       round: room.round,
+      map: room.map,
       host: nextHost.id,
       members: memberList(room),
       seamless: true,
@@ -2070,6 +2103,7 @@ export function createRelayServer(options = {}) {
       room: null,
       slot: -1,
       cosmetics: Protocol.sanitizeCosmetics(null),
+      supportedMaps: new Set(),
       lastSeq: -1,
       alive: true,
       cleanedUp: false,

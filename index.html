@@ -3823,7 +3823,12 @@ if (typeof THREE === "undefined") {
   : (typeof self !== 'undefined' ? self : this), function () {
   'use strict';
 
-  /* 9: player-selected cosmetics cross the room handshake and snapshots. The
+  /* 10: map identity crosses the room handshake and authoritative state. A
+     version 9 peer would ignore it, validate Terminal positions against
+     Nuketown bounds, and then play a different world from the room, so the
+     two versions must never share a room.
+
+     9: player-selected cosmetics cross the room handshake and snapshots. The
      jersey is still seat identity, but a version 8 host cannot carry the
      separate appearance metadata through a snapshot or a migration, so the
      two versions must never share a room. Shot effects joined that payload
@@ -3848,13 +3853,15 @@ if (typeof THREE === "undefined") {
      version 5 host receiving a mid-round roster change seats nobody, and the
      arrival becomes a ghost sending input no authority ever applies. Refusing
      the handshake is the only honest outcome, so old and new must not mix. */
-  var VERSION = 9;
+  var VERSION = 10;
   /* Nine seats, because nine is how many combatants the match runs. Any
      smaller and the shortfall is made up with bots no matter how popular the
      room gets, which is the one thing a full room should not have to do. */
   var MAX_PLAYERS = 9;
   var MAX_MESSAGE_BYTES = 64 * 1024;
   var MAX_PLAYER_NAME_LENGTH = 20;
+  var MAX_MAP_ID_LENGTH = 40;
+  var MAX_SUPPORTED_MAPS = 32;
   var ROOM_CODE_LENGTH = 6;
   var ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   var MAX_ROOM_LIST = 50;
@@ -3929,6 +3936,35 @@ if (typeof THREE === "undefined") {
       .trim();
 
     return Array.from(name).slice(0, MAX_PLAYER_NAME_LENGTH).join('');
+  }
+
+  /* Map ids are protocol data, but the map catalog belongs to the page. Keep
+     the wire shape small and inert here, then let callers provide the catalog
+     predicate that turns a well-formed id into a known one. */
+  function cleanMapId(value, accepts) {
+    if (typeof value !== 'string' || value.length < 1 ||
+        value.length > MAX_MAP_ID_LENGTH ||
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return null;
+    if (typeof accepts !== 'function') return value;
+    try {
+      return accepts(value) ? value : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function cleanMapIds(value, accepts) {
+    if (!Array.isArray(value) || value.length < 1 ||
+        value.length > MAX_SUPPORTED_MAPS) return [];
+    var seen = Object.create(null);
+    var clean = [];
+    for (var i = 0; i < value.length; i++) {
+      var id = cleanMapId(value[i], accepts);
+      if (!id || seen[id]) return [];
+      seen[id] = true;
+      clean.push(id);
+    }
+    return clean;
   }
 
   /* A seat in the room, reserved by the relay and held until its occupant
@@ -4025,7 +4061,8 @@ if (typeof THREE === "undefined") {
   /* A host change is a server-authored authority transition. Validate the
      complete roster here so clients change roles only when the epoch and the
      cancelled-round barrier both move forward together. */
-  function sanitizeHostChanged(message, localId, previousEpoch, previousRound) {
+  function sanitizeHostChanged(message, localId, previousEpoch, previousRound,
+      acceptsMap) {
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       return result(false, null, 'host change must be an object');
     }
@@ -4035,6 +4072,8 @@ if (typeof THREE === "undefined") {
     if (message.v !== VERSION) {
       return result(false, null, 'unsupported protocol version');
     }
+    var map = cleanMapId(message.map, acceptsMap);
+    if (!map) return result(false, null, 'map is invalid or unsupported');
 
     var priorEpoch = isAuthorityEpoch(previousEpoch) ? previousEpoch : 0;
     if (!isAuthorityEpoch(message.authorityEpoch) ||
@@ -4115,6 +4154,7 @@ if (typeof THREE === "undefined") {
       v: VERSION,
       authorityEpoch: message.authorityEpoch,
       round: message.round,
+      map: map,
       host: message.host,
       members: members
     };
@@ -4126,6 +4166,9 @@ if (typeof THREE === "undefined") {
     return result(true, change, null);
   }
 
+  /* Map is intentionally not repeated in this per-player handoff. The room's
+     host-changed envelope and both cached world images already pin it; this
+     message contributes only the promoted host's missing input counters. */
   function sanitizeAuthorityState(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message) ||
         message.t !== 'authority-state' || message.v !== VERSION ||
@@ -4614,6 +4657,8 @@ if (typeof THREE === "undefined") {
     MAX_PLAYERS: MAX_PLAYERS,
     MAX_MESSAGE_BYTES: MAX_MESSAGE_BYTES,
     MAX_PLAYER_NAME_LENGTH: MAX_PLAYER_NAME_LENGTH,
+    MAX_MAP_ID_LENGTH: MAX_MAP_ID_LENGTH,
+    MAX_SUPPORTED_MAPS: MAX_SUPPORTED_MAPS,
     ROOM_CODE_LENGTH: ROOM_CODE_LENGTH,
     ROOM_CODE_ALPHABET: ROOM_CODE_ALPHABET,
     MAX_ROOM_LIST: MAX_ROOM_LIST,
@@ -4627,6 +4672,8 @@ if (typeof THREE === "undefined") {
     MAX_INTERP_SNAPSHOTS: MAX_INTERP_SNAPSHOTS,
     normalizeRoomCode: normalizeRoomCode,
     cleanPlayerName: cleanPlayerName,
+    cleanMapId: cleanMapId,
+    cleanMapIds: cleanMapIds,
     validSlot: validSlot,
     cleanCosmeticId: cleanCosmeticId,
     sanitizeCosmetics: sanitizeCosmetics,
@@ -12136,7 +12183,52 @@ const NET_LAG_OFFSET_SLACK = 0.05;
    candidate can fill, close, or start changing host in the moment between the
    poll that offered it and the socket that dials it; that is the next
    candidate's turn, not a failure to report. */
-const NET_QUICK_RETRY_ERRORS = ['room-not-found', 'room-full', 'room-migrating'];
+const NET_QUICK_RETRY_ERRORS = [
+  'room-not-found', 'room-full', 'room-migrating', 'unsupported-map'
+];
+
+/* Delete-on-integration shim: the multi-map registry lands on another branch.
+   Until then this worktree has exactly one map, and these guards keep it
+   runnable without inventing a second registry here. */
+function netKnownMapIds() {
+  if (typeof NUKETOWN_MAPS === 'object' && NUKETOWN_MAPS &&
+      typeof NUKETOWN_MAPS.ids === 'function') {
+    try {
+      const ids = NETP.cleanMapIds(NUKETOWN_MAPS.ids());
+      if (ids.length) return ids;
+    } catch (error) {}
+  }
+  return ['nuketown'];
+}
+
+function netKnownMapId(value) {
+  return NETP.cleanMapId(value, id => {
+    if (typeof NUKETOWN_MAPS === 'object' && NUKETOWN_MAPS &&
+        typeof NUKETOWN_MAPS.get === 'function') {
+      try { return !!NUKETOWN_MAPS.get(id); } catch (error) { return false; }
+    }
+    return id === 'nuketown';
+  });
+}
+
+function netActiveMapId() {
+  let id = 'nuketown';
+  if (typeof activeMapId === 'function') {
+    try { id = activeMapId(); } catch (error) { return null; }
+  }
+  return netKnownMapId(id);
+}
+
+function netAdoptMap(id) {
+  const clean = netKnownMapId(id);
+  if (!clean) return false;
+  if (typeof setActiveMap !== 'function') return clean === 'nuketown';
+  try {
+    return setActiveMap(clean) === true && netActiveMapId() === clean;
+  } catch (error) {
+    return false;
+  }
+}
 const NET = {
   mode: 'solo',                 // solo | connecting | host | guest
   phase: 'idle',                // idle | connecting | lobby | playing
@@ -13019,11 +13111,19 @@ function netConnect(kind, requestedRoom, quickPlan) {
 
   const listedEl = document.getElementById('roomPublic');
   const listed = !listedEl || !!listedEl.checked;
+  const map = netActiveMapId();
+  const maps = netKnownMapIds();
+  if (!map || maps.indexOf(map) === -1) {
+    netStatus('The selected map is not supported by this page.', 'error');
+    netSetMenuBusy(false);
+    return;
+  }
 
   netResetTransport();
   NET.mode = 'connecting';
   NET.phase = 'connecting';
-  NET.wanted = { kind, name, room, listed, cosmetics: netEquippedCosmetics() };
+  NET.wanted = { kind, name, room, listed, map, maps,
+    cosmetics: netEquippedCosmetics() };
   /* Reinstalled after the reset: a quick-play run outlives the individual
      connection attempts it is made of. */
   NET.quick = quickPlan || null;
@@ -13053,7 +13153,7 @@ function netConnect(kind, requestedRoom, quickPlan) {
     const w = NET.wanted;
     const hello = {
       t: w.kind, v: NETP.VERSION, room: w.room, name: w.name,
-      listed: w.listed, cosmetics: w.cosmetics
+      listed: w.listed, map: w.map, maps: w.maps, cosmetics: w.cosmetics
     };
     const authToken = netAuthTokenForSocket(socketURL);
     if (authToken) hello.authToken = authToken;
@@ -13102,12 +13202,34 @@ function netHandleWire(raw) {
   if (msg.t === 'room') {
     const members = netCleanMembers(msg.members);
     const room = NETP.normalizeRoomCode(msg.room);
-    if (NET.phase !== 'connecting' || typeof msg.id !== 'string' || !msg.id ||
+    const map = netKnownMapId(msg.map);
+    if (NET.phase === 'connecting' && !map) {
+      netResetTransport();
+      netShowMainMenu();
+      netStatus('This room uses a map this page does not support. Reload it to continue.',
+        'error');
+      netSetMenuBusy(false);
+      return;
+    }
+    if (NET.phase !== 'connecting' || msg.v !== NETP.VERSION ||
+        typeof msg.id !== 'string' || !msg.id ||
         msg.id.length > 80 || room.length !== 6 ||
+        !map ||
         !NETP.isAuthorityEpoch(msg.authorityEpoch) ||
         (msg.role !== 'host' && msg.role !== 'guest') || !members ||
         !members.some(member => member.id === msg.id && member.role === msg.role)) {
       if (NET.socket) try { NET.socket.close(1008, 'invalid room handshake'); } catch (e) {}
+      return;
+    }
+    /* Geometry must move before any mid-round snapshot can arrive and validate
+       its actor positions against MAP.bounds. An unsupported room is refused,
+       never interpreted as the default map. */
+    if (!netAdoptMap(map)) {
+      netResetTransport();
+      netShowMainMenu();
+      netStatus('This room uses a map this page does not support. Reload it to continue.',
+        'error');
+      netSetMenuBusy(false);
       return;
     }
     if (NET.connectTimer) clearTimeout(NET.connectTimer);
@@ -13151,9 +13273,18 @@ function netHandleWire(raw) {
     if (!netIsMultiplayer()) return;
     const previousEpoch = NET.authorityEpoch;
     const checked = NETP.sanitizeHostChanged(
-      msg, NET.id, NET.authorityEpoch, NET.round);
-    if (!checked.ok) return;
+      msg, NET.id, NET.authorityEpoch, NET.round,
+      id => !!netKnownMapId(id));
+    if (!checked.ok) {
+      if (typeof checked.error === 'string' && checked.error.indexOf('map') !== -1)
+        netEndSession('Host migration named a map this page does not support.');
+      return;
+    }
     const change = checked.value;
+    if (change.map !== netActiveMapId()) {
+      netEndSession('The room changed to an incompatible map. Reconnect to continue.');
+      return;
+    }
     NET.authorityEpoch = change.authorityEpoch;
     NET.round = change.round;
     NET.members = change.members;
@@ -13711,6 +13842,8 @@ function netBeginSeamlessMigration(change, previousEpoch) {
       !netValidCheckpoint(checkpoint) ||
       checkpoint.authorityEpoch !== sourceEpoch ||
       checkpoint.round !== change.round ||
+      change.map !== snapshot.map ||
+      checkpoint.map !== snapshot.map ||
       checkpoint.mode !== snapshot.mode ||
       checkpoint.manifestVersion !== snapshot.manifestVersion) return false;
   const metadata = netCheckpointMetadata(checkpoint);
@@ -14027,6 +14160,7 @@ function netSendCheckpoint() {
     tick: G.tick,
     time: G.time,
     mode: G.mode,
+    map: netActiveMapId(),
     manifestVersion: NET.manifestVersion,
     actors: G.actors.map(netPackCheckpointActor),
     /* The unchanged relay validates the legacy checkpoint event list itself.
@@ -14199,6 +14333,7 @@ function netAfterSimulation(dt, force) {
       tick: G.tick,
       time: G.time,
       mode: G.mode,
+      map: netActiveMapId(),
       eventSeq: NET.eventSeq,
       manifestVersion: NET.manifestVersion,
       actors: G.actors.map(netPackActor),
@@ -14421,6 +14556,7 @@ function netValidSnapshot(message) {
       !Number.isSafeInteger(message.eventSeq) || message.eventSeq < 0 ||
       !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
       (message.mode !== 'dm' && message.mode !== 'kc') ||
+      message.map !== netActiveMapId() ||
       typeof message.over !== 'boolean' ||
       !Array.isArray(message.actors) || message.actors.length < 1 ||
       message.actors.length > 16 ||
@@ -14453,6 +14589,7 @@ function netValidCheckpoint(message) {
       !Number.isSafeInteger(message.tick) || message.tick < 0 ||
       !netFiniteIn(message.time, 0, 100_000_000) ||
       (message.mode !== 'dm' && message.mode !== 'kc') ||
+      message.map !== netActiveMapId() ||
       !Number.isSafeInteger(message.manifestVersion) || message.manifestVersion < 1 ||
       !Array.isArray(message.actors) || message.actors.length < 1 ||
       message.actors.length > 16 ||

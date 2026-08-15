@@ -132,7 +132,20 @@ class FakeWebSocket extends EventEmitter {
   }
 
   send(value) { this.sent.push(JSON.parse(value)); }
-  message(value) { this.emit('message', Buffer.from(JSON.stringify(value))); }
+  message(value) {
+    let message = value;
+    if ((value.t === 'create' || value.t === 'join') &&
+        !Object.hasOwn(value, 'maps')) {
+      message = { ...message, maps: ['nuketown'] };
+    }
+    if (value.t === 'create' && !Object.hasOwn(value, 'map'))
+      message = { ...message, map: 'nuketown' };
+    if ((value.t === 'snapshot' || value.t === 'checkpoint') &&
+        !Object.hasOwn(value, 'map')) {
+      message = { ...message, map: 'nuketown' };
+    }
+    this.emit('message', Buffer.from(JSON.stringify(message)));
+  }
   latest(type) { return this.sent.findLast((message) => message.t === type); }
   ping() {}
   close() { this.terminate(); }
