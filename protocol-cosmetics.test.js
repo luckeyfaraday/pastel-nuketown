@@ -38,7 +38,7 @@ class FakeWebSocket extends EventEmitter {
 }
 
 test('protocol v10 keeps cosmetic fields as soft, slot-aware metadata', () => {
-  assert.equal(Protocol.VERSION, 10);
+  assert.equal(Protocol.VERSION, 11);
 
   const accepts = (id, kind, slot) =>
     (id === 'char-midnight' && kind === 'character' && slot === null) ||

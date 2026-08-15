@@ -2003,3 +2003,35 @@ test('joining from the room browser puts the browser away first', () => {
     'a dialog left up would cover the lobby it just sent you to');
   assert.strictEqual(client.get('NET.simConnect'), 'join:AB12');
 });
+
+test('a round on a map the page cannot build ends the session', () => {
+  const match = SIM.createMatch({ latencyMs: 0, seed: 3 });
+  const members = [
+    { id: 'host-0001', name: 'HOST', role: 'host', slot: 0 },
+    { id: 'guest-001', name: 'GUEST', role: 'guest', slot: 1 }
+  ];
+  const start = (map) => JSON.stringify({
+    t: 'start',
+    v: SIM.NETP.VERSION,
+    authorityEpoch: match.guest.get('NET.authorityEpoch'),
+    round: match.guest.get('NET.round') + 1,
+    map,
+    members
+  });
+
+  match.guest.context.__wire = start('nuketown');
+  match.guest.run('netHandleWire(__wire)');
+  assert.strictEqual(match.guest.get('NET.round'), 2,
+    'a round on the map underfoot begins normally');
+  assert.strictEqual(match.guest.get('NET.mode'), 'guest');
+
+  /* The harness loads one map, so this stands in for a page a round has
+     rotated out from under: the relay only rotates to a map every member
+     announced, which makes this the shape of a page that lied or a relay
+     that changed its mind. Either way the honest move is to leave, not to
+     play the geometry it happens to have. */
+  match.guest.context.__wire = start('terminal');
+  match.guest.run('netHandleWire(__wire)');
+  assert.strictEqual(match.guest.get('NET.mode'), 'solo',
+    'a map this page cannot build ends the session rather than the wrong world');
+});
