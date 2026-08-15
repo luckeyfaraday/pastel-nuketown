@@ -182,12 +182,24 @@
            are still the control — CHANGE MODE presses the other one — so the
            narrow column and the pause card are untouched, and a keyboard
            still meets a pair of real toggles with aria-pressed on them. -->
+      <div class="card-row">
       <div class="mode-card" aria-hidden="true">
         <span class="mode-card-tag">MODE</span>
         <i class="mode-card-art"></i>
         <b class="mode-card-name" id="modeCardName">DEATHMATCH</b>
         <small class="mode-card-goal" id="modeCardGoal">25 KILLS</small>
         <small class="mode-card-blurb" id="modeCardBlurb">Everyone for themselves. Be the last one standing.</small>
+      </div>
+      <!-- The map is a rotation, not a choice, so this card is a readout and
+           not a control: no buttons under it, nothing to press. It says what
+           you are about to play, which is the only question it can answer. -->
+      <div class="mode-card map-card" id="mapCard" data-map="nuketown" aria-hidden="true">
+        <span class="mode-card-tag">MAP</span>
+        <i class="mode-card-art"></i>
+        <b class="mode-card-name" id="mapCardName">NUKETOWN</b>
+        <small class="mode-card-goal">UP NEXT</small>
+        <small class="mode-card-blurb" id="mapCardBlurb">Two houses, one street, nowhere to hide.</small>
+      </div>
       </div>
       <div class="mode-options">
         <button class="mini-btn mode-option" id="modeDm" type="button" aria-pressed="true">

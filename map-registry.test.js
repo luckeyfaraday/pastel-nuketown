@@ -40,7 +40,12 @@ function runtimeHarness() {
   const context = vm.createContext({});
   vm.runInContext(`
     const specs = { nuketown: { id: 'nuketown' }, terminal: { id: 'terminal' }, broken: { id: 'broken' } };
-    const MAPS = { get(id) { return specs[id] || null; } };
+    const order = ['nuketown', 'terminal'];
+    const MAPS = {
+      get(id) { return specs[id] || null; },
+      nextId(id) { const at = order.indexOf(id); return at === -1 ? 'nuketown' : order[(at + 1) % order.length]; }
+    };
+    let NET = null;
     let ACTIVE_MAP_ID = 'nuketown';
     let MAP = specs.nuketown;
     const WORLD = { group: {} };
@@ -79,4 +84,47 @@ test('a broken registered map rolls the complete active binding back', () => {
     'bind:broken', 'dispose', 'build:broken', 'dispose',
     'bind:nuketown', 'build:nuketown', 'nav:nuketown'
   ]);
+});
+
+test('the map rotation is deferred, spent once, and skipped in a room', () => {
+  const context = runtimeHarness();
+
+  /* Queueing must not swap. endMatch runs it while the player is still
+     standing in the map reading the scoreboard. */
+  context.queueMapRotation();
+  assert.equal(context.activeMapId(), 'nuketown');
+  assert.deepEqual(Array.from(vm.runInContext('events', context)), []);
+
+  assert.equal(context.applyPendingMapRotation(), true);
+  assert.equal(context.activeMapId(), 'terminal');
+
+  // The flag is spent: leaving the match AND pressing REMATCH both call this.
+  assert.equal(context.applyPendingMapRotation(), false);
+  assert.equal(context.activeMapId(), 'terminal');
+
+  // ...and it cycles rather than sticking on the last map.
+  context.queueMapRotation();
+  assert.equal(context.applyPendingMapRotation(), true);
+  assert.equal(context.activeMapId(), 'nuketown');
+});
+
+test('a peer in a room never rotates its own map', () => {
+  // The map is the host's to announce. A guest rotating on its own would be
+  // playing different geometry from everyone else in the room.
+  const context = runtimeHarness();
+  vm.runInContext("NET = { mode: 'guest' }", context);
+  context.queueMapRotation();
+  assert.equal(context.applyPendingMapRotation(), false);
+  assert.equal(context.activeMapId(), 'nuketown');
+
+  vm.runInContext("NET = { mode: 'host' }", context);
+  context.queueMapRotation();
+  assert.equal(context.applyPendingMapRotation(), false);
+  assert.equal(context.activeMapId(), 'nuketown');
+
+  // Back in solo the rotation is ours again.
+  vm.runInContext("NET = { mode: 'solo' }", context);
+  context.queueMapRotation();
+  assert.equal(context.applyPendingMapRotation(), true);
+  assert.equal(context.activeMapId(), 'terminal');
 });

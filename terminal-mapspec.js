@@ -346,6 +346,7 @@
     levels: [0, F1],
     consts: { W: W, H0: H0, SLAB: SLAB, F1: F1, H1: H1, ROOF: ROOF, CONT: CONT, CW: CW },
     actor: { radius: 0.38, height: 1.8, eye: 1.62, step: 0.55 },
+    meta: { name: 'TERMINAL', blurb: 'Three lanes, one plane, and four ways across.' },
     /* Renderer extension. The contract above stays renderer-free so this
        file is side-effect free under `require`; the drawing lives in
        src/25-terminal-world.js and is only ever reached from the browser

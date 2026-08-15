@@ -33,6 +33,13 @@ trap 'rm -f "$TMP"' EXIT
   printf '.hud-scene,.mode-card-art{background-image:url("data:image/webp;base64,'
   base64 -w0 art/nuketown-street.webp
   printf '")}\n'
+  # The MAP card carries a strip of whichever map is up next, keyed off the
+  # card's data-map. Same reasoning as above: a second file in art/, inlined,
+  # so the relay still serves exactly two paths and the entry stays one
+  # self-contained index.html. 25 KB of WebP is ~34 KB of base64.
+  printf '#mapCard[data-map="terminal"] .mode-card-art{background-image:url("data:image/webp;base64,'
+  base64 -w0 art/terminal-apron.webp
+  printf '")}\n'
   echo '</style>'
 
   echo '<body>'
