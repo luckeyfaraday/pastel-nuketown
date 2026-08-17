@@ -175,7 +175,78 @@ function buildTerminalGeometry(ctx) {
      pair of SIGNED offsets off the centreline and sorted on the way in. */
   const zbox = (x0, x1, y0, y1, oa, ob, color, opts) =>
     B.box([x0, y0, CZ + Math.min(oa, ob)], [x1, y1, CZ + Math.max(oa, ob)], color, opts);
-  H.ngonPrism(B, 'x', -12, 24, cy, CZ, CR, 14, C(TPAL.hull), 0.22);
+
+  /* The four cabin doors, as [x0, x1, side] with side +1 starboard (open
+     apron) and -1 port (the terminal). The same four openings the spec
+     punched in the cabin walls, and the single list everything that touches
+     the skin is cut against. */
+  const DOORS = [[14, 18, -1], [4, 8, -1], [4, 8, 1], [-6, -3, 1]];
+  const overDoor = (x0, x1, side) =>
+    DOORS.some((d) => d[2] === side && x1 > d[0] && x0 < d[1]);
+  /* Split [x0,x1] around that side's doors, for anything painted on the skin.
+     `pad` widens the gap: livery sits PROUD of the curve, so a stripe stopped
+     flush with a door edge leaves its end cap hanging in the opening as a
+     bright chip. Pulled back, the cap is behind skin again. */
+  const skinRuns = (side, x0, x1, pad) => {
+    let runs = [[x0, x1]];
+    for (const [dx0, dx1, ds] of DOORS) {
+      if (ds !== side) continue;
+      const ga = dx0 - (pad || 0), gb = dx1 + (pad || 0);
+      const next = [];
+      for (const [a, b] of runs) {
+        if (gb <= a || ga >= b) { next.push([a, b]); continue; }
+        if (a < ga) next.push([a, ga]);
+        if (b > gb) next.push([gb, b]);
+      }
+      runs = next;
+    }
+    return runs;
+  };
+
+  /* ---- the hull, with the doors punched OUT of it ---------------------
+     ngonPrism draws a closed shell, so a door could only ever be a panel
+     painted over the opening — which is what used to be here. From inside
+     that was invisible (the skin's inner faces are culled) and from outside
+     every door was a wall, including the two entrances the map is built
+     around: the rear airstairs climbed 3.3m into a blank square, and the
+     jet bridge, the signature chokepoint, ended in one.
+
+     So sweep the section by hand in x-runs and drop the facets covering the
+     door band on the door's side. Facet i runs vertex i to vertex i+1, and
+     at this rotation the section is symmetric about the vertical to within
+     2cm, so port is the mirrored pair. Cutting on facet boundaries puts the
+     aperture at y 3.36..5.26 — a 6cm lip off the cabin floor with the skin
+     above it acting as the header, which is what an airliner door looks
+     like anyway. */
+  const HN = 14, HROT = 0.22, HX0 = -12, HX1 = 24;
+  const hullV = (i) => {                            // section vertex i, as [y, z]
+    const a = HROT + ((i % HN) / HN) * Math.PI * 2;
+    return [cy + Math.cos(a) * CR, CZ + Math.sin(a) * CR];
+  };
+  const CUT = { '1': [2, 3], '-1': [9, 10] };
+  const xCuts = [HX0, HX1];
+  for (const [dx0, dx1] of DOORS) xCuts.push(dx0, dx1);
+  const xRuns = Array.from(new Set(xCuts)).sort((a, b) => a - b);
+  for (let r = 0; r + 1 < xRuns.length; r++) {
+    const xa = xRuns[r], xb = xRuns[r + 1];
+    const cut = [];
+    for (const side of [-1, 1]) if (overDoor(xa, xb, side)) cut.push.apply(cut, CUT[side]);
+    for (let i = 0; i < HN; i++) {
+      if (cut.indexOf(i) !== -1) continue;
+      const p = hullV(i), q = hullV(i + 1);
+      B.quad([xa, p[0], p[1]], [xa, q[0], q[1]], [xb, q[0], q[1]], [xb, p[0], p[1]],
+             C(TPAL.hull), true);
+      /* Ink the two real ends only. A ring at every run boundary would draw
+         a seam right round the fuselage beside each door. */
+      if (xa === HX0) B.edge([xa, p[0], p[1]], [xa, q[0], q[1]]);
+      if (xb === HX1) B.edge([xb, p[0], p[1]], [xb, q[0], q[1]]);
+    }
+  }
+  for (let i = 1; i < HN - 1; i++) {                // end caps, at the real ends only
+    const a = hullV(0), b = hullV(i), c = hullV(i + 1);
+    B.tri([HX1, a[0], a[1]], [HX1, b[0], b[1]], [HX1, c[0], c[1]], C(TPAL.hull), true);
+    B.tri([HX0, a[0], a[1]], [HX0, c[0], c[1]], [HX0, b[0], b[1]], C(TPAL.hull), true);
+  }
   // nose cone and tail cone, tapered by two shorter prisms
   H.ngonPrism(B, 'x', 24, 26.4, cy, CZ, CR * 0.62, 14, C(TPAL.hull), 0.22);
   H.ngonPrism(B, 'x', -14.2, -12, cy + 0.5, CZ, CR * 0.55, 14, C(TPAL.hull), 0.22);
@@ -185,25 +256,23 @@ function buildTerminalGeometry(ctx) {
      the player is standing on. From inside, that stripe was the floor, and
      everything under it (your feet, pickups, the bottom half of every body)
      was hidden behind it. The outer edges are where they were, so nothing
-     about the silhouette from outside changes. */
-  for (const dir of [-1, 1]) {
-    zbox(-13, 25, cy - 0.55, cy - 0.1, dir * (CR - 0.15), dir * (CR + 0.04),
-         C(TPAL.livery), { noEdge: true });
-    zbox(-13, 25, cy - 1.0, cy - 0.62, dir * (CR - 0.30), dir * (CR + 0.03),
-         C(TPAL.liveryB), { noEdge: true });
-  }
-  // cabin windows
+     about the silhouette from outside changes. The stripe also stops at each
+     door: it sits proud of the skin, so over an aperture it is a bar hanging
+     across the opening with nothing behind it. */
+  for (const dir of [-1, 1])
+    for (const [sx0, sx1] of skinRuns(dir, -13, 25, 0.16)) {
+      zbox(sx0, sx1, cy - 0.55, cy - 0.1, dir * (CR - 0.15), dir * (CR + 0.04),
+           C(TPAL.livery), { noEdge: true });
+      zbox(sx0, sx1, cy - 1.0, cy - 0.62, dir * (CR - 0.30), dir * (CR + 0.03),
+           C(TPAL.liveryB), { noEdge: true });
+    }
+  // cabin windows, skipped where a door has taken the skin away
   for (let x = -8; x < 22; x += 1.9)
-    for (const zz of [CZ - CR - 0.05, CZ + CR - 0.09])
-      B.box([x, cy + 0.42, zz], [x + 0.62, cy + 0.86, zz + 0.14], C(TPAL.pane), { noEdge: true });
+    for (const [dir, zz] of [[-1, CZ - CR - 0.05], [1, CZ + CR - 0.09]])
+      if (!overDoor(x, x + 0.62, dir))
+        B.box([x, cy + 0.42, zz], [x + 0.62, cy + 0.86, zz + 0.14], C(TPAL.pane), { noEdge: true });
   // flight deck glass
   B.box([25.0, cy + 0.5, CZ - 1.25], [26.1, cy + 1.0, CZ + 1.25], C(TPAL.pane));
-
-  // doors, drawn where the spec punched holes so the openings read as doors
-  for (const [dx0, dx1, zz] of [[14, 18, CZ - CR], [4, 8, CZ - CR], [4, 8, CZ + CR - 0.1],
-                                [-6, -3, CZ + CR - 0.1]])
-    B.box([dx0 - 0.08, F1 - 0.05, zz - 0.06], [dx1 + 0.08, 5.5, zz + 0.16],
-          C(TPAL.hallTrim));
 
   /* ---- cabin liner ----------------------------------------------------
      The hull above is a one-sided shell with no inner faces, and the spec's
@@ -228,31 +297,61 @@ function buildTerminalGeometry(ctx) {
      |z - CZ| = 2.0. Stop there and not at the AABB: the wing tops are also
      at F1, and an overlap would be two coplanar faces fighting. */
   zbox(-6, 22, F1 - 0.06, F1, -1.9, 1.9, C(TPAL.slab), { top: C(0xfdf3ea) });
-  for (const [dx0, dx1, dir] of [[4, 8, -1], [14, 18, -1], [4, 8, 1], [-6, -3, 1]])
+  for (const [dx0, dx1, dir] of DOORS)
     zbox(dx0, dx1, F1 - 0.06, F1, dir * 1.9, dir * 2.0, C(TPAL.slab), { top: C(0xfdf3ea) });
   /* Side walls carry the openings the spec punched, and the ceiling doubles
      as their header, so a gap reads as a door from the inside too. */
-  for (const [dir, runs, doors] of [
-    [-1, [[-6, 4], [8, 14], [18, 22]], [[4, 8], [14, 18]]],
-    [1,  [[-3, 4], [8, 22]],           [[-6, -3], [4, 8]]]
-  ]) {
-    for (const [wx0, wx1] of runs)
+  for (const dir of [-1, 1]) {
+    for (const [wx0, wx1] of skinRuns(dir, -5.9, 21.9))
       zbox(wx0, wx1, F1, LCY, dir * LI, dir * LO, C(TPAL.hall));
     // and the windows again on the inner face: the outer ones are set in the
     // hull, which is now behind this wall. Proud of it, or the two faces are
     // coplanar and fight.
     for (let x = -5.4; x < 21; x += 1.9)
-      if (!doors.some(d => x + 0.62 > d[0] && x < d[1]))
+      if (!overDoor(x, x + 0.62, dir))
         zbox(x, x + 0.62, cy + 0.42, cy + 0.86, dir * (LI - 0.02), dir * LI,
              C(TPAL.pane), { noEdge: true });
   }
-  for (const bx of [-6, 21.9])                      // aft and forward bulkheads
-    zbox(bx, bx + 0.1, F1, LCY, -LI, LI, C(TPAL.hallTrim));
+  /* Aft and forward bulkheads, full LO width so the liner's outer envelope is
+     unbroken end to end. The side walls start after them for that reason: the
+     aft door opens at x = -6, and a bulkhead stopping at LI left an 8cm slot
+     between it and the door jamb with nothing but culled skin behind — a
+     bright seam of daylight up the inside edge of the doorway. */
+  for (const bx of [-6, 21.9])
+    zbox(bx, bx + 0.1, F1, LCY, -LO, LO, C(TPAL.hallTrim));
   /* The ceiling runs out to the walls' outer face, or the seam between them
      is a slot you can see the sky through — the hull over it is culled from
      in here. LCY is as high as that full width fits: the 14-gon has closed
      to 1.78 by y = 5.5, and the crown is not a place to find that out. */
   zbox(-6, 22, LCY, LCY + 0.08, -LO, LO, C(TPAL.hall));
+
+  /* ---- door reveals ---------------------------------------------------
+     A hole in a one-sided shell is a hole both ways: at a grazing angle you
+     look into an aperture and straight out through the far side of the
+     aeroplane, because the skin's inner faces are culled. Each jamb closes
+     its two cut facets back to the liner wall, following the curve exactly
+     so nothing pokes out through it, and a lintel closes the top. The
+     bottom needs nothing — the door sill above already reaches 2.0, which
+     is past the 1.99 the skin has closed to by the aperture's lower edge.
+     Trim-coloured, so the opening still reads as a framed door from the
+     apron rather than a tear in the paint. */
+  for (const [dx0, dx1, side] of DOORS) {
+    const zi = CZ + side * LO;
+    for (const i of CUT[side]) {
+      const p = hullV(i), q = hullV(i + 1);
+      /* (b-a) x (d-a) faces +x in this corner order on both flanks, so the
+         far jamb is the same four points reversed. */
+      const v = [[p[0], p[1]], [q[0], q[1]], [q[0], zi], [p[0], zi]];
+      const at = (x, o) => [x, v[o][0], v[o][1]];
+      B.quad(at(dx0, 0), at(dx0, 1), at(dx0, 2), at(dx0, 3), C(TPAL.hallTrim), true);
+      B.quad(at(dx1, 3), at(dx1, 2), at(dx1, 1), at(dx1, 0), C(TPAL.hallTrim), true);
+    }
+    const ends = [hullV(CUT[side][0]), hullV(CUT[side][CUT[side].length - 1] + 1)];
+    const top = ends[0][0] > ends[1][0] ? ends[0] : ends[1];
+    // lintel, pulled a hair inside the skin so the two do not fight
+    B.box([dx0, top[0] - 0.06, Math.min(zi, top[1] - side * 0.01)],
+          [dx1, top[0], Math.max(zi, top[1] - side * 0.01)], C(TPAL.hallTrim));
+  }
 
   /* wings, raked toward the tip. solid() indexes its eight corners by bit —
      bit0 = x, bit1 = y, bit2 = z — so the near-z plane must be 0..3 and the
