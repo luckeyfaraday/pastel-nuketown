@@ -20,6 +20,12 @@
        favour of bespoke meshes, and the bespoke meshes drew the outside
        only. The cabin floor and the jet bridge deck had no geometry at
        all, so CROSSING 3 was a walkway you crossed on thin air.
+
+   The third shipped too, and was the mirror image of those two — only
+   visible from OUTSIDE. Every cabin door was a panel painted flush over
+   its opening, so the rear airstairs climbed 3.3m into a blank square and
+   the jet bridge ended in one, while from inside the cabin (where the
+   skin's inner faces are culled) all four looked wide open.
    ===================================================================== */
 
 const fs = require('node:fs');
@@ -133,6 +139,30 @@ test('every surface the spec says you can stand on has something drawn on it', (
   }
   assert.deepStrictEqual(missing, [],
     'walkable but undrawn: ' + JSON.stringify(missing.slice(0, 12)));
+});
+
+test('every cabin door is an opening, not a panel over one', () => {
+  /* The four doors the spec punched, as [x0, x1, side]. A door is only a
+     door if the skin is missing there: probe the slab of air the opening
+     occupies, from just outboard of the liner to just past the widest the
+     section gets, and require it empty.
+
+     boxes only, deliberately. The hull runs, the jamb reveals and the jet
+     bridge tube all arrive here as quad/arc BOUNDING boxes, which are far
+     too coarse to say anything is blocked — the bridge tube's box alone
+     swallows the port forward door. The failure this guards was a plain
+     B.box painted over each opening, and a box is exactly what must never
+     be in here. */
+  const DOORS = [[14, 18, -1], [4, 8, -1], [4, 8, 1], [-6, -3, 1]];
+  const plugged = [];
+  for (const [dx0, dx1, side] of DOORS) {
+    const zs = [CZ + side * 1.84, CZ + side * 2.26].sort((a, b) => a - b);
+    const lo = [dx0 + 0.3, F1 + 0.15, zs[0]], hi = [dx1 - 0.3, 5.0, zs[1]];
+    for (const b of DRAWN.boxes)
+      if (overlaps(b, lo, hi)) plugged.push({ door: [dx0, dx1, side], by: b });
+  }
+  assert.deepStrictEqual(plugged, [],
+    'geometry fills a cabin doorway: ' + JSON.stringify(plugged.slice(0, 4)));
 });
 
 test('the cabin liner stays inside the hull it is lining', () => {
